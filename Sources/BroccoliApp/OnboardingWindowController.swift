@@ -326,20 +326,20 @@ private struct ShortcutPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Choose Your Shortcut")
-                .font(.system(size: 24, weight: .semibold))
+            Text("Choose a Shortcut")
+                .font(.title.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("Broccoli replaces the launcher interface, not macOS’s metadata index.")
-                .font(.system(size: 13))
+            Text("Use it to open Broccoli from any app.")
+                .font(.body)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 5)
+                .lineLimit(1)
+                .padding(.top, 6)
 
             OnboardingShortcutRecorder(configuration: model.shortcut) { configuration in
                 model.changeShortcut(to: configuration)
             }
             .frame(width: 260, height: 38)
-            .padding(.top, 22)
+            .padding(.top, 28)
 
             Group {
                 if let conflict = model.reassignmentConflict {
@@ -353,8 +353,8 @@ private struct ShortcutPage: View {
                             .foregroundStyle(.secondary)
                         Text(conflict.message)
                             .foregroundStyle(.tertiary)
+                            .lineLimit(2)
                             .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else if model.shortcutIsReady {
                     Label(
@@ -363,28 +363,28 @@ private struct ShortcutPage: View {
                     )
                     .foregroundStyle(.green)
                 } else {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 7) {
                         Label("This shortcut is unavailable", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                         if let error = model.shortcutError {
                             Text(error)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(2)
                         }
                     }
                 }
             }
             .font(.system(size: 12))
-            .padding(.top, 13)
+            .padding(.top, 14)
 
             if !model.shortcutIsReady {
                 VStack(spacing: 9) {
-                    Text("In Keyboard Shortcuts, select Spotlight and turn off “Show Spotlight search,” then try again.")
+                    Text("Turn off “Show Spotlight search” in Keyboard Shortcuts, then try again.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2)
                     HStack(spacing: 8) {
                         Button("Open Keyboard Shortcuts…", action: model.openKeyboardShortcuts)
                         Button("Try Again", action: model.retryShortcut)
@@ -397,7 +397,7 @@ private struct ShortcutPage: View {
                     .foregroundStyle(.tertiary)
                     .padding(.top, 14)
             } else {
-                Text("Click the shortcut field to record a different key combination.")
+                Text("Select the field to record another shortcut.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .padding(.top, 16)
@@ -414,19 +414,22 @@ private struct StartAutomaticallyPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Start Automatically")
-                .font(.system(size: 24, weight: .semibold))
+            Text("Keep Broccoli Ready")
+                .font(.title.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("Choose when Broccoli should be ready.")
-                .font(.system(size: 13))
+            Text("Choose how Broccoli stays available.")
+                .font(.body)
                 .foregroundStyle(.secondary)
-                .padding(.top, 5)
+                .lineLimit(1)
+                .padding(.top, 6)
 
             OnboardingCard {
                 OnboardingSettingRow(
                     symbol: "power",
-                    title: "Launch Broccoli at Login",
-                    detail: "Start Broccoli automatically when you sign in"
+                    title: "Open at Login",
+                    detail: model.launchAtLoginAvailable
+                        ? "Ready as soon as you sign in"
+                        : "Unavailable in this build"
                 ) {
                     Toggle(
                         "Launch Broccoli at Login",
@@ -444,7 +447,7 @@ private struct StartAutomaticallyPage: View {
                 OnboardingSettingRow(
                     symbol: "menubar.rectangle",
                     title: "Menu Bar Icon",
-                    detail: "Keep Broccoli available without using the shortcut"
+                    detail: "Open Broccoli without the shortcut"
                 ) {
                     Toggle(
                         "Show Broccoli in Menu Bar",
@@ -459,24 +462,12 @@ private struct StartAutomaticallyPage: View {
                 }
             }
             .frame(maxWidth: OnboardingLayout.cardMaximumWidth)
-            .padding(.top, 18)
+            .padding(.top, 24)
 
-            if !model.launchAtLoginAvailable {
-                Label(
-                    "Launch at Login is unavailable in this development build.",
-                    systemImage: "info.circle"
-                )
+            Text("You can change both options later in Settings.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-                .padding(.top, 10)
-            }
-
-            Text("If you hide the menu bar icon, use your global shortcut to reopen Broccoli.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 420)
+                .lineLimit(1)
                 .padding(.top, 12)
 
             if let error = model.launchAtLoginError {
@@ -499,48 +490,34 @@ private struct ReadyPage: View {
     var body: some View {
         VStack(spacing: 0) {
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 54, weight: .regular))
+                .font(.system(size: 48, weight: .regular))
                 .foregroundStyle(.green)
                 .accessibilityHidden(true)
 
             Text("Broccoli is Ready")
-                .font(.system(size: 24, weight: .semibold))
-                .padding(.top, 14)
+                .font(.title.weight(.semibold))
+                .padding(.top, 12)
                 .accessibilityAddTraits(.isHeader)
             Text("Use \(model.shortcut.displayName) to open it from any app.")
-                .font(.system(size: 13))
+                .font(.body)
                 .foregroundStyle(.secondary)
-                .padding(.top, 5)
+                .lineLimit(1)
+                .padding(.top, 6)
 
-            OnboardingCard {
-                OnboardingStaticRow(
-                    symbol: "keyboard",
-                    title: "Shortcut registered",
-                    detail: "Active global launcher shortcut",
-                    trailing: model.shortcut.displayName,
-                    symbolColor: .green
-                )
-                Divider().padding(.leading, 33)
-                OnboardingStaticRow(
-                    symbol: "menubar.rectangle",
-                    title: "Menu Bar Icon",
-                    detail: model.menuBarIconEnabled
-                        ? "Open Broccoli without using the shortcut"
-                        : "Hidden; use the global shortcut instead",
-                    trailing: model.menuBarIconEnabled ? "On" : "Off",
-                    symbolColor: .green
-                )
-                Divider().padding(.leading, 33)
-                OnboardingStaticRow(
-                    symbol: "power",
-                    title: "Launch at Login",
-                    detail: "Start Broccoli automatically after signing in",
-                    trailing: model.launchAtLogin ? "On" : "Off",
-                    symbolColor: .green
-                )
+            HStack(spacing: 24) {
+                Label(model.shortcut.displayName, systemImage: "keyboard")
+                Label(model.menuBarIconEnabled ? "Menu Bar On" : "Menu Bar Off", systemImage: "menubar.rectangle")
+                Label(model.launchAtLogin ? "Login On" : "Login Off", systemImage: "power")
             }
-            .frame(maxWidth: OnboardingLayout.cardMaximumWidth)
-            .padding(.top, 22)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.top, 24)
+
+            Button("Try Broccoli", systemImage: "bolt.fill", action: model.testLauncher)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(" ", modifiers: [.command])
+                .padding(.top, 26)
 
             Spacer(minLength: 0)
         }
@@ -572,7 +549,7 @@ private struct OnboardingFooter: View {
 
                 Spacer()
 
-                Button(model.page == .ready ? "Start Using Broccoli" : "Continue") {
+                Button(model.page == .ready ? "Finish" : "Continue") {
                     model.moveForward()
                 }
                 .buttonStyle(.borderedProminent)
@@ -605,13 +582,6 @@ private struct OnboardingCard<Content: View>: View {
                 style: .continuous
             )
         )
-        .overlay {
-            RoundedRectangle(
-                cornerRadius: OnboardingLayout.cardCornerRadius,
-                style: .continuous
-            )
-            .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
-        }
     }
 }
 
@@ -635,7 +605,7 @@ private struct OnboardingStaticRow: View {
                 Text(detail)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
             .layoutPriority(1)
             Spacer(minLength: 12)
@@ -683,7 +653,7 @@ private struct OnboardingSettingRow<Accessory: View>: View {
                 Text(detail)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
             .layoutPriority(1)
