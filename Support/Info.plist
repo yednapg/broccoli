@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>Broccoli</string>
+	<key>CFBundleDisplayName</key>
+	<string>Broccoli</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.gauravpandey.broccoli</string>
+	<key>CFBundleIconFile</key>
+	<string>Broccoli</string>
+	<key>CFBundleIconName</key>
+	<string>Broccoli</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Broccoli</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+    <key>CFBundleVersion</key>
+	<string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Broccoli uses System Events only for the Dark Mode and power actions you explicitly run.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Gaurav Pandey.</string>
+</dict>
+</plist>

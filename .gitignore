@@ -1,0 +1,10 @@
+.DS_Store
+/.build
+/build
+/.swiftpm
+xcuserdata/
+DerivedData/
+*.xcarchive
+*.dSYM
+*.dmg
+Support/Release.xcconfig
