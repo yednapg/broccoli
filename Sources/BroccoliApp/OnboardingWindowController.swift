@@ -13,15 +13,11 @@ struct LaunchAtLoginAvailability: Equatable, Sendable {
 }
 
 private enum OnboardingLayout {
-    static let contentSize = NSSize(width: 660, height: 440)
-    static let minimumContentSize = NSSize(width: 560, height: 400)
-    static let contentHorizontalPadding: CGFloat = 40
-    static let contentTopPadding: CGFloat = 28
-    static let contentBottomPadding: CGFloat = 16
-    static let cardMaximumWidth: CGFloat = 480
-    static let rowMinimumHeight: CGFloat = 52
-    static let cardCornerRadius: CGFloat = 10
-    static let footerHeight: CGFloat = 54
+    static let contentSize = NSSize(width: 720, height: 500)
+    static let minimumContentSize = NSSize(width: 620, height: 450)
+    static let contentMaximumWidth: CGFloat = 570
+    static let contentHorizontalPadding: CGFloat = 44
+    static let navigationBottomPadding: CGFloat = 18
 }
 
 @MainActor
@@ -63,14 +59,15 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         let root = OnboardingView(model: model)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: OnboardingLayout.contentSize),
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
-        window.title = "Set Up Broccoli"
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        window.isMovableByWindowBackground = false
+        window.title = "Broccoli"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.collectionBehavior = [.moveToActiveSpace]
@@ -239,85 +236,186 @@ private final class OnboardingModel: ObservableObject {
 
 private struct OnboardingView: View {
     @ObservedObject var model: OnboardingModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.vertical) {
-                Group {
-                    switch model.page {
-                    case .welcome:
-                        WelcomePage()
-                    case .shortcut:
-                        ShortcutPage(model: model)
-                    case .startAutomatically:
-                        StartAutomaticallyPage(model: model)
-                    case .ready:
-                        ReadyPage(model: model)
-                    }
+        ZStack {
+            OnboardingBackdrop(page: model.page)
+
+            GeometryReader { proxy in
+                ScrollView(.vertical) {
+                    pageContent
+                        .id(model.page)
+                        .transition(pageTransition)
+                        .frame(maxWidth: OnboardingLayout.contentMaximumWidth)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: max(350, proxy.size.height - 144)
+                        )
+                        .padding(.horizontal, OnboardingLayout.contentHorizontalPadding)
+                        .padding(.top, 58)
+                        .padding(.bottom, 86)
                 }
-                .frame(maxWidth: .infinity, alignment: .top)
-                .padding(.horizontal, OnboardingLayout.contentHorizontalPadding)
-                .padding(.top, OnboardingLayout.contentTopPadding)
-                .padding(.bottom, OnboardingLayout.contentBottomPadding)
+                .scrollIndicators(.hidden)
+                .id(model.page)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Recreate the scrolling container for each assistant page so a page that needed
-            // scrolling never leaves the next page partway down.
-            .id(model.page)
 
-            Divider()
-            OnboardingFooter(model: model)
+            OnboardingNavigation(model: model)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.horizontal, 24)
+                .padding(.bottom, OnboardingLayout.navigationBottomPadding)
         }
         .frame(
             minWidth: OnboardingLayout.minimumContentSize.width,
             minHeight: OnboardingLayout.minimumContentSize.height
         )
-        .background(Color(nsColor: .windowBackgroundColor))
+        .animation(
+            reduceMotion ? .linear(duration: 0) : .easeOut(duration: 0.2),
+            value: model.page
+        )
+    }
+
+    @ViewBuilder
+    private var pageContent: some View {
+        switch model.page {
+        case .welcome:
+            WelcomePage()
+        case .shortcut:
+            ShortcutPage(model: model)
+        case .startAutomatically:
+            StartAutomaticallyPage(model: model)
+        case .ready:
+            ReadyPage(model: model)
+        }
+    }
+
+    private var pageTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.985)),
+            removal: .opacity
+        )
+    }
+}
+
+private struct OnboardingBackdrop: View {
+    let page: OnboardingModel.Page
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var colors: (Color, Color) {
+        switch page {
+        case .welcome:
+            (Color(red: 0.23, green: 0.48, blue: 1), Color(red: 0.54, green: 0.30, blue: 0.98))
+        case .shortcut:
+            (Color(red: 0.10, green: 0.62, blue: 1), Color(red: 0.20, green: 0.82, blue: 0.86))
+        case .startAutomatically:
+            (Color(red: 0.42, green: 0.36, blue: 0.98), Color(red: 0.94, green: 0.35, blue: 0.63))
+        case .ready:
+            (Color(red: 0.08, green: 0.72, blue: 0.48), Color(red: 0.17, green: 0.53, blue: 1))
+        }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color(nsColor: .windowBackgroundColor)
+
+                Circle()
+                    .fill(colors.0)
+                    .frame(width: proxy.size.width * 0.72)
+                    .blur(radius: 100)
+                    .opacity(colorScheme == .dark ? 0.20 : 0.12)
+                    .offset(x: proxy.size.width * 0.37, y: -proxy.size.height * 0.36)
+
+                Circle()
+                    .fill(colors.1)
+                    .frame(width: proxy.size.width * 0.62)
+                    .blur(radius: 110)
+                    .opacity(colorScheme == .dark ? 0.16 : 0.09)
+                    .offset(x: -proxy.size.width * 0.40, y: proxy.size.height * 0.42)
+            }
+        }
+        .ignoresSafeArea()
     }
 }
 
 private struct WelcomePage: View {
     var body: some View {
         VStack(spacing: 0) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 72, height: 72)
-                .accessibilityHidden(true)
-                .padding(.bottom, 16)
+            WelcomeProductHero()
 
-            Text("Welcome to Broccoli")
-                .font(.title.weight(.semibold))
+            Text("Your Mac, at your fingertips.")
+                .font(.system(size: 30, weight: .semibold, design: .rounded))
                 .accessibilityAddTraits(.isHeader)
-            Text("Find what you need on your Mac, without sending queries anywhere.")
+                .lineLimit(1)
+                .minimumScaleFactor(0.86)
+                .padding(.top, 12)
+
+            Text("Apps, files, settings, and actions—all from one private search.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
-                .padding(.top, 6)
-
-            HStack(spacing: 26) {
-                WelcomeFeature(symbol: "square.grid.2x2", title: "Apps & Settings")
-                WelcomeFeature(symbol: "folder", title: "Files & Actions")
-                WelcomeFeature(symbol: "hand.raised", title: "Private by Design")
-            }
-            .padding(.top, 32)
+                .padding(.top, 7)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
     }
 }
 
-private struct WelcomeFeature: View {
-    let symbol: String
-    let title: String
+private struct WelcomeProductHero: View {
+    private let symbols = ["square.grid.2x2.fill", "doc.fill", "bolt.fill"]
 
     var body: some View {
-        Label(title, systemImage: symbol)
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [Color.accentColor.opacity(0.30), Color.purple.opacity(0.18)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 176, height: 176)
+                .blur(radius: 20)
+
+            ForEach(Array(symbols.enumerated()), id: \.offset) { index, symbol in
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+                    .background(.thinMaterial, in: Circle())
+                    .offset(
+                        x: index == 0 ? -104 : (index == 1 ? 104 : 0),
+                        y: index == 2 ? -70 : 22
+                    )
+                    .accessibilityHidden(true)
+            }
+
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 88, height: 88)
+                .shadow(color: .black.opacity(0.20), radius: 18, y: 10)
+                .accessibilityHidden(true)
+
+            HStack(spacing: 9) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Text("Search your Mac")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 24)
+                Image(systemName: "return")
+                    .foregroundStyle(.tertiary)
+            }
             .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .labelStyle(.titleAndIcon)
-            .accessibilityElement(children: .combine)
+            .padding(.horizontal, 14)
+            .frame(width: 330, height: 42)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 14, y: 8)
+            .offset(y: 82)
+        }
+        .frame(height: 206)
     }
 }
 
@@ -326,20 +424,30 @@ private struct ShortcutPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Choose a Shortcut")
-                .font(.title.weight(.semibold))
+            PageSymbol(symbol: "command", colors: [.blue, .cyan])
+
+            Text("Open Broccoli in an instant.")
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .accessibilityAddTraits(.isHeader)
-            Text("Use it to open Broccoli from any app.")
+                .lineLimit(1)
+                .minimumScaleFactor(0.86)
+                .padding(.top, 14)
+
+            Text("Press the shortcut from any app—your current window stays right where it is.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.top, 6)
+                .minimumScaleFactor(0.78)
+                .padding(.top, 7)
+
+            ShortcutKeycaps(configuration: model.shortcut)
+                .padding(.top, 24)
 
             OnboardingShortcutRecorder(configuration: model.shortcut) { configuration in
                 model.changeShortcut(to: configuration)
             }
-            .frame(width: 260, height: 38)
-            .padding(.top, 28)
+            .frame(width: 220, height: 34)
+            .padding(.top, 14)
 
             Group {
                 if let conflict = model.reassignmentConflict {
@@ -376,7 +484,7 @@ private struct ShortcutPage: View {
                 }
             }
             .font(.system(size: 12))
-            .padding(.top, 14)
+            .padding(.top, 10)
 
             if !model.shortcutIsReady {
                 VStack(spacing: 9) {
@@ -390,22 +498,54 @@ private struct ShortcutPage: View {
                         Button("Try Again", action: model.retryShortcut)
                     }
                 }
-                .padding(.top, 15)
+                .padding(.top, 10)
             } else if model.reassignmentConflict != nil {
                 Text("Record another shortcut, or continue using \(model.shortcut.displayName).")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
-                    .padding(.top, 14)
+                    .padding(.top, 9)
             } else {
-                Text("Select the field to record another shortcut.")
+                Text("Select the shortcut to record another one.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
-                    .padding(.top, 16)
+                    .padding(.top, 9)
             }
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: 460, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ShortcutKeycaps: View {
+    let configuration: HotKeyConfiguration
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Keycap("⌘", width: 54)
+            Text("+")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Keycap(configuration.displayName.components(separatedBy: " + ").last ?? "Space", width: 104)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Current shortcut \(configuration.displayName)")
+    }
+}
+
+private struct Keycap: View {
+    let label: String
+    let width: CGFloat
+
+    init(_ label: String, width: CGFloat) {
+        self.label = label
+        self.width = width
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .frame(width: width, height: 44)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
     }
 }
 
@@ -414,21 +554,26 @@ private struct StartAutomaticallyPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Keep Broccoli Ready")
-                .font(.title.weight(.semibold))
+            PageSymbol(symbol: "bolt.badge.clock.fill", colors: [.purple, .pink])
+
+            Text("Always ready when you are.")
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .accessibilityAddTraits(.isHeader)
-            Text("Choose how Broccoli stays available.")
+                .lineLimit(1)
+                .padding(.top, 14)
+
+            Text("Choose how Broccoli stays close without getting in your way.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.top, 6)
+                .padding(.top, 7)
 
-            OnboardingCard {
-                OnboardingSettingRow(
+            HStack(spacing: 14) {
+                OnboardingSettingTile(
                     symbol: "power",
                     title: "Open at Login",
                     detail: model.launchAtLoginAvailable
-                        ? "Ready as soon as you sign in"
+                        ? "Ready when your Mac starts"
                         : "Unavailable in this build"
                 ) {
                     Toggle(
@@ -443,11 +588,10 @@ private struct StartAutomaticallyPage: View {
                     .disabled(!model.launchAtLoginAvailable)
                     .accessibilityValue(model.launchAtLogin ? "On" : "Off")
                 }
-                Divider().padding(.leading, 33)
-                OnboardingSettingRow(
+                OnboardingSettingTile(
                     symbol: "menubar.rectangle",
                     title: "Menu Bar Icon",
-                    detail: "Open Broccoli without the shortcut"
+                    detail: "A second way to open Broccoli"
                 ) {
                     Toggle(
                         "Show Broccoli in Menu Bar",
@@ -461,14 +605,13 @@ private struct StartAutomaticallyPage: View {
                     .accessibilityValue(model.menuBarIconEnabled ? "On" : "Off")
                 }
             }
-            .frame(maxWidth: OnboardingLayout.cardMaximumWidth)
-            .padding(.top, 24)
+            .padding(.top, 26)
 
-            Text("You can change both options later in Settings.")
+            Text("You can change these anytime in Settings.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.top, 12)
+                .padding(.top, 13)
 
             if let error = model.launchAtLoginError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -478,9 +621,8 @@ private struct StartAutomaticallyPage: View {
                     .padding(.top, 10)
             }
 
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -489,140 +631,160 @@ private struct ReadyPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 48, weight: .regular))
-                .foregroundStyle(.green)
-                .accessibilityHidden(true)
+            MiniLauncherPreview()
 
-            Text("Broccoli is Ready")
-                .font(.title.weight(.semibold))
-                .padding(.top, 12)
+            Text("Everything is one shortcut away.")
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .padding(.top, 20)
                 .accessibilityAddTraits(.isHeader)
-            Text("Use \(model.shortcut.displayName) to open it from any app.")
+                .lineLimit(1)
+
+            Text("Try \(model.shortcut.displayName) now, then start searching your Mac.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.top, 6)
+                .padding(.top, 7)
 
-            HStack(spacing: 24) {
-                Label(model.shortcut.displayName, systemImage: "keyboard")
-                Label(model.menuBarIconEnabled ? "Menu Bar On" : "Menu Bar Off", systemImage: "menubar.rectangle")
-                Label(model.launchAtLogin ? "Login On" : "Login Off", systemImage: "power")
-            }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.top, 24)
-
-            Button("Try Broccoli", systemImage: "bolt.fill", action: model.testLauncher)
+            Button("Try Broccoli", systemImage: "magnifyingglass", action: model.testLauncher)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(" ", modifiers: [.command])
-                .padding(.top, 26)
-
-            Spacer(minLength: 0)
+                .padding(.top, 20)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
     }
 }
 
-private struct OnboardingFooter: View {
-    @ObservedObject var model: OnboardingModel
-
+private struct MiniLauncherPreview: View {
     var body: some View {
-        ZStack {
-            HStack(spacing: 7) {
-                ForEach(OnboardingModel.Page.allCases, id: \.rawValue) { page in
-                    Circle()
-                        .fill(page == model.page ? Color.accentColor : Color.secondary.opacity(0.45))
-                        .frame(width: 7, height: 7)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Step \(model.page.rawValue + 1) of \(OnboardingModel.Page.allCases.count)")
-
-            HStack(spacing: 12) {
-                if model.page == .welcome {
-                    Button("Quit") { NSApp.terminate(nil) }
-                } else {
-                    Button("Back", action: model.moveBack)
-                }
-
+        VStack(spacing: 0) {
+            HStack(spacing: 9) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Text("finder")
+                    .foregroundStyle(.primary)
                 Spacer()
-
-                Button(model.page == .ready ? "Finish" : "Continue") {
-                    model.moveForward()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!model.canContinue)
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 20)
+            .font(.system(size: 13, weight: .medium))
+            .padding(.horizontal, 13)
+            .frame(height: 39)
+
+            Divider()
+
+            MiniLauncherResult(symbol: "face.smiling", title: "Finder", selected: true)
+            MiniLauncherResult(symbol: "folder", title: "Open Downloads", selected: false)
         }
-        .frame(height: OnboardingLayout.footerHeight)
-        .background(.bar)
+        .padding(8)
+        .frame(width: 390)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 20, y: 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Broccoli search preview showing Finder")
     }
 }
 
-private struct OnboardingCard<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
+private struct MiniLauncherResult: View {
+    let symbol: String
+    let title: String
+    let selected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            content
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 26, height: 26)
+                .background(
+                    selected ? Color.white.opacity(0.18) : Color.secondary.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+            Spacer()
+            if selected {
+                Image(systemName: "return")
+                    .foregroundStyle(.secondary)
+            }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 9)
+        .frame(height: 38)
+        .foregroundStyle(selected ? Color.white : Color.primary)
         .background(
-            Color(nsColor: .controlBackgroundColor),
-            in: RoundedRectangle(
-                cornerRadius: OnboardingLayout.cardCornerRadius,
-                style: .continuous
-            )
+            selected ? Color.accentColor : Color.clear,
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
     }
 }
 
-private struct OnboardingStaticRow: View {
+private struct PageSymbol: View {
     let symbol: String
-    let title: String
-    let detail: String
-    var trailing: String? = nil
-    var symbolColor: Color = .secondary
+    let colors: [Color]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 11) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(symbolColor)
-                .frame(width: 22, height: 22)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .layoutPriority(1)
-            Spacer(minLength: 12)
-            if let trailing {
-                Text(trailing)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .frame(minHeight: OnboardingLayout.rowMinimumHeight)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        Image(systemName: symbol)
+            .font(.system(size: 31, weight: .medium))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(Color.white)
+            .frame(width: 72, height: 72)
+            .background(
+                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
+            .shadow(color: (colors.first ?? .accentColor).opacity(0.28), radius: 18, y: 10)
+            .accessibilityHidden(true)
     }
 }
 
-private struct OnboardingSettingRow<Accessory: View>: View {
+private struct OnboardingNavigation: View {
+    @ObservedObject var model: OnboardingModel
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Group {
+                if model.page == .welcome {
+                    Button("Quit") { NSApp.terminate(nil) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button(action: model.moveBack) {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .frame(width: 86, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 6) {
+                ForEach(OnboardingModel.Page.allCases, id: \.rawValue) { page in
+                    Capsule()
+                        .fill(page == model.page ? Color.accentColor : Color.secondary.opacity(0.32))
+                        .frame(width: page == model.page ? 18 : 6, height: 6)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(.thinMaterial, in: Capsule())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Step \(model.page.rawValue + 1) of \(OnboardingModel.Page.allCases.count)")
+
+            Spacer(minLength: 0)
+
+            Button(model.page == .ready ? "Finish" : "Continue") {
+                model.moveForward()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            .disabled(!model.canContinue)
+            .frame(width: 86, alignment: .trailing)
+        }
+    }
+}
+
+private struct OnboardingSettingTile<Accessory: View>: View {
     let symbol: String
     let title: String
     let detail: String
@@ -641,27 +803,34 @@ private struct OnboardingSettingRow<Accessory: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 11) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
-                .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Image(systemName: symbol)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        Color.accentColor.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                    .accessibilityHidden(true)
+                Spacer()
+                accessory
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 14, weight: .semibold))
                 Text(detail)
-                    .font(.system(size: 11))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.84)
             }
             .accessibilityElement(children: .combine)
-            .layoutPriority(1)
-            Spacer(minLength: 12)
-            accessory
         }
-        .frame(minHeight: OnboardingLayout.rowMinimumHeight)
-        .contentShape(Rectangle())
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .topLeading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 

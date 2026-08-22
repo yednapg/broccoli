@@ -29,7 +29,7 @@ struct HotKeyConfiguration: Codable, Equatable, Sendable {
         if modifiers & UInt32(shiftKey) != 0 { parts.append("⇧") }
         if modifiers & UInt32(cmdKey) != 0 { parts.append("⌘") }
         parts.append(Self.keyName(keyCode))
-        return parts.joined()
+        return parts.joined(separator: " + ")
     }
 
     private static func keyName(_ keyCode: UInt32) -> String {

@@ -541,8 +541,7 @@ final class LauncherPreviewContentView: NSView,
     private let scrollView = NSScrollView()
     private let searchField: NSTextField
     private let liquidGlassSurface = LauncherLiquidGlassSurfaceView(interactive: false)
-    private let headerDivider = NSBox()
-    private let headerIcon = NSImageView()
+    private let headerSeparator = LauncherHeaderSeparatorView()
     private let previewIcon = NSImageView()
     private let previewTitle = NSTextField(labelWithString: "")
     private let previewSubtitle = NSTextField(wrappingLabelWithString: "")
@@ -560,9 +559,7 @@ final class LauncherPreviewContentView: NSView,
         self.fixture = fixture
         self.iconProvider = iconProvider
         isInteractive = interactive
-        searchField = descriptor.design == .liquidGlass
-            ? LauncherNativeSearchField()
-            : NSTextField()
+        searchField = LauncherNativeSearchField()
         displayedResults = fixture.results
         preparedRows = fixture.results.map { _ in ResultRowView() }
         let size = NSSize(
@@ -659,9 +656,10 @@ final class LauncherPreviewContentView: NSView,
     private func buildSurface() {
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
-        // Match LauncherPanelController's production root contract. A detached glass view has
-        // no window edge to establish its width, so constrain both axes to the production
-        // surface instead of letting AppKit collapse the lens to its narrow fitting content.
+        // Screenshot and Settings previews are intentionally detached from a window. Preserve
+        // the production surface size explicitly so AppKit cannot collapse the preview to the
+        // native search field's fitting height before the surface gets its first layout pass.
+        // These preview-only axes do not participate in the live panel's glass hierarchy.
         content.widthAnchor.constraint(equalToConstant: frame.width).isActive = true
         content.heightAnchor.constraint(equalToConstant: frame.height).isActive = true
 
@@ -670,6 +668,12 @@ final class LauncherPreviewContentView: NSView,
         switch descriptor.surface {
         case .glass:
             if #available(macOS 26, *) {
+                liquidGlassSurface.frame = bounds
+                liquidGlassSurface.configure(
+                    isDark: descriptor.isDark,
+                    tintColor: descriptor.glassTintColor
+                )
+                liquidGlassSurface.layoutSubtreeIfNeeded()
                 liquidGlassSurface.setContentView(content)
                 surface = liquidGlassSurface
                 surfaceManagesContent = true
@@ -678,6 +682,14 @@ final class LauncherPreviewContentView: NSView,
                 surface = fallback
                 surfaceManagesContent = false
             }
+        case .ultraThick:
+            let material = LauncherMinimalMaterialSurfaceView(
+                frame: bounds,
+                isDark: descriptor.isDark
+            )
+            material.setContentView(content)
+            surface = material
+            surfaceManagesContent = true
         case .vibrancy, .classic:
             let effect = NSVisualEffectView()
             // This renderer is deliberately detached from a window, so it has no background
@@ -697,17 +709,17 @@ final class LauncherPreviewContentView: NSView,
         surface.frame = bounds
         surface.translatesAutoresizingMaskIntoConstraints = true
         surface.autoresizingMask = [.width, .height]
-        if descriptor.surface != .glass {
+        if descriptor.surface != .glass, descriptor.surface != .ultraThick {
             surface.wantsLayer = true
             surface.layer?.backgroundColor = descriptor.surface == .opaque
                 ? descriptor.backgroundColor.cgColor
                 : nil
-            surface.layer?.cornerRadius = descriptor.cornerRadius
-            surface.layer?.cornerCurve = .continuous
-            surface.layer?.borderWidth = descriptor.design == .minimal ? 0 : 1
-            surface.layer?.borderColor = descriptor.design == .minimal
-                ? nil
-                : descriptor.borderColor.cgColor
+            surface.layer?.cornerRadius = descriptor.surfaceCornerRadius(
+                panelHeight: bounds.height
+            )
+            surface.layer?.cornerCurve = descriptor.design == .minimal ? .circular : .continuous
+            surface.layer?.borderWidth = 0
+            surface.layer?.borderColor = nil
             surface.layer?.masksToBounds = true
         }
         if !surfaceManagesContent {
@@ -725,7 +737,6 @@ final class LauncherPreviewContentView: NSView,
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.stringValue = fixture.query
-        searchField.textColor = .labelColor
         searchField.backgroundColor = .clear
         searchField.drawsBackground = false
         searchField.isBordered = false
@@ -733,15 +744,16 @@ final class LauncherPreviewContentView: NSView,
         searchField.usesSingleLineMode = true
         searchField.focusRingType = isInteractive ? .default : .none
         if let nativeSearchField = searchField as? NSSearchField {
-            LauncherNativeSearchFieldStyle.apply(to: nativeSearchField)
-            nativeSearchField.font = .systemFont(
-                ofSize: descriptor.searchFontSize,
-                weight: .regular
+            LauncherNativeSearchFieldStyle.apply(
+                to: nativeSearchField,
+                metrics: descriptor.searchMetrics,
+                iconColor: descriptor.searchIconColor
             )
             nativeSearchField.stringValue = fixture.query
         } else {
             searchField.font = .systemFont(ofSize: descriptor.searchFontSize, weight: .regular)
         }
+        searchField.textColor = descriptor.searchTextColor
         // LauncherNativeSearchFieldStyle configures a live field by default. Restore the
         // preview's explicit interaction contract after applying that shared native style.
         searchField.isEditable = isInteractive
@@ -754,14 +766,11 @@ final class LauncherPreviewContentView: NSView,
                 ? "Filters safe fixture results. Return does not execute preview items."
                 : "Fixture query"
         )
-        let usesNativeSearch = descriptor.design == .liquidGlass
         content.addSubview(searchField)
 
         let searchChrome: NSView = searchField
         let hasResults = !displayedResults.isEmpty
-        let searchTrailingInset: CGFloat = usesNativeSearch && hasResults
-            ? 64
-            : descriptor.searchHorizontalInset
+        let searchTrailingInset = descriptor.searchHorizontalInset
         var constraints = [
             searchChrome.trailingAnchor.constraint(
                 equalTo: content.trailingAnchor,
@@ -769,10 +778,11 @@ final class LauncherPreviewContentView: NSView,
             ),
             searchChrome.topAnchor.constraint(
                 equalTo: content.topAnchor,
-                constant: descriptor.searchVerticalInset
+                constant: descriptor.searchControlTopInset
             ),
             searchChrome.heightAnchor.constraint(
-                equalToConstant: descriptor.searchHeight - descriptor.searchVerticalInset * 2
+                equalToConstant:
+                    descriptor.searchHeight - descriptor.searchControlVerticalInset * 2
             ),
         ]
 
@@ -809,17 +819,6 @@ final class LauncherPreviewContentView: NSView,
         scrollView.isHidden = !hasResults
         content.addSubview(scrollView)
         let resultsChrome: NSView = scrollView
-        headerDivider.boxType = .separator
-        headerDivider.translatesAutoresizingMaskIntoConstraints = false
-        headerDivider.isHidden = !hasResults || !usesNativeSearch
-        headerIcon.translatesAutoresizingMaskIntoConstraints = false
-        headerIcon.imageScaling = .scaleProportionallyUpOrDown
-        headerIcon.image = displayedResults.indices.contains(selectedRow)
-            ? iconProvider.image(for: displayedResults[selectedRow].entry)
-            : nil
-        headerIcon.isHidden = !hasResults || !usesNativeSearch
-        content.addSubview(headerDivider)
-        content.addSubview(headerIcon)
         constraints += [
             resultsChrome.leadingAnchor.constraint(
                 equalTo: content.leadingAnchor,
@@ -833,20 +832,6 @@ final class LauncherPreviewContentView: NSView,
                 equalTo: content.bottomAnchor,
                 constant: hasResults ? -descriptor.resultBottomInset : 0
             ),
-            headerDivider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            headerDivider.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            headerDivider.topAnchor.constraint(
-                equalTo: content.topAnchor,
-                constant: descriptor.searchHeight - 1
-            ),
-            headerDivider.heightAnchor.constraint(equalToConstant: 1),
-            headerIcon.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            headerIcon.centerYAnchor.constraint(
-                equalTo: content.topAnchor,
-                constant: descriptor.searchHeight / 2
-            ),
-            headerIcon.widthAnchor.constraint(equalToConstant: 28),
-            headerIcon.heightAnchor.constraint(equalToConstant: 28),
         ]
 
         if descriptor.showsPreview {
@@ -875,6 +860,31 @@ final class LauncherPreviewContentView: NSView,
                 equalTo: content.trailingAnchor,
                 constant: -descriptor.resultHorizontalInset
             ))
+        }
+        if descriptor.showsHeaderSeparator {
+            headerSeparator.translatesAutoresizingMaskIntoConstraints = false
+            headerSeparator.color = descriptor.headerSeparatorColor
+            headerSeparator.lineThickness = descriptor.headerSeparatorThickness
+            headerSeparator.angleDegrees = descriptor.headerSeparatorAngleDegrees
+            headerSeparator.isHidden = !hasResults
+            content.addSubview(headerSeparator)
+            constraints += [
+                headerSeparator.leadingAnchor.constraint(
+                    equalTo: content.leadingAnchor,
+                    constant: descriptor.headerSeparatorLeadingInset
+                ),
+                headerSeparator.trailingAnchor.constraint(
+                    equalTo: content.trailingAnchor,
+                    constant: -descriptor.headerSeparatorTrailingInset
+                ),
+                headerSeparator.topAnchor.constraint(
+                    equalTo: content.topAnchor,
+                    constant: descriptor.headerSeparatorTopInset
+                ),
+                headerSeparator.heightAnchor.constraint(
+                    equalToConstant: descriptor.headerSeparatorLayoutHeight
+                ),
+            ]
         }
 
         NSLayoutConstraint.activate(constraints)
@@ -923,7 +933,6 @@ final class LauncherPreviewContentView: NSView,
         selectedRow = tableView.selectedRow
         refreshRows()
         updateClassicPreview()
-        updateLiquidHeaderIcon()
         layoutTableDocument()
     }
 
@@ -944,6 +953,9 @@ final class LauncherPreviewContentView: NSView,
             matching: searchField.stringValue,
             in: fixture
         )
+        let hasResults = !displayedResults.isEmpty
+        scrollView.isHidden = !hasResults
+        headerSeparator.isHidden = !descriptor.showsHeaderSeparator || !hasResults
         selectedRow = displayedResults.isEmpty ? -1 : 0
         tableView.reloadData()
         if selectedRow >= 0 {
@@ -953,22 +965,7 @@ final class LauncherPreviewContentView: NSView,
         }
         refreshRows()
         updateClassicPreview()
-        updateLiquidHeaderIcon()
         layoutTableDocument()
-    }
-
-    private func updateLiquidHeaderIcon() {
-        guard descriptor.design == .liquidGlass,
-              displayedResults.indices.contains(selectedRow) else {
-            headerIcon.image = nil
-            headerIcon.isHidden = true
-            headerDivider.isHidden = true
-            return
-        }
-        headerIcon.image = iconProvider.image(for: displayedResults[selectedRow].entry)
-        headerIcon.contentTintColor = headerIcon.image?.isTemplate == true ? .labelColor : nil
-        headerIcon.isHidden = false
-        headerDivider.isHidden = false
     }
 
     private func refreshRows() {

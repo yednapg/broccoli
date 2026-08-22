@@ -38,6 +38,11 @@ final class WindowManagementTests: XCTestCase {
             WindowGeometry.frame(for: .maximize, window: window, screen: screen),
             screen
         )
+        let minimized = WindowGeometry.frame(for: .minimized, window: window, screen: screen)
+        XCTAssertEqual(minimized.minX, -1368, accuracy: 0.001)
+        XCTAssertEqual(minimized.minY, 67.8, accuracy: 0.001)
+        XCTAssertEqual(minimized.width, 1296, accuracy: 0.001)
+        XCTAssertEqual(minimized.height, 788.4, accuracy: 0.001)
     }
 
     func testCenterPreservesSizeAndClampsOversizeWindow() {
@@ -80,6 +85,7 @@ final class WindowManagementTests: XCTestCase {
             .topHalf: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | cmdKey)),
             .bottomHalf: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(optionKey | cmdKey)),
             .maximize: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(cmdKey)),
+            .minimized: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(cmdKey)),
             .center: .init(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey | cmdKey)),
             .nextDisplay: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(optionKey | cmdKey)),
             .previousDisplay: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | cmdKey)),
@@ -102,6 +108,7 @@ final class WindowManagementTests: XCTestCase {
                 .topHalf: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(controlKey | optionKey)),
                 .bottomHalf: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey)),
                 .maximize: .init(keyCode: UInt32(kVK_Return), modifiers: UInt32(controlKey | optionKey)),
+                .minimized: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(cmdKey)),
                 .center: .init(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey | optionKey)),
                 .nextDisplay: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
                 .previousDisplay: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
@@ -124,6 +131,7 @@ final class WindowManagementTests: XCTestCase {
                 .topHalf: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(controlKey | optionKey)),
                 .bottomHalf: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey)),
                 .maximize: .init(keyCode: UInt32(kVK_Return), modifiers: UInt32(controlKey | optionKey)),
+                .minimized: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(cmdKey)),
                 .center: .init(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey | optionKey)),
                 .nextDisplay: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
                 .previousDisplay: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),

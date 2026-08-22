@@ -9,6 +9,7 @@ enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
     case topHalf
     case bottomHalf
     case maximize
+    case minimized
     case center
     case nextDisplay
     case previousDisplay
@@ -23,6 +24,7 @@ enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
         case .topHalf: "Top Half"
         case .bottomHalf: "Bottom Half"
         case .maximize: "Maximize Window"
+        case .minimized: "Minimized"
         case .center: "Center Window"
         case .nextDisplay: "Move to Next Display"
         case .previousDisplay: "Move to Previous Display"
@@ -36,6 +38,7 @@ enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
         case .topHalf: ["window top", "snap top", "tile top"]
         case .bottomHalf: ["window bottom", "snap bottom", "tile bottom"]
         case .maximize: ["window full", "fill screen", "zoom window"]
+        case .minimized: ["window minimized", "minimize window", "shrink window", "restore down"]
         case .center: ["window center", "recenter"]
         case .nextDisplay: ["window next monitor", "move display", "next screen"]
         case .previousDisplay: ["window previous monitor", "previous screen"]
@@ -56,6 +59,8 @@ enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
             return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: commandOption)
         case .maximize:
             return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: command)
+        case .minimized:
+            return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: command)
         case .center:
             return HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_C), modifiers: commandOption)
         case .nextDisplay:
@@ -120,6 +125,10 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
         .maximize: HotKeyConfiguration(
             keyCode: UInt32(kVK_Return),
             modifiers: UInt32(controlKey | optionKey)
+        ),
+        .minimized: HotKeyConfiguration(
+            keyCode: UInt32(kVK_DownArrow),
+            modifiers: UInt32(cmdKey)
         ),
         .center: HotKeyConfiguration(
             keyCode: UInt32(kVK_ANSI_C),
@@ -257,6 +266,18 @@ enum WindowGeometry {
             return CGRect(x: screen.minX, y: screen.midY, width: screen.width, height: screen.height / 2)
         case .maximize:
             return screen
+        case .minimized:
+            // “Minimized” is a restore-down layout, not Dock minimization. Match the supplied
+            // browser reference with a centered window that retains a comfortable desktop
+            // margin on every edge while remaining large enough for productive work.
+            let width = screen.width * 0.9
+            let height = screen.height * 0.9
+            return CGRect(
+                x: screen.midX - width / 2,
+                y: screen.midY - height / 2,
+                width: width,
+                height: height
+            )
         case .center:
             let width = min(window.width, screen.width)
             let height = min(window.height, screen.height)
