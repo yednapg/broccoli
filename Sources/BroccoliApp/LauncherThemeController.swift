@@ -1,50 +1,52 @@
 @preconcurrency import AppKit
 
-/// Minimal uses the proportions of the second Figma concept at a compact desktop footprint.
-/// The source frame was intentionally enlarged for inspection; using those raw values in the
-/// live launcher made the search field overpower its results. Keep the adapted shell and row
-/// scale together so the live panel and Settings preview cannot drift apart.
+/// Minimal keeps its authored controls and typography while using a narrower desktop shell.
+/// Width is the only scaled dimension; the live panel and Settings preview share these metrics
+/// so text, icons, rows, and vertical rhythm cannot shrink accidentally with the window.
 enum LauncherMinimalMetrics {
-    static let width: CGFloat = 600
+    static let widthScale: CGFloat = 0.90
+    static let width: CGFloat = 600 * widthScale
     static let cornerRadius: CGFloat = 5
-    static let searchHeight: CGFloat = 58
+    static let searchHeight: CGFloat = 55
     static let searchFontSize: CGFloat = 24
     static let searchHorizontalInset: CGFloat = 20
-    static let searchVerticalInset: CGFloat = 13
-    // The authored 32-point line remains 13 points from the shell edges, but AppKit's
+    static let searchVerticalInset: CGFloat = 11.5
+    // The authored 32-point line remains 11.5 points from the shell edges, but AppKit's
     // field editor needs extra transparent headroom above it to avoid clipping ascenders.
     static let searchControlVerticalInset: CGFloat = 9
-    static let searchControlTopInset: CGFloat = 6
     static let searchSymbolSize: CGFloat = 24
-    static let searchSymbolPointSize: CGFloat = 22
-    static let searchSymbolTextGap: CGFloat = 15
-    static let searchSymbolVerticalOffset: CGFloat = 5
-    static let nativeTextLeadingCompensation: CGFloat = 0
-    // Optical text correction inside the enlarged native field. The field itself is placed
-    // two points lower; the magnifier artwork counter-shifts by the same amount so its final
-    // screen position remains unchanged while the complete text line moves down.
-    static let nativeTextVerticalCompensation: CGFloat = 3
-    static let nativeTextRectVerticalExpansion: CGFloat = 3
-    static let nativeTextBaselineOffset: CGFloat = 3
-    static let insertionPointHeight: CGFloat = 22
-    static let emptyInsertionPointLeadingGap: CGFloat = 4
+    static let searchSymbolPointSize: CGFloat = searchFontSize
+    // Keep the icon centered between two equal horizontal spaces: shell-to-icon and
+    // icon-to-query.
+    static let searchSymbolTextGap: CGFloat = searchHorizontalInset
+    // Deliberately large diagnostic correction used to make the query shift unmistakable.
+    static let nativeTextLeadingCompensation: CGFloat = -10
+    static let insertionPointHeight: CGFloat = 24
     // Give the SF Symbol just enough optical correction to fill its compact 24-point box.
     static let searchSymbolDrawingScale: CGFloat = 1.08
     static let searchSymbolDrawingVerticalScale: CGFloat = 1.10
-    static let searchSymbolDrawingOffset = NSPoint(x: -0.5, y: -2)
-    static let separatorTopInset: CGFloat = 57
+    static let separatorTopInset: CGFloat = 54
     static let separatorLeadingInset: CGFloat = 16
     static let separatorTrailingInset: CGFloat = 16
     static let separatorThickness: CGFloat = 1
-    static let rowHeight: CGFloat = 40
-    static let resultHorizontalInset: CGFloat = 7
-    static let resultTopInset: CGFloat = 3
-    static let resultBottomInset: CGFloat = 6
-    static let rowSpacing: CGFloat = 1
-    static let resultIconSize: CGFloat = 28
-    static let resultTitleFontSize: CGFloat = 15
-    static let resultSubtitleFontSize: CGFloat = 11
-    static let resultShortcutFontSize: CGFloat = 12
+    static let rowHeight: CGFloat = 50
+    // The Minimal selection is an edge-to-edge rectangular band. Content retains its own
+    // leading inset instead of using an outer table inset that narrows the blue fill.
+    static let resultHorizontalInset: CGFloat = 0
+    static let resultContentLeadingInset: CGFloat = 13
+    static let resultTitleLeadingInset: CGFloat = 8
+    static let resultTopInset: CGFloat = 0
+    static let resultBottomInset: CGFloat = 0
+    static let rowSpacing: CGFloat = 0
+    static let resultIconSize: CGFloat = 30
+    static let resultIconOpticalSize: CGFloat = 26
+    static let resultNativeIconSize: CGFloat = 35
+    static let resultNativeIconOpticalSize: CGFloat = 35
+    static let resultActionIconOpticalSize: CGFloat = 22
+    static let resultTemplatePointSize: CGFloat = 22
+    static let resultTitleFontSize: CGFloat = 16
+    static let resultSubtitleFontSize: CGFloat = 12
+    static let resultShortcutFontSize: CGFloat = 13
     static let figmaBackgroundBlur: CGFloat = 60
     // AppKit's public behind-window effect is less opaque than Figma's Ultra Thick recipe.
     // This wash brings the sampled live surface from ~85% to the reference's ~93% light fill.
@@ -76,28 +78,26 @@ enum LauncherLiquidGlassMetrics {
     static let scale = searchHeight / figmaSearchHeight
     static let compactCornerRadius = searchHeight / 2
     static let expandedCornerRadius = figmaExpandedCornerRadius * scale
-    static let searchFontSize = figmaSearchFontSize * scale
-    static let searchHorizontalInset = figmaSearchHorizontalInset * scale
+    static let searchFontSize: CGFloat = 26
+    static let searchHorizontalInset: CGFloat = 20
     static let searchVerticalInset = figmaSearchVerticalInset * scale
-    static let searchSymbolSize = figmaSearchSymbolSize * scale
-    static let searchSymbolPointSize = figmaSearchSymbolPointSize * scale
+    // Match the magnifier's canvas and configured point size directly to the live query type.
+    static let searchSymbolSize: CGFloat = searchFontSize
+    static let searchSymbolPointSize: CGFloat = searchFontSize
     static let searchTextLeading = figmaSearchTextLeading * scale
-    static let searchSymbolTextGap = searchTextLeading
-        - searchHorizontalInset
-        - searchSymbolSize
-    // Liquid Glass uses geometric centering. Both the symbol box and text line derive from
-    // the search control's midY, so resizing cannot reintroduce a hand-tuned vertical drift.
-    static let searchSymbolVerticalOffset: CGFloat = 0
+    static let searchTextHorizontalOffset: CGFloat = -10
+    static let searchSymbolTextGap: CGFloat = searchHorizontalInset
     // Figma's vector fills its 29 × 30 frame, while SF Symbols carries optical bearings. These
-    // compensations align the rendered ink—not merely the AppKit cell rectangles—to the source.
+    // scale values preserve its visual size; placement is derived from the canvas center.
     static let searchSymbolDrawingScale: CGFloat = 1.27
     static let searchSymbolDrawingVerticalScale: CGFloat = 1.27
-    static let searchSymbolDrawingOffset = NSPoint(
-        x: -searchSymbolSize * (searchSymbolDrawingScale - 1) / 2,
-        y: -searchSymbolSize * (searchSymbolDrawingVerticalScale - 1) / 2
-    )
-    static let searchTextHorizontalOffset: CGFloat = 3
-    static let searchTextVerticalOffset: CGFloat = 0
+    // Keep the Liquid Glass caret at the requested fixed visual height instead of letting
+    // AppKit stretch it to the full field-editor line fragment.
+    static let insertionPointHeight: CGFloat = 30
+    static let resultIconSize: CGFloat = 50
+    static let resultActionIconOpticalSize: CGFloat = 40
+    static let resultClipboardIconOpticalSize: CGFloat = 48
+    static let lightGlassTintAlpha: CGFloat = 0.30
     // Enlarge the invisible native field equally above and below the authored inset. This
     // provides font-rendering headroom without changing either centered midY.
     static let searchControlVerticalOutset: CGFloat = 8
@@ -154,7 +154,14 @@ struct LauncherThemeDescriptor {
         switch design {
         case .minimal: .figmaMinimal
         case .liquidGlass: .figmaLiquidGlass
-        case .yosemiteClassic: LauncherSearchMetrics(fontSize: searchFontSize)
+        case .yosemiteClassic:
+            LauncherSearchMetrics(
+                fontSize: searchFontSize,
+                symbolSize: searchFontSize,
+                symbolPointSize: searchFontSize,
+                symbolTextGap: searchHorizontalInset,
+                textLeadingCompensation: -10
+            )
         }
     }
 
@@ -166,18 +173,6 @@ struct LauncherThemeDescriptor {
                 0,
                 searchVerticalInset - LauncherLiquidGlassMetrics.searchControlVerticalOutset
             )
-        case .yosemiteClassic: return searchVerticalInset
-        }
-    }
-
-    /// Positions the enlarged Liquid Glass field around the authored search-line center.
-    /// The native text cell needs extra clipping headroom, but that headroom must be split
-    /// evenly above and below instead of shifting the visible icon and text.
-    var searchControlTopInset: CGFloat {
-        switch design {
-        case .minimal: return LauncherMinimalMetrics.searchControlTopInset
-        case .liquidGlass:
-            return searchVerticalInset - LauncherLiquidGlassMetrics.searchControlVerticalOutset / 2
         case .yosemiteClassic: return searchVerticalInset
         }
     }
@@ -214,6 +209,14 @@ struct LauncherThemeDescriptor {
     }
 
     var showsHeaderSeparator: Bool { design != .yosemiteClassic }
+
+    /// Minimal's first selected result is a continuation of the header edge. Its blue row
+    /// replaces the divider instead of leaving a one-point rule visible above the selection.
+    func shouldShowHeaderSeparator(hasResults: Bool, selectedRow: Int) -> Bool {
+        showsHeaderSeparator
+            && hasResults
+            && !(design == .minimal && selectedRow == 0)
+    }
 
     var headerSeparatorLeadingInset: CGFloat {
         design == .liquidGlass
@@ -255,7 +258,7 @@ struct LauncherThemeDescriptor {
 
     var resultSelectionCornerRadius: CGFloat {
         switch design {
-        case .minimal: 6
+        case .minimal: 0
         case .liquidGlass: 12
         case .yosemiteClassic: 2
         }
@@ -398,10 +401,14 @@ final class LauncherThemeController {
                 previewWidth: 0,
                 appearance: appearance,
                 backgroundColor: dark ? NSColor(calibratedWhite: 0.035, alpha: 0.99) : NSColor(calibratedWhite: 0.99, alpha: 0.99),
-                // Let regular Liquid Glass derive its luminosity and color from the content
-                // behind the launcher. Tinting the entire surface turns it into a dark HUD and
-                // prevents the adaptive material from reading as glass.
-                glassTintColor: nil,
+                // Light Spotlight glass carries a restrained white wash so black labels remain
+                // legible over varied wallpaper. Keep dark glass untinted and let it derive its
+                // luminosity from the content behind the launcher.
+                glassTintColor: dark
+                    ? nil
+                    : NSColor.white.withAlphaComponent(
+                        LauncherLiquidGlassMetrics.lightGlassTintAlpha
+                    ),
                 // The selected result is an inset adaptive glass wash, not a saturated blue
                 // table selection. Semantic label color keeps it neutral in both appearances.
                 selectionColor: NSColor.labelColor.withAlphaComponent(contrast ? 0.24 : 0.11),
@@ -422,8 +429,8 @@ final class LauncherThemeController {
                 cornerRadius: 10,
                 searchHeight: 68,
                 rowHeight: 52,
-                searchFontSize: 29,
-                searchHorizontalInset: 12,
+                searchFontSize: 26,
+                searchHorizontalInset: 16,
                 // Keep the shared native search control vertically centered in the taller
                 // classic header rather than stretching the control itself.
                 searchVerticalInset: 17,

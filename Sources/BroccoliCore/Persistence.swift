@@ -14,17 +14,13 @@ public struct CachedApplication: Codable, Hashable, Sendable {
     }
 
     public var searchEntry: SearchEntry {
-        let title = displayName.lowercased().hasSuffix(".app")
-            ? String(displayName.dropLast(4))
-            : displayName
-        let parentPath = URL(fileURLWithPath: path).deletingLastPathComponent().path
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let subtitle = parentPath == home ? "~" : parentPath.replacingOccurrences(of: home, with: "~")
+        let applicationURL = URL(fileURLWithPath: path)
+        let title = applicationURL.deletingPathExtension().lastPathComponent
         return SearchEntry(
             id: "app:\(path)",
             kind: .application,
             title: title,
-            subtitle: subtitle,
+            subtitle: path,
             keywords: [],
             iconKey: path,
             target: .application(path: path, bundleIdentifier: bundleIdentifier)
@@ -43,16 +39,24 @@ private struct VersionedUsage: Codable {
 }
 
 public enum PersistencePaths {
+    public static let bundleIdentifier = "dev.gauravpandey.broccoli"
+
     public static func applicationSupportDirectory(
         fileManager: FileManager = .default,
-        bundleIdentifier: String = "dev.gauravpandey.broccoli"
+        bundleIdentifier: String = Self.bundleIdentifier,
+        baseDirectory: URL? = nil
     ) throws -> URL {
-        let base = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
+        let base: URL
+        if let baseDirectory {
+            base = baseDirectory
+        } else {
+            base = try fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+        }
         let directory = base.appendingPathComponent(bundleIdentifier, isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
@@ -129,4 +133,5 @@ public actor UsageStore {
         let data = try encoder.encode(VersionedUsage(version: Self.schemaVersion, records: records))
         try data.write(to: fileURL, options: .atomic)
     }
+
 }

@@ -142,4 +142,5 @@ final class AppPreferences: ObservableObject {
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? PropertyListDecoder().decode(type, from: data)
     }
+
 }

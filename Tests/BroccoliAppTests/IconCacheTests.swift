@@ -554,6 +554,231 @@ final class IconCacheTests: XCTestCase {
         XCTAssertNil(iconView.contentTintColor, "Full-color native icons must not be recolored")
     }
 
+    func testMinimalRowsBalanceNativeAndActionIconOpticalSizes() {
+        XCTAssertEqual(
+            ResultRowView.minimalIconCanvasSize(for: .application),
+            LauncherMinimalMetrics.resultNativeIconSize
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalIconCanvasSize(for: .action),
+            LauncherMinimalMetrics.resultIconSize
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalOpticalIconSize(for: .application),
+            LauncherMinimalMetrics.resultNativeIconOpticalSize
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalOpticalIconSize(for: .systemSetting),
+            LauncherMinimalMetrics.resultNativeIconOpticalSize
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalOpticalIconSize(for: .action),
+            LauncherMinimalMetrics.resultActionIconOpticalSize
+        )
+        XCTAssertGreaterThan(
+            ResultRowView.minimalOpticalIconSize(for: .application),
+            ResultRowView.minimalOpticalIconSize(for: .action)
+        )
+    }
+
+    func testLiquidRowsUseFiftyPointCanvasWithRequestedOpticalSizes() {
+        XCTAssertEqual(
+            ResultRowView.liquidIconSize(for: .application),
+            LauncherLiquidGlassMetrics.resultIconSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidIconSize(for: .systemSetting),
+            LauncherLiquidGlassMetrics.resultIconSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidIconSize(for: .action),
+            LauncherLiquidGlassMetrics.resultIconSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidIconSize(for: .clipboard),
+            LauncherLiquidGlassMetrics.resultIconSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidOpticalIconSize(for: .action),
+            LauncherLiquidGlassMetrics.resultActionIconOpticalSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidOpticalIconSize(for: .clipboard),
+            LauncherLiquidGlassMetrics.resultClipboardIconOpticalSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidDrawingCanvasSize(for: .action),
+            LauncherLiquidGlassMetrics.resultActionIconOpticalSize
+        )
+        XCTAssertEqual(
+            ResultRowView.liquidDrawingCanvasSize(for: .application),
+            LauncherLiquidGlassMetrics.resultIconSize
+        )
+        XCTAssertEqual(LauncherLiquidGlassMetrics.resultIconSize, 50)
+        XCTAssertEqual(LauncherLiquidGlassMetrics.resultActionIconOpticalSize, 40)
+        XCTAssertEqual(LauncherLiquidGlassMetrics.resultClipboardIconOpticalSize, 48)
+    }
+
+    func testLiquidRowNormalizationChangesVisibleSymbolSizeWithoutMovingText() throws {
+        _ = NSApplication.shared
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .liquidGlass),
+            reducedTransparency: false,
+            increasedContrast: false
+        )
+        let row = ResultRowView()
+        row.frame = NSRect(x: 0, y: 0, width: 540, height: 56)
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        let titleLabel = try XCTUnwrap(row.subviews.compactMap { $0 as? NSTextField }.first)
+        let cache = IconCache(startsNativeIconResolution: false)
+        let actionEntry = try XCTUnwrap(
+            ActionRegistry.definition(id: "window.leftHalf")?.searchEntry
+        )
+
+        row.configure(
+            result: RankedResult(entry: actionEntry, score: 1),
+            icon: cache.image(for: actionEntry),
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.layoutSubtreeIfNeeded()
+        let actionFrame = iconView.frame
+        let actionTitleX = titleLabel.frame.minX
+        let actionBitmap = try renderedMinimalIconBitmap(try XCTUnwrap(iconView.image))
+        let actionBounds = try XCTUnwrap(nonTransparentBounds(in: actionBitmap))
+
+        let logoutEntry = try XCTUnwrap(
+            ActionRegistry.definition(id: "power.logout")?.searchEntry
+        )
+        row.configure(
+            result: RankedResult(entry: logoutEntry, score: 1),
+            icon: cache.image(for: logoutEntry),
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.layoutSubtreeIfNeeded()
+        let logoutFrame = iconView.frame
+        XCTAssertEqual(logoutFrame.midX, actionFrame.midX, accuracy: 0.001)
+        XCTAssertEqual(titleLabel.frame.minX, actionTitleX, accuracy: 0.001)
+
+        let clipboardEntry = SearchEntry(
+            id: "clipboard:command",
+            kind: .clipboard,
+            title: "Clipboard History",
+            iconKey: "clipboard:command",
+            target: .clipboardCommand
+        )
+        row.configure(
+            result: RankedResult(entry: clipboardEntry, score: 1),
+            icon: cache.image(for: clipboardEntry),
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.layoutSubtreeIfNeeded()
+        let clipboardFrame = iconView.frame
+        let clipboardBitmap = try renderedMinimalIconBitmap(try XCTUnwrap(iconView.image))
+        let clipboardBounds = try XCTUnwrap(nonTransparentBounds(in: clipboardBitmap))
+
+        XCTAssertEqual(actionFrame.size, NSSize(width: 40, height: 40))
+        XCTAssertEqual(clipboardFrame.size, NSSize(width: 50, height: 50))
+        XCTAssertEqual(
+            actionFrame.midX,
+            clipboardFrame.midX,
+            accuracy: 0.001,
+            "Every Liquid icon must stay centred in the shared 50-point column"
+        )
+        XCTAssertEqual(
+            max(actionBounds.width, actionBounds.height),
+            LauncherLiquidGlassMetrics.resultActionIconOpticalSize * 2,
+            accuracy: 2
+        )
+        // Clipboard's 48-point full-source fit compensates for the SF Symbol bearings so its
+        // visible ink matches a trimmed 40-point action symbol without cropping either edge.
+        XCTAssertEqual(
+            max(clipboardBounds.width, clipboardBounds.height),
+            max(actionBounds.width, actionBounds.height),
+            accuracy: 3
+        )
+        XCTAssertEqual(titleLabel.frame.minX, actionTitleX, accuracy: 0.001)
+        XCTAssertGreaterThan(actionBounds.width, clipboardBounds.width)
+    }
+
+    func testMinimalRowNormalizationRendersTheRequestedNativeAndActionPixelBounds() throws {
+        _ = NSApplication.shared
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .minimal),
+            reducedTransparency: false,
+            increasedContrast: false
+        )
+        let row = ResultRowView()
+        row.frame = NSRect(x: 0, y: 0, width: 540, height: 50)
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        let titleLabel = try XCTUnwrap(row.subviews.compactMap { $0 as? NSTextField }.first)
+        let applicationEntry = SearchEntry(
+            id: "test:application",
+            kind: .application,
+            title: "Application",
+            target: .application(path: "/Applications/Test.app", bundleIdentifier: nil)
+        )
+        let solidNativeIcon = NSImage(
+            size: NSSize(width: 40, height: 40),
+            flipped: false
+        ) { rect in
+            NSColor.systemBlue.setFill()
+            rect.fill()
+            return true
+        }
+
+        row.configure(
+            result: RankedResult(entry: applicationEntry, score: 1),
+            icon: solidNativeIcon,
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.layoutSubtreeIfNeeded()
+        let nativeIconFrame = iconView.frame
+        let nativeTitleX = titleLabel.frame.minX
+        let nativeBitmap = try renderedMinimalIconBitmap(
+            try XCTUnwrap(iconView.image)
+        )
+        let nativeBounds = try XCTUnwrap(nonTransparentBounds(in: nativeBitmap))
+
+        let actionEntry = try XCTUnwrap(
+            ActionRegistry.definition(id: "window.leftHalf")?.searchEntry
+        )
+        row.configure(
+            result: RankedResult(entry: actionEntry, score: 1),
+            icon: IconCache(startsNativeIconResolution: false).image(for: actionEntry),
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.layoutSubtreeIfNeeded()
+        let actionIconFrame = iconView.frame
+        let actionBitmap = try renderedMinimalIconBitmap(
+            try XCTUnwrap(iconView.image)
+        )
+        let actionBounds = try XCTUnwrap(nonTransparentBounds(in: actionBitmap))
+
+        XCTAssertEqual(max(nativeBounds.width, nativeBounds.height), 70, accuracy: 1)
+        XCTAssertEqual(max(actionBounds.width, actionBounds.height), 44, accuracy: 2)
+        XCTAssertEqual(nativeIconFrame.size, NSSize(width: 35, height: 35))
+        XCTAssertEqual(actionIconFrame.size, NSSize(width: 30, height: 30))
+        XCTAssertEqual(nativeIconFrame.midX, actionIconFrame.midX, accuracy: 0.001)
+        XCTAssertEqual(titleLabel.frame.minX, nativeTitleX, accuracy: 0.001)
+        XCTAssertGreaterThan(nativeBounds.width, actionBounds.width)
+        XCTAssertGreaterThan(nativeBounds.height, actionBounds.height)
+    }
+
     func testPublicBluetoothTemplateIsAvailableForSettingsBadge() {
         _ = NSApplication.shared
         let bluetooth = NSImage(named: NSImage.bluetoothTemplateName)
@@ -632,6 +857,36 @@ final class IconCacheTests: XCTestCase {
             width: maximumX - minimumX + 1,
             height: maximumY - minimumY + 1
         )
+    }
+
+    private func renderedMinimalIconBitmap(_ image: NSImage) throws -> NSBitmapImageRep {
+        let pixelsWide = Int(image.size.width * 2)
+        let pixelsHigh = Int(image.size.height * 2)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelsWide,
+            pixelsHigh: pixelsHigh,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ))
+        bitmap.size = image.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: bitmap.size).fill()
+        image.draw(
+            in: NSRect(origin: .zero, size: bitmap.size),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap
     }
 }
 

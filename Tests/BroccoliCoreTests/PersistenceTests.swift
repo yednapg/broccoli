@@ -77,16 +77,36 @@ final class PersistenceTests: XCTestCase {
         XCTAssertTrue(application.searchEntry.keywords.isEmpty)
     }
 
-    func testApplicationSearchEntryUsesProductNameWithoutBundleExtension() {
+    func testApplicationSearchEntryUsesBundleFilenameAndFullPath() {
         let application = CachedApplication(
             path: "/System/Applications/Calculator.app",
             bundleIdentifier: "com.apple.calculator",
-            displayName: "Calculator.app",
+            displayName: "Internal Calculator Name",
             modifiedAt: nil
         )
 
         XCTAssertEqual(application.searchEntry.title, "Calculator")
-        XCTAssertEqual(application.searchEntry.subtitle, "/System/Applications")
+        XCTAssertEqual(application.searchEntry.subtitle, "/System/Applications/Calculator.app")
+    }
+
+    func testIdenticalBundleDisplayNamesRemainDistinctByFilename() {
+        let current = CachedApplication(
+            path: "/Applications/ChatGPT.app",
+            bundleIdentifier: "com.openai.codex",
+            displayName: "ChatGPT",
+            modifiedAt: nil
+        )
+        let classic = CachedApplication(
+            path: "/Applications/ChatGPT Classic.app",
+            bundleIdentifier: "com.openai.chat",
+            displayName: "ChatGPT",
+            modifiedAt: nil
+        )
+
+        XCTAssertEqual(current.searchEntry.title, "ChatGPT")
+        XCTAssertEqual(current.searchEntry.subtitle, "/Applications/ChatGPT.app")
+        XCTAssertEqual(classic.searchEntry.title, "ChatGPT Classic")
+        XCTAssertEqual(classic.searchEntry.subtitle, "/Applications/ChatGPT Classic.app")
     }
 
     func testCatalogRoundTrip() async throws {
