@@ -163,7 +163,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
                 width: 640,
                 height: LauncherLiquidGlassSurfaceView.collapsedHeight
             ),
-            interactive: false
+            interactive: true
         )
         surface.configure(isDark: false, tintColor: nil)
         let content = NSView()
@@ -186,7 +186,10 @@ final class LauncherPreviewRendererTests: XCTestCase {
             XCTAssertNil(glass.tintColor)
             XCTAssertEqual(glass.frame, surface.bounds)
             if #available(macOS 27, *) {
-                XCTAssertFalse(glass.effectIsInteractive)
+                XCTAssertFalse(
+                    glass.effectIsInteractive,
+                    "Editable content must not enable the rectangular glass click lens"
+                )
             }
             XCTAssertTrue(glass.contentView === content.superview)
 
@@ -198,7 +201,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
             surface.frame.size.height = 184
             surface.layoutSubtreeIfNeeded()
             XCTAssertEqual(glass.frame, surface.bounds)
-            XCTAssertEqual(glass.style, .regular)
+            XCTAssertEqual(glass.style, .clear)
             XCTAssertEqual(glass.cornerRadius, LauncherLiquidGlassSurfaceView.expandedCornerRadius)
         } else {
             let fallback = try XCTUnwrap(

@@ -49,6 +49,41 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         XCTAssertFalse(controller.visibilityIsolationWindow.hidesOnDeactivate)
     }
 
+    func testResigningKeyDismissesWithoutRequestingPreviousApplicationRestore() {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        var didHide = false
+        var requestedPreviousApplicationRestore = false
+        controller.onDidHide = { didHide = true }
+        controller.onDismiss = { requestedPreviousApplicationRestore = true }
+        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+
+        controller.windowDidResignKey(Notification(
+            name: NSWindow.didResignKeyNotification,
+            object: controller.visibilityIsolationWindow
+        ))
+
+        XCTAssertFalse(controller.isVisible)
+        XCTAssertTrue(didHide)
+        XCTAssertFalse(requestedPreviousApplicationRestore)
+    }
+
+    func testRestoringVisibleSearchFocusPreservesTheMouseSelectedCaretPosition() throws {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        defer { controller.dismiss(notify: false) }
+        let editor = try XCTUnwrap(
+            controller.visibilityIsolationWindow.firstResponder as? NSTextView
+        )
+        editor.string = "abcdef"
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+
+        controller.restoreSearchFocusIfVisible()
+
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 0))
+    }
+
     func testLauncherToggleDismissesOnlyAnActiveKeyPresentation() {
         XCTAssertEqual(
             LauncherToggleDecision.resolve(

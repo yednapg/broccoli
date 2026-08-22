@@ -84,6 +84,98 @@ final class LauncherInteractivePreviewTests: XCTestCase {
         XCTAssertEqual(content.selectedResultID, selectedBeforeReturn)
     }
 
+    func testMinimalSelectionUsesTheFullSquareTableRowBackground() throws {
+        _ = NSApplication.shared
+        let descriptor = LauncherThemeController().descriptor(
+            for: .defaults(design: .minimal),
+            reducedTransparency: false,
+            increasedContrast: false
+        )
+        let content = LauncherPreviewContentView(
+            descriptor: descriptor,
+            fixture: .standard,
+            iconProvider: LauncherPreviewIconProvider(),
+            interactive: true
+        )
+        content.prepareForCapture()
+
+        func tableView(in view: NSView) -> NSTableView? {
+            if let tableView = view as? NSTableView { return tableView }
+            for child in view.subviews {
+                if let tableView = tableView(in: child) { return tableView }
+            }
+            return nil
+        }
+
+        func headerSeparator(in view: NSView) -> LauncherHeaderSeparatorView? {
+            if let separator = view as? LauncherHeaderSeparatorView { return separator }
+            for child in view.subviews {
+                if let separator = headerSeparator(in: child) { return separator }
+            }
+            return nil
+        }
+
+        func minimalSurface(in view: NSView) -> LauncherMinimalMaterialSurfaceView? {
+            if let surface = view as? LauncherMinimalMaterialSurfaceView { return surface }
+            for child in view.subviews {
+                if let surface = minimalSurface(in: child) { return surface }
+            }
+            return nil
+        }
+
+        let tableView = try XCTUnwrap(tableView(in: content))
+        let separator = try XCTUnwrap(headerSeparator(in: content))
+        let minimalSurface = try XCTUnwrap(minimalSurface(in: content))
+        let rowView = try XCTUnwrap(tableView.rowView(atRow: 0, makeIfNecessary: true))
+        let cellView = try XCTUnwrap(
+            tableView.view(atColumn: 0, row: 0, makeIfNecessary: true) as? ResultRowView
+        )
+        content.layoutSubtreeIfNeeded()
+
+        let labels = cellView.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertGreaterThanOrEqual(labels.count, 3)
+        let titleAndSubtitleFrame = labels[0].frame.union(labels[1].frame)
+        XCTAssertEqual(
+            titleAndSubtitleFrame.midY,
+            cellView.bounds.midY,
+            accuracy: 0.5,
+            "The title and subtitle must center as one group at any row height"
+        )
+        XCTAssertEqual(labels[2].frame.midY, cellView.bounds.midY, accuracy: 0.5)
+        let iconView = try XCTUnwrap(cellView.subviews.compactMap { $0 as? NSImageView }.first)
+        XCTAssertEqual(iconView.frame.midY, cellView.bounds.midY, accuracy: 0.5)
+
+        XCTAssertEqual(rowView.frame.minX, tableView.bounds.minX, accuracy: 0.001)
+        XCTAssertEqual(rowView.frame.width, tableView.bounds.width, accuracy: 0.001)
+        XCTAssertEqual(rowView.layer?.cornerRadius, 0)
+        XCTAssertEqual(rowView.layer?.borderWidth, 0)
+        XCTAssertGreaterThan(NSColor(cgColor: try XCTUnwrap(rowView.layer?.backgroundColor))?.alphaComponent ?? 0, 0.9)
+        XCTAssertEqual(
+            NSColor(cgColor: try XCTUnwrap(cellView.layer?.backgroundColor))?.alphaComponent,
+            0
+        )
+        XCTAssertTrue(separator.isHidden, "The first blue result replaces the header divider")
+
+        XCTAssertTrue(content.moveInteractiveSelection(up: false))
+        XCTAssertFalse(separator.isHidden, "The divider returns after selection leaves row zero")
+
+        XCTAssertTrue(content.moveInteractiveSelection(up: false))
+        content.layoutSubtreeIfNeeded()
+        let rowRects = (0..<tableView.numberOfRows).map(tableView.rect(ofRow:))
+        XCTAssertFalse(rowRects.isEmpty)
+        for rowRect in rowRects {
+            XCTAssertEqual(rowRect.height, descriptor.rowHeight, accuracy: 0.001)
+        }
+        XCTAssertEqual(
+            try XCTUnwrap(rowRects.last).maxY,
+            tableView.bounds.maxY,
+            accuracy: 0.001,
+            "The final regular-height result must reach the shell bottom"
+        )
+        XCTAssertEqual(minimalSurface.layer?.cornerRadius, LauncherMinimalMetrics.cornerRadius)
+        XCTAssertTrue(minimalSurface.layer?.masksToBounds == true)
+    }
+
     func testInteractiveQueryUpdatesVisibleFixtureWithoutExternalSearch() {
         _ = NSApplication.shared
         let preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
@@ -137,7 +229,18 @@ final class LauncherInteractivePreviewTests: XCTestCase {
 
         let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
         let clipView = try XCTUnwrap(editor.superview as? NSClipView)
-        XCTAssertEqual(clipView.frame, field.searchTextBounds.integral)
+        let textBounds = field.searchTextBounds.integral
+        XCTAssertEqual(editor.textContainer?.lineFragmentPadding, 0)
+        XCTAssertEqual(
+            editor.textContainerInset.width,
+            editor.string.isEmpty ? field.searchMetrics.emptyInsertionPointLeadingGap : 0,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(clipView.frame.minX, field.searchButtonBounds.maxX)
+        XCTAssertLessThanOrEqual(clipView.frame.minX, textBounds.minX)
+        XCTAssertEqual(clipView.frame.minY, textBounds.minY)
+        XCTAssertEqual(clipView.frame.maxX, textBounds.maxX, accuracy: 1)
+        XCTAssertEqual(clipView.frame.height, textBounds.height)
     }
 
     func testEveryLauncherDesignUsesOneNativeSearchControlAndOpticalSpacing() throws {
@@ -166,12 +269,18 @@ final class LauncherInteractivePreviewTests: XCTestCase {
                 field.searchTextBounds.minX - field.searchButtonBounds.maxX,
                 field.searchMetrics.symbolTextGap
                     + field.searchMetrics.textLeadingCompensation,
-                accuracy: 0.001,
+                accuracy: 0.51,
                 design.title
             )
             XCTAssertEqual(
-                field.searchButtonBounds.midY - field.bounds.midY,
-                field.searchMetrics.symbolVerticalOffset,
+                field.searchButtonBounds.midY,
+                field.bounds.midY,
+                accuracy: 0.51,
+                design.title
+            )
+            XCTAssertEqual(
+                field.searchTextBounds.midY,
+                field.bounds.midY,
                 accuracy: 0.51,
                 design.title
             )

@@ -626,6 +626,7 @@ final class LauncherPreviewContentView: NSView,
         selectedRow = next
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         refreshRows()
+        updateHeaderSeparatorVisibility()
         updateClassicPreview()
         return true
     }
@@ -776,9 +777,9 @@ final class LauncherPreviewContentView: NSView,
                 equalTo: content.trailingAnchor,
                 constant: -searchTrailingInset
             ),
-            searchChrome.topAnchor.constraint(
+            searchChrome.centerYAnchor.constraint(
                 equalTo: content.topAnchor,
-                constant: descriptor.searchControlTopInset
+                constant: descriptor.searchHeight / 2
             ),
             searchChrome.heightAnchor.constraint(
                 equalToConstant:
@@ -866,7 +867,10 @@ final class LauncherPreviewContentView: NSView,
             headerSeparator.color = descriptor.headerSeparatorColor
             headerSeparator.lineThickness = descriptor.headerSeparatorThickness
             headerSeparator.angleDegrees = descriptor.headerSeparatorAngleDegrees
-            headerSeparator.isHidden = !hasResults
+            headerSeparator.isHidden = !descriptor.shouldShowHeaderSeparator(
+                hasResults: hasResults,
+                selectedRow: selectedRow
+            )
             content.addSubview(headerSeparator)
             constraints += [
                 headerSeparator.leadingAnchor.constraint(
@@ -903,7 +907,7 @@ final class LauncherPreviewContentView: NSView,
     }
 
     func controlTextDidBeginEditing(_ obj: Notification) {
-        (searchField as? LauncherNativeSearchField)?.alignFieldEditorToSearchTextBounds()
+        (searchField as? LauncherNativeSearchField)?.configureCurrentFieldEditor()
     }
 
     func control(
@@ -932,6 +936,7 @@ final class LauncherPreviewContentView: NSView,
         guard isInteractive, tableView.selectedRow >= 0 else { return }
         selectedRow = tableView.selectedRow
         refreshRows()
+        updateHeaderSeparatorVisibility()
         updateClassicPreview()
         layoutTableDocument()
     }
@@ -955,8 +960,8 @@ final class LauncherPreviewContentView: NSView,
         )
         let hasResults = !displayedResults.isEmpty
         scrollView.isHidden = !hasResults
-        headerSeparator.isHidden = !descriptor.showsHeaderSeparator || !hasResults
         selectedRow = displayedResults.isEmpty ? -1 : 0
+        updateHeaderSeparatorVisibility()
         tableView.reloadData()
         if selectedRow >= 0 {
             tableView.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
@@ -966,6 +971,13 @@ final class LauncherPreviewContentView: NSView,
         refreshRows()
         updateClassicPreview()
         layoutTableDocument()
+    }
+
+    private func updateHeaderSeparatorVisibility() {
+        headerSeparator.isHidden = !descriptor.shouldShowHeaderSeparator(
+            hasResults: !displayedResults.isEmpty,
+            selectedRow: selectedRow
+        )
     }
 
     private func refreshRows() {
