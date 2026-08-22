@@ -111,6 +111,14 @@ enum LauncherPanelGeometry {
             height: height
         )
     }
+
+    static func addingCompositingOutset(_ outset: CGFloat, to visualFrame: NSRect) -> NSRect {
+        visualFrame.insetBy(dx: -max(0, outset), dy: -max(0, outset))
+    }
+
+    static func removingCompositingOutset(_ outset: CGFloat, from outerFrame: NSRect) -> NSRect {
+        outerFrame.insetBy(dx: max(0, outset), dy: max(0, outset))
+    }
 }
 
 enum LauncherPreviewUpdateGuard {
@@ -164,62 +172,194 @@ private final class LauncherSearchField: NSTextField {
     }
 }
 
-/// The Liquid Glass launcher uses a real AppKit search field so its magnifier, clear button,
-/// placeholder color, editing rect, and accessibility semantics stay aligned with macOS.
-/// Keyboard navigation is still handled by the controller's NSTextFieldDelegate methods and
-/// the panel's key equivalents, just as it is for the legacy launcher field.
+/// Every launcher design uses one native AppKit search field so its magnifier, query,
+/// placeholder, clear button, and accessibility semantics cannot drift between themes.
+/// The metrics scale as one optical unit: changing a theme's query size also changes the
+/// symbol canvas and cancel control while retaining the same compact icon-to-text rhythm.
+@MainActor
+struct LauncherSearchMetrics: Equatable {
+    static let spotlight = LauncherSearchMetrics(fontSize: 26)
+    static let figmaLiquidGlass = LauncherSearchMetrics(
+        fontSize: LauncherLiquidGlassMetrics.searchFontSize,
+        symbolSize: LauncherLiquidGlassMetrics.searchSymbolSize,
+        symbolPointSize: LauncherLiquidGlassMetrics.searchSymbolPointSize,
+        symbolTextGap: LauncherLiquidGlassMetrics.searchSymbolTextGap,
+        symbolVerticalOffset: LauncherLiquidGlassMetrics.searchSymbolVerticalOffset,
+        textLeadingCompensation: LauncherLiquidGlassMetrics.searchTextHorizontalOffset,
+        textVerticalCompensation: LauncherLiquidGlassMetrics.searchTextVerticalOffset,
+        fieldEditorTextLeadingCorrection:
+            LauncherLiquidGlassMetrics.fieldEditorTextLeadingCorrection,
+        symbolDrawingScale: LauncherLiquidGlassMetrics.searchSymbolDrawingScale,
+        symbolDrawingVerticalScale: LauncherLiquidGlassMetrics.searchSymbolDrawingVerticalScale,
+        symbolDrawingOffset: LauncherLiquidGlassMetrics.searchSymbolDrawingOffset
+    )
+    static let figmaMinimal = LauncherSearchMetrics(
+        fontSize: LauncherMinimalMetrics.searchFontSize,
+        symbolSize: LauncherMinimalMetrics.searchSymbolSize,
+        symbolPointSize: LauncherMinimalMetrics.searchSymbolPointSize,
+        symbolTextGap: LauncherMinimalMetrics.searchSymbolTextGap,
+        symbolVerticalOffset: LauncherMinimalMetrics.searchSymbolVerticalOffset,
+        textLeadingCompensation: LauncherMinimalMetrics.nativeTextLeadingCompensation,
+        textVerticalCompensation: LauncherMinimalMetrics.nativeTextVerticalCompensation,
+        textRectVerticalExpansion: LauncherMinimalMetrics.nativeTextRectVerticalExpansion,
+        textBaselineOffset: LauncherMinimalMetrics.nativeTextBaselineOffset,
+        insertionPointHeight: LauncherMinimalMetrics.insertionPointHeight,
+        emptyInsertionPointLeadingGap: LauncherMinimalMetrics.emptyInsertionPointLeadingGap,
+        symbolDrawingScale: LauncherMinimalMetrics.searchSymbolDrawingScale,
+        symbolDrawingVerticalScale: LauncherMinimalMetrics.searchSymbolDrawingVerticalScale,
+        symbolDrawingOffset: LauncherMinimalMetrics.searchSymbolDrawingOffset
+    )
+
+    let fontSize: CGFloat
+    let symbolSize: CGFloat
+    let symbolPointSize: CGFloat
+    let symbolTextGap: CGFloat
+    let symbolVerticalOffset: CGFloat
+    let textLeadingCompensation: CGFloat
+    let textVerticalCompensation: CGFloat
+    let textRectVerticalExpansion: CGFloat
+    let textBaselineOffset: CGFloat
+    let fieldEditorTextLeadingCorrection: CGFloat
+    let insertionPointHeight: CGFloat?
+    let emptyInsertionPointLeadingGap: CGFloat
+    let symbolDrawingScale: CGFloat
+    let symbolDrawingVerticalScale: CGFloat
+    let symbolDrawingOffset: NSPoint
+
+    init(
+        fontSize: CGFloat,
+        symbolSize: CGFloat? = nil,
+        symbolPointSize: CGFloat? = nil,
+        symbolTextGap: CGFloat = 10,
+        symbolVerticalOffset: CGFloat = 2,
+        textLeadingCompensation: CGFloat = 0,
+        textVerticalCompensation: CGFloat = 0,
+        textRectVerticalExpansion: CGFloat = 0,
+        textBaselineOffset: CGFloat = 0,
+        fieldEditorTextLeadingCorrection: CGFloat = 0,
+        insertionPointHeight: CGFloat? = nil,
+        emptyInsertionPointLeadingGap: CGFloat = 0,
+        symbolDrawingScale: CGFloat = 1,
+        symbolDrawingVerticalScale: CGFloat = 1,
+        symbolDrawingOffset: NSPoint = .zero
+    ) {
+        self.fontSize = fontSize
+        self.symbolSize = symbolSize ?? fontSize + 8
+        self.symbolPointSize = symbolPointSize ?? (symbolSize ?? fontSize + 8) - 2
+        self.symbolTextGap = symbolTextGap
+        self.symbolVerticalOffset = symbolVerticalOffset
+        self.textLeadingCompensation = textLeadingCompensation
+        self.textVerticalCompensation = textVerticalCompensation
+        self.textRectVerticalExpansion = textRectVerticalExpansion
+        self.textBaselineOffset = textBaselineOffset
+        self.fieldEditorTextLeadingCorrection = fieldEditorTextLeadingCorrection
+        self.insertionPointHeight = insertionPointHeight
+        self.emptyInsertionPointLeadingGap = emptyInsertionPointLeadingGap
+        self.symbolDrawingScale = symbolDrawingScale
+        self.symbolDrawingVerticalScale = symbolDrawingVerticalScale
+        self.symbolDrawingOffset = symbolDrawingOffset
+    }
+
+    var cancelSize: CGFloat { min(20, max(16, fontSize * 0.7)) }
+    var cancelTrailingInset: CGFloat { 2 }
+    var font: NSFont { .systemFont(ofSize: fontSize, weight: .regular) }
+}
+
+/// Draws the Figma header rule as actual one-point ink. Liquid Glass uses the source file's
+/// tiny 0.288° rise; Minimal remains horizontal. A custom view avoids rotating an entire
+/// layer, which otherwise softens the rule and makes its end points asymmetric on Retina.
+@MainActor
+final class LauncherHeaderSeparatorView: NSView {
+    var color: NSColor = .clear { didSet { needsDisplay = true } }
+    var lineThickness: CGFloat = 1 { didSet { needsDisplay = true } }
+    var angleDegrees: CGFloat = 0 { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard bounds.width > 0, bounds.height > 0, color.alphaComponent > 0 else { return }
+        let halfLine = lineThickness / 2
+        let rise = abs(tan(angleDegrees * .pi / 180) * bounds.width)
+        let leftY = min(bounds.height - halfLine, halfLine + rise)
+        let rightY = halfLine
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: 0, y: leftY))
+        path.line(to: NSPoint(x: bounds.width, y: rightY))
+        path.lineWidth = lineThickness
+        color.setStroke()
+        path.stroke()
+    }
+}
+
 @MainActor
 struct LauncherSearchGeometry {
-    static let symbolSize: CGFloat = 24
-    static let symbolTextGap: CGFloat = 14
-    static let cancelSize: CGFloat = 18
-    static let cancelTrailingInset: CGFloat = 2
-    static let font = NSFont.systemFont(ofSize: 26, weight: .regular)
+    /// Spotlight gives the search glyph nearly the same optical height as its query text.
+    /// SF Symbols include transparent side bearings. A 34-point drawing box produces a
+    /// roughly 29-point visible magnifier, matching Spotlight's optical scale beside 26-point
+    /// type. A 10-point box gap resolves to approximately 15 visible points, eliminating
+    /// the detached icon-to-query spacing visible in the previous build.
+    static let symbolSize = LauncherSearchMetrics.spotlight.symbolSize
+    static let symbolPointSize = LauncherSearchMetrics.spotlight.symbolPointSize
+    static let symbolTextGap = LauncherSearchMetrics.spotlight.symbolTextGap
+    /// The magnifier's visible mass sits below the center of its SF Symbol canvas. Lift the
+    /// canvas until its rendered-pixel center aligns with the placeholder's cap-height center.
+    static let symbolVerticalOffset = LauncherSearchMetrics.spotlight.symbolVerticalOffset
+    static let cancelSize = LauncherSearchMetrics.spotlight.cancelSize
+    static let cancelTrailingInset = LauncherSearchMetrics.spotlight.cancelTrailingInset
+    static let font = LauncherSearchMetrics.spotlight.font
 
     let bounds: NSRect
+    var metrics: LauncherSearchMetrics = .spotlight
 
     var searchButtonRect: NSRect {
         NSRect(
             x: bounds.minX,
-            y: bounds.midY - Self.symbolSize / 2,
-            width: Self.symbolSize,
-            height: Self.symbolSize
+            y: bounds.midY - metrics.symbolSize / 2 + metrics.symbolVerticalOffset,
+            width: metrics.symbolSize,
+            height: metrics.symbolSize
         )
     }
 
     var cancelButtonRect: NSRect {
         NSRect(
-            x: bounds.maxX - Self.cancelTrailingInset - Self.cancelSize,
-            y: bounds.midY - Self.cancelSize / 2,
-            width: Self.cancelSize,
-            height: Self.cancelSize
+            x: bounds.maxX - metrics.cancelTrailingInset - metrics.cancelSize,
+            y: bounds.midY - metrics.cancelSize / 2,
+            width: metrics.cancelSize,
+            height: metrics.cancelSize
         )
     }
 
     var searchTextRect: NSRect {
-        let leading = searchButtonRect.maxX + Self.symbolTextGap
+        let leading = searchButtonRect.maxX
+            + metrics.symbolTextGap
+            + metrics.textLeadingCompensation
         let trailing = cancelButtonRect.minX - 10
-        let lineHeight = ceil(Self.font.ascender - Self.font.descender + Self.font.leading)
+        let lineHeight = ceil(metrics.font.ascender - metrics.font.descender + metrics.font.leading)
+        let textRectHeight = min(bounds.height, lineHeight + metrics.textRectVerticalExpansion)
         return NSRect(
             x: leading,
-            y: bounds.midY - lineHeight / 2,
+            y: bounds.midY - textRectHeight / 2 + metrics.textVerticalCompensation,
             width: max(0, trailing - leading),
-            height: lineHeight
+            height: textRectHeight
         )
     }
 }
 
 final class LauncherNativeSearchFieldCell: NSSearchFieldCell {
+    var searchMetrics: LauncherSearchMetrics = .spotlight
+
     override func searchButtonRect(forBounds rect: NSRect) -> NSRect {
-        LauncherSearchGeometry(bounds: rect).searchButtonRect
+        LauncherSearchGeometry(bounds: rect, metrics: searchMetrics).searchButtonRect
     }
 
     override func searchTextRect(forBounds rect: NSRect) -> NSRect {
-        LauncherSearchGeometry(bounds: rect).searchTextRect
+        LauncherSearchGeometry(bounds: rect, metrics: searchMetrics).searchTextRect
     }
 
     override func cancelButtonRect(forBounds rect: NSRect) -> NSRect {
-        LauncherSearchGeometry(bounds: rect).cancelButtonRect
+        LauncherSearchGeometry(bounds: rect, metrics: searchMetrics).cancelButtonRect
     }
 
     override func titleRect(forBounds rect: NSRect) -> NSRect {
@@ -262,25 +402,39 @@ final class LauncherNativeSearchFieldCell: NSSearchFieldCell {
 }
 
 final class LauncherNativeSearchField: NSSearchField {
+    var searchMetrics: LauncherSearchMetrics = .spotlight {
+        didSet {
+            (cell as? LauncherNativeSearchFieldCell)?.searchMetrics = searchMetrics
+            font = searchMetrics.font
+            needsLayout = true
+            needsDisplay = true
+        }
+    }
+
     override var searchButtonBounds: NSRect {
         backingAlignedRect(
-            LauncherSearchGeometry(bounds: bounds).searchButtonRect,
+            LauncherSearchGeometry(bounds: bounds, metrics: searchMetrics).searchButtonRect,
             options: .alignAllEdgesNearest
         )
     }
 
     override var searchTextBounds: NSRect {
         backingAlignedRect(
-            LauncherSearchGeometry(bounds: bounds).searchTextRect,
+            LauncherSearchGeometry(bounds: bounds, metrics: searchMetrics).searchTextRect,
             options: .alignAllEdgesNearest
         )
     }
 
     override var cancelButtonBounds: NSRect {
         backingAlignedRect(
-            LauncherSearchGeometry(bounds: bounds).cancelButtonRect,
+            LauncherSearchGeometry(bounds: bounds, metrics: searchMetrics).cancelButtonRect,
             options: .alignAllEdgesNearest
         )
+    }
+
+    override func textDidChange(_ notification: Notification) {
+        super.textDidChange(notification)
+        alignFieldEditorToSearchTextBounds()
     }
 
     /// A borderless NSSearchField keeps the shared field editor at the full control bounds,
@@ -289,58 +443,189 @@ final class LauncherNativeSearchField: NSSearchField {
     /// placeholder, and typed text never draw underneath either button.
     func alignFieldEditorToSearchTextBounds() {
         guard let editor = currentEditor() as? NSTextView else { return }
+        // NSTextView contributes five points of line-fragment padding by default, while
+        // NSSearchFieldCell draws the empty-state placeholder directly at titleRect.minX.
+        // Removing it keeps the query on the exact same Figma leading edge when results open.
+        editor.textContainer?.lineFragmentPadding = 0
         let textBounds = searchTextBounds.integral
+        let emptyCaretAllowance = editor.string.isEmpty
+            ? searchMetrics.emptyInsertionPointLeadingGap
+            : 0
+        editor.textContainerInset = NSSize(
+            width: emptyCaretAllowance,
+            height: searchMetrics.textRectVerticalExpansion / 2
+        )
+        let editorCorrection = editor.string.isEmpty
+            ? 0
+            : searchMetrics.fieldEditorTextLeadingCorrection
+        let editorBounds = NSRect(
+            x: textBounds.minX - editorCorrection - emptyCaretAllowance,
+            y: textBounds.minY,
+            width: textBounds.width + editorCorrection + emptyCaretAllowance,
+            height: textBounds.height
+        )
         if let clipView = editor.superview as? NSClipView {
-            clipView.frame = textBounds
-            editor.frame = NSRect(origin: .zero, size: textBounds.size)
+            clipView.frame = editorBounds
+            editor.frame = NSRect(origin: .zero, size: editorBounds.size)
         } else {
-            editor.frame = textBounds
+            editor.frame = editorBounds
         }
+    }
+}
+
+/// AppKit's shared field editor normally draws an insertion bar as tall as the full line
+/// fragment. Minimal's compact 24-point type needs a shorter caret, and the empty-state caret
+/// needs a small optical gap before the cell-drawn placeholder. Typed text keeps AppKit's
+/// normal caret position so this correction cannot overlap the final glyph in a query.
+final class LauncherSearchFieldEditor: NSTextView {
+    var insertionPointHeight: CGFloat?
+    var emptyInsertionPointLeadingGap: CGFloat = 0
+
+    override func drawInsertionPoint(
+        in rect: NSRect,
+        color: NSColor,
+        turnedOn flag: Bool
+    ) {
+        guard let requestedHeight = insertionPointHeight else {
+            super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+            return
+        }
+
+        var adjustedRect = rect
+        adjustedRect.size.height = min(requestedHeight, rect.height)
+        adjustedRect.origin.y += (rect.height - adjustedRect.height) / 2
+        if string.isEmpty {
+            adjustedRect.origin.x -= emptyInsertionPointLeadingGap
+        }
+        super.drawInsertionPoint(in: adjustedRect, color: color, turnedOn: flag)
     }
 }
 
 @MainActor
 enum LauncherNativeSearchFieldStyle {
-    static func apply(to searchField: NSSearchField) {
+    static func placeholder(
+        _ string: String,
+        metrics: LauncherSearchMetrics,
+        color: NSColor
+    ) -> NSAttributedString {
+        NSAttributedString(
+            string: string,
+            attributes: [
+                .font: metrics.font,
+                .foregroundColor: color,
+                .baselineOffset: metrics.textBaselineOffset,
+            ]
+        )
+    }
+
+    /// Render a semantic color into the symbol pixels instead of leaving the image as a
+    /// template. AppKit otherwise re-vibrantizes the search-button template when the native
+    /// glass changes size, which makes the magnifier flash brighter while the text stays
+    /// steady. The resolved pixels retain the correct light/dark color without participating
+    /// in that independent vibrancy transition.
+    private static func stableSymbol(
+        named name: String,
+        pointSize: CGFloat,
+        weight: NSFont.Weight,
+        size: CGFloat,
+        color: NSColor,
+        appearance: NSAppearance,
+        drawingScale: CGFloat = 1,
+        drawingVerticalScale: CGFloat = 1,
+        drawingOffset: NSPoint = .zero
+    ) -> NSImage? {
+        guard let symbol = NSImage(
+            systemSymbolName: name,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(.init(pointSize: pointSize, weight: weight)) else {
+            return nil
+        }
+        var resolvedColor = color
+        appearance.performAsCurrentDrawingAppearance {
+            resolvedColor = color.usingColorSpace(.deviceRGB) ?? color
+        }
+        let outputSize = NSSize(width: size, height: size)
+        let image = NSImage(size: outputSize, flipped: false) { rect in
+            resolvedColor.setFill()
+            rect.fill()
+            let drawingRect = NSRect(
+                x: drawingOffset.x,
+                y: drawingOffset.y,
+                width: rect.width * drawingScale,
+                height: rect.height * drawingVerticalScale
+            )
+            symbol.draw(
+                in: drawingRect,
+                from: .zero,
+                operation: .destinationIn,
+                fraction: 1,
+                respectFlipped: true,
+                hints: nil
+            )
+            return true
+        }
+        image.isTemplate = false
+        image.alignmentRect = NSRect(origin: .zero, size: outputSize)
+        return image
+    }
+
+    static func apply(to searchField: NSSearchField, fontSize: CGFloat = 26) {
+        apply(
+            to: searchField,
+            metrics: LauncherSearchMetrics(fontSize: fontSize),
+            iconColor: .labelColor
+        )
+    }
+
+    static func apply(
+        to searchField: NSSearchField,
+        metrics: LauncherSearchMetrics,
+        iconColor: NSColor
+    ) {
         let cell = LauncherNativeSearchFieldCell(textCell: "")
+        cell.searchMetrics = metrics
         searchField.cell = cell
+        (searchField as? LauncherNativeSearchField)?.searchMetrics = metrics
         searchField.placeholderString = "Search"
         searchField.isBezeled = false
         searchField.drawsBackground = false
         searchField.isEditable = true
         searchField.isSelectable = true
         searchField.controlSize = .large
-        searchField.font = LauncherSearchGeometry.font
+        searchField.font = metrics.font
         searchField.focusRingType = .none
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
-        if let magnifier = NSImage(
-            systemSymbolName: "magnifyingglass",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 20, weight: .regular)) {
-            magnifier.alignmentRect = NSRect(
-                origin: .zero,
-                size: NSSize(
-                    width: LauncherSearchGeometry.symbolSize,
-                    height: LauncherSearchGeometry.symbolSize
-                )
-            )
+        if let magnifier = stableSymbol(
+            named: "magnifyingglass",
+            pointSize: metrics.symbolPointSize,
+            weight: .regular,
+            size: metrics.symbolSize,
+            color: iconColor,
+            appearance: searchField.effectiveAppearance,
+            drawingScale: metrics.symbolDrawingScale,
+            drawingVerticalScale: metrics.symbolDrawingVerticalScale,
+            drawingOffset: metrics.symbolDrawingOffset
+        ) {
             cell.searchButtonCell?.image = magnifier
             cell.searchButtonCell?.imageScaling = .scaleProportionallyUpOrDown
+            cell.searchButtonCell?.imageDimsWhenDisabled = false
+            cell.searchButtonCell?.highlightsBy = []
+            cell.searchButtonCell?.showsStateBy = []
         }
-        if let cancel = NSImage(
-            systemSymbolName: "xmark.circle.fill",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular)) {
-            cancel.alignmentRect = NSRect(
-                origin: .zero,
-                size: NSSize(
-                    width: LauncherSearchGeometry.cancelSize,
-                    height: LauncherSearchGeometry.cancelSize
-                )
-            )
+        if let cancel = stableSymbol(
+            named: "xmark.circle.fill",
+            pointSize: 15,
+            weight: .regular,
+            size: metrics.cancelSize,
+            color: .secondaryLabelColor,
+            appearance: searchField.effectiveAppearance
+        ) {
             cell.cancelButtonCell?.image = cancel
             cell.cancelButtonCell?.imageScaling = .scaleProportionallyUpOrDown
+            cell.cancelButtonCell?.imageDimsWhenDisabled = false
+            cell.cancelButtonCell?.highlightsBy = []
+            cell.cancelButtonCell?.showsStateBy = []
         }
         searchField.cell?.lineBreakMode = .byTruncatingTail
         searchField.setAccessibilityRole(.textField)
@@ -350,21 +635,23 @@ enum LauncherNativeSearchFieldStyle {
 
 /// The complete Liquid Glass launcher surface.
 ///
-/// Spotlight uses one adaptive lens: the empty capsule grows into the results panel without
-/// introducing a second material layer. Keep the search field and result list inside this one
-/// native effect so AppKit can derive luminance and color directly from the desktop. In
-/// particular, do not place an `NSVisualEffectView` behind `NSGlassEffectView`; doing so makes
-/// the glass sample the synthetic material instead of the user's wallpaper.
+/// Liquid Glass is a single functional surface in Spotlight: the initial capsule morphs into
+/// one rounded result panel. Embedding the launcher content through `contentView` lets AppKit
+/// coordinate legibility, sampling, and geometry as the material changes thickness. The live
+/// editable surface opts into interaction; inert Settings and screenshot previews leave it off.
 @MainActor
 final class LauncherLiquidGlassSurfaceView: NSView {
-    static let expandedCornerRadius: CGFloat = 29
-    static let collapsedHeight: CGFloat = 58
+    static let expandedCornerRadius = LauncherLiquidGlassMetrics.expandedCornerRadius
+    static let collapsedHeight = LauncherLiquidGlassMetrics.searchHeight
 
     private let contentHost = NSView()
     private var hostedContent: NSView?
+    private var nativeGlass: NSView?
     private var fallbackEffect: NSVisualEffectView?
+    private var isDark = false
+    private var glassTintColor: NSColor?
 
-    init(frame frameRect: NSRect = .zero, interactive: Bool = true) {
+    init(frame frameRect: NSRect = .zero, interactive: Bool = false) {
         super.init(frame: frameRect)
         contentHost.frame = bounds
         contentHost.autoresizingMask = [.width, .height]
@@ -372,12 +659,15 @@ final class LauncherLiquidGlassSurfaceView: NSView {
         if #available(macOS 26, *) {
             let glass = NSGlassEffectView(frame: bounds)
             glass.autoresizingMask = [.width, .height]
-            glass.cornerRadius = Self.expandedCornerRadius
-            glass.style = .regular
+            glass.cornerRadius = Self.collapsedHeight / 2
+            glass.style = .clear
             glass.tintColor = nil
-            if #available(macOS 27, *) { glass.effectIsInteractive = interactive }
+            if #available(macOS 27, *) {
+                glass.effectIsInteractive = interactive
+            }
             glass.contentView = contentHost
             addSubview(glass)
+            nativeGlass = glass
         } else {
             let effect = NSVisualEffectView(frame: bounds)
             effect.autoresizingMask = [.width, .height]
@@ -397,22 +687,42 @@ final class LauncherLiquidGlassSurfaceView: NSView {
     override func layout() {
         super.layout()
         contentHost.frame = bounds
-        let radius = bounds.height <= Self.collapsedHeight + 0.5
+        let isExpanded = bounds.height > Self.collapsedHeight + 0.5
+        if #available(macOS 26, *), let glass = nativeGlass as? NSGlassEffectView {
+            glass.frame = bounds
+            glass.cornerRadius = !isExpanded
+                ? bounds.height / 2
+                : Self.expandedCornerRadius
+            // The compact light component is the clearer "Small UI" glass from Figma. Dark
+            // compact glass is the denser "Medium UI" variant, while both expanded panels use
+            // the frosted regular style represented by the Figma Large/Medium components.
+            glass.style = isExpanded || isDark ? .regular : .clear
+            glass.tintColor = glassTintColor
+        }
+        let fallbackRadius = !isExpanded
             ? bounds.height / 2
             : Self.expandedCornerRadius
-        if #available(macOS 26, *),
-           let glass = subviews.compactMap({ $0 as? NSGlassEffectView }).first {
-            glass.cornerRadius = radius
-        }
         fallbackEffect?.wantsLayer = true
-        fallbackEffect?.layer?.cornerRadius = radius
+        fallbackEffect?.layer?.cornerRadius = fallbackRadius
         fallbackEffect?.layer?.cornerCurve = .continuous
         fallbackEffect?.layer?.masksToBounds = true
+    }
+
+    func configure(isDark: Bool, tintColor: NSColor?) {
+        self.isDark = isDark
+        glassTintColor = tintColor
+        needsLayout = true
     }
 
     func setContentView(_ view: NSView) {
         hostedContent?.removeFromSuperview()
         hostedContent = view
+        // NSGlassEffectView owns a private content-view layout pass. Give that hierarchy its
+        // destination geometry before activating descendant constraints; installing into the
+        // initial zero-sized lens makes AppKit briefly recover by breaking a private glass
+        // constraint, even though the next layout pass reaches the expected frame.
+        contentHost.frame = bounds
+        view.frame = contentHost.bounds
         view.translatesAutoresizingMaskIntoConstraints = false
         contentHost.addSubview(view)
         NSLayoutConstraint.activate([
@@ -426,9 +736,23 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
 private final class LauncherPanel: NSPanel {
     var onCommand: ((SearchFieldCommand) -> Void)?
+    private let launcherSearchFieldEditor = LauncherSearchFieldEditor(frame: .zero)
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func fieldEditor(_ createFlag: Bool, for object: Any?) -> NSText? {
+        guard object is LauncherNativeSearchField else {
+            return super.fieldEditor(createFlag, for: object)
+        }
+        launcherSearchFieldEditor.isFieldEditor = true
+        launcherSearchFieldEditor.isRichText = false
+        return launcherSearchFieldEditor
+    }
+
+    override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval {
+        LauncherMotion.panelMorphDuration
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "," {
@@ -443,6 +767,15 @@ private final class LauncherPanel: NSPanel {
         }
         return super.performKeyEquivalent(with: event)
     }
+}
+
+/// One motion contract for the compact-to-results morph. Result providers can publish several
+/// updates for a single keystroke, so only a change between compact and expanded presentation
+/// is animated. Animating every intermediate result-count update makes the material pulse and
+/// causes the search field to appear to change brightness while the user types.
+enum LauncherMotion {
+    static let panelMorphDuration: TimeInterval = 0.18
+    static let resultRevealDuration: TimeInterval = panelMorphDuration
 }
 
 /// Every launcher result is already visible, so physically scrolling the table only creates
@@ -564,6 +897,87 @@ final class ResultRowView: NSTableCellView {
 
     required init?(coder: NSCoder) { nil }
 
+    /// Workspace icons and SF Symbols contain very different transparent bearings. Scaling
+    /// their full canvases into one square therefore produces visibly different icon sizes
+    /// even when every constraint is identical. Minimal trims only transparent padding and
+    /// fits the visible artwork into a shared 24-point optical box inside the 28-point frame.
+    private static func normalizedMinimalIcon(_ source: NSImage) -> NSImage {
+        let samplePixels = 96
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: samplePixels,
+            pixelsHigh: samplePixels,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return source }
+        bitmap.size = source.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: source.size).fill()
+        source.draw(
+            in: NSRect(origin: .zero, size: source.size),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        var minX = samplePixels
+        var minY = samplePixels
+        var maxX = -1
+        var maxY = -1
+        for y in 0..<samplePixels {
+            for x in 0..<samplePixels {
+                guard let color = bitmap.colorAt(x: x, y: y), color.alphaComponent > 0.08
+                else { continue }
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX, maxY >= minY, source.size.width > 0, source.size.height > 0
+        else { return source }
+
+        let scaleX = source.size.width / CGFloat(samplePixels)
+        let scaleY = source.size.height / CGFloat(samplePixels)
+        let crop = NSRect(
+            x: CGFloat(minX) * scaleX,
+            y: CGFloat(minY) * scaleY,
+            width: CGFloat(maxX - minX + 1) * scaleX,
+            height: CGFloat(maxY - minY + 1) * scaleY
+        )
+        let canvasSize = LauncherMinimalMetrics.resultIconSize
+        let opticalSize: CGFloat = 24
+        let fit = min(opticalSize / crop.width, opticalSize / crop.height)
+        let drawnSize = NSSize(width: crop.width * fit, height: crop.height * fit)
+        let destination = NSRect(
+            x: (canvasSize - drawnSize.width) / 2,
+            y: (canvasSize - drawnSize.height) / 2,
+            width: drawnSize.width,
+            height: drawnSize.height
+        )
+        let normalized = NSImage(size: NSSize(width: canvasSize, height: canvasSize), flipped: false) { _ in
+            source.draw(
+                in: destination,
+                from: crop,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            return true
+        }
+        normalized.isTemplate = source.isTemplate
+        return normalized
+    }
+
     func configure(
         result: RankedResult,
         icon: NSImage,
@@ -572,9 +986,14 @@ final class ResultRowView: NSTableCellView {
         selected: Bool,
         theme: LauncherThemeDescriptor
     ) {
-        resultIcon.image = icon.isTemplate
-            ? (icon.withSymbolConfiguration(.init(pointSize: 27, weight: .regular)) ?? icon)
+        let usesMinimalLayout = theme.design == .minimal
+        let templatePointSize: CGFloat = usesMinimalLayout ? 20 : 27
+        let configuredIcon = icon.isTemplate
+            ? (icon.withSymbolConfiguration(.init(pointSize: templatePointSize, weight: .regular)) ?? icon)
             : icon
+        resultIcon.image = usesMinimalLayout
+            ? Self.normalizedMinimalIcon(configuredIcon)
+            : configuredIcon
         titleLabel.stringValue = result.entry.title
         subtitleLabel.stringValue = confirmation
             ? "Press Return again to confirm"
@@ -601,14 +1020,25 @@ final class ResultRowView: NSTableCellView {
         selectionColor = theme.selectionColor
         usesAdaptiveSelectionText = theme.design == .liquidGlass
         let usesLiquidGlassLayout = theme.design == .liquidGlass
-        iconLeadingConstraint.constant = usesLiquidGlassLayout ? 8 : 4
+        iconLeadingConstraint.constant = usesLiquidGlassLayout ? 8 : (usesMinimalLayout ? 6 : 4)
         let liquidIconSize: CGFloat = resultIcon.image?.isTemplate == true ? 34 : 38
-        iconWidthConstraint.constant = usesLiquidGlassLayout ? liquidIconSize : 40
-        iconHeightConstraint.constant = usesLiquidGlassLayout ? liquidIconSize : 40
-        titleLeadingConstraint.constant = usesLiquidGlassLayout ? 10 : 4
+        let iconSize = usesLiquidGlassLayout
+            ? liquidIconSize
+            : (usesMinimalLayout ? LauncherMinimalMetrics.resultIconSize : 40)
+        iconWidthConstraint.constant = iconSize
+        iconHeightConstraint.constant = iconSize
+        titleLeadingConstraint.constant = usesLiquidGlassLayout ? 10 : (usesMinimalLayout ? 8 : 4)
         titleLabel.font = .systemFont(
-            ofSize: 17,
+            ofSize: usesMinimalLayout ? LauncherMinimalMetrics.resultTitleFontSize : 17,
             weight: theme.design == .liquidGlass ? .regular : .medium
+        )
+        subtitleLabel.font = .systemFont(
+            ofSize: usesMinimalLayout ? LauncherMinimalMetrics.resultSubtitleFontSize : 12,
+            weight: .regular
+        )
+        shortcutLabel.font = .systemFont(
+            ofSize: usesMinimalLayout ? LauncherMinimalMetrics.resultShortcutFontSize : 13,
+            weight: .semibold
         )
         layer?.cornerRadius = theme.resultSelectionCornerRadius
         setSelected(selected)
@@ -644,19 +1074,19 @@ final class ResultRowView: NSTableCellView {
 
 @MainActor
 final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSTextFieldDelegate {
-    private static let panelWidth: CGFloat = 560
-    private static let searchHeight: CGFloat = 58
+    private static let panelWidth = LauncherMinimalMetrics.width
+    private static let searchHeight = LauncherMinimalMetrics.searchHeight
     private static let maximumPreparedResultRows = 10
     private let panel: LauncherPanel
-    private let legacySearchField = LauncherSearchField()
     private let nativeSearchField = LauncherNativeSearchField()
-    private let liquidGlassSurface = LauncherLiquidGlassSurfaceView()
+    // The live launcher contains a real editable search control. AppKit's interactive glass
+    // response therefore belongs on this one production surface; inert Settings previews use
+    // a noninteractive surface of their own.
+    private let liquidGlassSurface = LauncherLiquidGlassSurfaceView(interactive: true)
     private let modeBadge = NSTextField(labelWithString: "")
+    private let headerSeparator = LauncherHeaderSeparatorView()
     private let tableView = NSTableView()
     private let scrollView = LauncherResultsScrollView()
-    private let headerDivider = NSBox()
-    private let headerIcon = NSImageView()
-    private let headerSuggestionLabel = NSTextField(labelWithString: "")
     private let preparedResultRows: [ResultRowView]
     private let iconCache: IconCache
     private let themeController = LauncherThemeController()
@@ -673,24 +1103,20 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private var isProgrammaticallyHiding = false
     private var pendingAppearance: LauncherAppearancePreferences?
     private var appliedAppearance: LauncherAppearancePreferences?
-    private var contentHeightConstraint: NSLayoutConstraint?
     private var resultsTopConstraint: NSLayoutConstraint?
     private var resultsBottomConstraint: NSLayoutConstraint?
     private var searchTrailingConstraint: NSLayoutConstraint?
-    private var headerSuggestionWidthConstraint: NSLayoutConstraint?
     private var defaultSearchLeadingConstraint: NSLayoutConstraint?
     private var modeSearchLeadingConstraint: NSLayoutConstraint?
     private var modeBadgeWidthConstraint: NSLayoutConstraint?
     private var currentMode: LauncherMode = .main
     private var presentationSessionActive = false
-    /// A single match can stay in Spotlight's compact inline-suggestion state. As soon as
-    /// there are multiple choices, open one stable results viewport so typing never hides
-    /// suggestions that the user needs to distinguish.
+    /// Liquid Glass starts as one compact search capsule. Any useful match opens one stable
+    /// result viewport so a single Finder/application result is never hidden in the header.
     private var liquidResultsExpanded = false
+    private var animatesNextLiquidGeometryChange = false
 
-    private var searchField: NSTextField {
-        theme.design == .liquidGlass ? nativeSearchField : legacySearchField
-    }
+    private var searchField: NSTextField { nativeSearchField }
 
     var onQueryChanged: ((String) -> Void)?
     var onExecute: ((RankedResult) -> Void)?
@@ -729,16 +1155,20 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     var query: String { searchField.stringValue }
     var preparedResultRowCount: Int { preparedResultRows.count }
     var searchAccessibilityLabel: String? { searchField.accessibilityLabel() }
+    var searchPlaceholder: String? {
+        searchField.placeholderAttributedString?.string ?? searchField.placeholderString
+    }
+    var usesNativeSearchField: Bool { searchField is LauncherNativeSearchField }
     var resultsAccessibilityLabel: String? { tableView.accessibilityLabel() }
     var isContentViewAttached: Bool {
         panel.contentView != nil && panel.contentView === retainedContentView
     }
     var isSearchSurfaceWindowBacked: Bool { liquidGlassSurface.window === panel }
     var isResultViewportVisible: Bool { !scrollView.isHidden }
-    var inlineSuggestionText: String? {
-        headerSuggestionLabel.isHidden ? nil : headerSuggestionLabel.stringValue
+    var inlineSuggestionText: String? { nil }
+    var currentPanelHeight: CGFloat {
+        max(0, panel.frame.height - surfaceCompositingOutset * 2)
     }
-    var currentPanelHeight: CGFloat { panel.frame.height }
 
     func applyAppearance(
         _ preferences: LauncherAppearancePreferences,
@@ -762,16 +1192,35 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func applyAppearanceNow(_ preferences: LauncherAppearancePreferences) {
+        let oldVisualFrame = LauncherPanelGeometry.removingCompositingOutset(
+            surfaceCompositingOutset,
+            from: panel.frame
+        )
         pendingAppearance = nil
         appliedAppearance = preferences
         theme = themeController.descriptor(for: preferences)
         panel.appearance = theme.appearance
         panel.hasShadow = theme.hasShadow
         tableView.rowHeight = theme.rowHeight
-        // Resize the borderless window before installing the new constrained content tree.
-        // Otherwise AppKit briefly solves the new theme inside the old theme's height and can
-        // collapse the panel or emit broken-constraint state during fast theme changes.
-        resizePanel(to: desiredPanelHeight(for: results.count), display: false)
+        // Resize both axes before installing the constrained content tree. A controller is
+        // born at Minimal's width; installing Liquid or Classic inside that stale frame makes
+        // AppKit break the content-width constraint while the hidden launcher is prepared.
+        // Detach that old constrained tree first; appearance changes are queued while visible,
+        // so this replacement always occurs while the panel is safely ordered out.
+        panel.contentView = nil
+        retainedContentView = nil
+        let height = desiredPanelHeight(for: results.count)
+        let preparedVisualFrame = NSRect(
+            x: oldVisualFrame.midX - theme.width / 2,
+            y: oldVisualFrame.maxY - height,
+            width: theme.width,
+            height: height
+        )
+        let preparedFrame = LauncherPanelGeometry.addingCompositingOutset(
+            surfaceCompositingOutset,
+            to: preparedVisualFrame
+        )
+        panel.setFrame(preparedFrame, display: false)
         configureContent()
         if panel.isVisible { position(on: panel.screen) }
     }
@@ -783,7 +1232,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         searchField.stringValue = initialQuery
         switch mode {
         case .main:
-            searchField.placeholderString = theme.design == .liquidGlass ? "Search" : nil
+            searchField.placeholderString = "Search Broccoli"
         case .fileSearch: searchField.placeholderString = "Find files and folders"
         case .clipboard: searchField.placeholderString = "Search clipboard history"
         }
@@ -907,7 +1356,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         refreshSelectionAppearance()
         updatePreview()
-        updateHeaderIcon()
         updateHeight()
     }
 
@@ -1009,7 +1457,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         confirmationEntryID = nil
         refreshSelectionAppearance()
         updatePreview()
-        updateHeaderIcon()
         onSelectionChanged?()
     }
 
@@ -1046,7 +1493,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        if !isProgrammaticallyHiding { dismiss() }
+        // `--show-launcher` is the existing visual-QA launch path. Keep that explicitly
+        // requested surface onscreen while screenshot tooling briefly becomes active; normal
+        // hotkey presentations retain the standard click-away dismissal behavior.
+        let isVisualQAPresentation = ProcessInfo.processInfo.arguments.contains("--show-launcher")
+        if !isProgrammaticallyHiding, !isVisualQAPresentation { dismiss() }
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -1074,25 +1525,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func configureContent() {
-        headerSuggestionWidthConstraint?.isActive = false
-        headerSuggestionWidthConstraint = nil
-        legacySearchField.removeFromSuperview()
         nativeSearchField.removeFromSuperview()
         liquidGlassSurface.removeFromSuperview()
         modeBadge.removeFromSuperview()
+        headerSeparator.removeFromSuperview()
         scrollView.removeFromSuperview()
-        headerDivider.removeFromSuperview()
-        headerIcon.removeFromSuperview()
-        headerSuggestionLabel.removeFromSuperview()
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
-        content.widthAnchor.constraint(equalToConstant: theme.width).isActive = true
-        contentHeightConstraint?.isActive = false
-        let contentHeightConstraint = content.heightAnchor.constraint(
-            equalToConstant: desiredPanelHeight(for: results.count)
-        )
-        contentHeightConstraint.isActive = true
-        self.contentHeightConstraint = contentHeightConstraint
         // NSWindow derives a fitting size from constraints installed directly below its
         // content view. Yosemite's effect view previously became that constrained root, so
         // AppKit repeatedly collapsed the 432-point panel to the search field's 70-point
@@ -1102,10 +1541,20 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         host.translatesAutoresizingMaskIntoConstraints = true
         host.autoresizingMask = [.width, .height]
 
+        let surfaceFrame = host.bounds.insetBy(
+            dx: surfaceCompositingOutset,
+            dy: surfaceCompositingOutset
+        )
         let surface: NSView
         switch theme.surface {
         case .glass:
             if #available(macOS 26, *) {
+                liquidGlassSurface.frame = surfaceFrame
+                liquidGlassSurface.configure(
+                    isDark: theme.isDark,
+                    tintColor: theme.glassTintColor
+                )
+                liquidGlassSurface.layoutSubtreeIfNeeded()
                 liquidGlassSurface.setContentView(content)
                 surface = liquidGlassSurface
             } else {
@@ -1113,6 +1562,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 install(content, in: fallback)
                 surface = fallback
             }
+        case .ultraThick:
+            let material = LauncherMinimalMaterialSurfaceView(
+                frame: host.bounds,
+                isDark: theme.isDark
+            )
+            material.setContentView(content)
+            surface = material
         case .vibrancy, .classic:
             let effect = NSVisualEffectView()
             effect.blendingMode = .behindWindow
@@ -1128,18 +1584,23 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             install(content, in: backdrop)
             surface = backdrop
         }
-        surface.frame = host.bounds
+        surface.frame = surfaceFrame
         surface.translatesAutoresizingMaskIntoConstraints = true
         surface.autoresizingMask = [.width, .height]
-        if theme.surface != .glass {
+        if theme.surface != .glass, theme.surface != .ultraThick {
             surface.wantsLayer = true
             surface.layer?.backgroundColor = theme.surface == .opaque
                 ? theme.backgroundColor.cgColor
                 : nil
-            surface.layer?.cornerRadius = theme.cornerRadius
-            surface.layer?.cornerCurve = .continuous
-            surface.layer?.borderWidth = theme.design == .minimal ? 0 : 1
-            surface.layer?.borderColor = theme.design == .minimal ? nil : theme.borderColor.cgColor
+            surface.layer?.cornerRadius = theme.surfaceCornerRadius(
+                panelHeight: host.bounds.height
+            )
+            surface.layer?.cornerCurve = theme.design == .minimal ? .circular : .continuous
+            // The material and shadow already separate the launcher from the desktop. A
+            // painted outline made Classic look like a legacy utility window and broke the
+            // shared borderless geometry used by the other launcher designs.
+            surface.layer?.borderWidth = 0
+            surface.layer?.borderColor = nil
             surface.layer?.masksToBounds = true
         }
         host.addSubview(surface)
@@ -1148,27 +1609,24 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         // persistent window association so its backdrop is ready before the next hotkey.
         panel.contentView = host
 
-        let usesNativeSearch = theme.design == .liquidGlass
         let searchField = self.searchField
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.placeholderString = nil
-        searchField.textColor = .labelColor
         searchField.backgroundColor = .clear
         searchField.drawsBackground = false
         searchField.isBordered = false
         searchField.isBezeled = false
         searchField.usesSingleLineMode = true
         searchField.focusRingType = .none
-        if usesNativeSearch {
-            LauncherNativeSearchFieldStyle.apply(to: nativeSearchField)
-            nativeSearchField.font = .systemFont(ofSize: theme.searchFontSize, weight: .regular)
-        } else {
-            legacySearchField.font = .systemFont(ofSize: theme.searchFontSize, weight: .regular)
-        }
+        LauncherNativeSearchFieldStyle.apply(
+            to: nativeSearchField,
+            metrics: theme.searchMetrics,
+            iconColor: theme.searchIconColor
+        )
+        searchField.textColor = theme.searchTextColor
         searchField.setAccessibilityLabel("Search Broccoli")
         searchField.setAccessibilityHelp("Type to search applications, settings, and actions")
         searchField.delegate = self
-        legacySearchField.onCommand = { [weak self] command in self?.handle(command) }
         content.addSubview(searchField)
         panel.initialFirstResponder = searchField
 
@@ -1218,8 +1676,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         content.addSubview(scrollView)
         let resultsChrome: NSView = scrollView
         let hasResults = presentsResultViewport
-        let hasLiquidSuggestionIcon = presentsLiquidSuggestionIcon
-        let hasLiquidInlineSuggestion = presentsLiquidInlineSuggestion
         let resultsTopConstraint = resultsChrome.topAnchor.constraint(
             equalTo: content.topAnchor,
             constant: theme.searchHeight + (hasResults ? theme.resultTopInset : 0)
@@ -1232,63 +1688,29 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         self.resultsBottomConstraint = resultsBottomConstraint
         scrollView.isHidden = !hasResults
         let searchChrome: NSView = searchField
-        headerDivider.boxType = .separator
-        headerDivider.translatesAutoresizingMaskIntoConstraints = false
-        headerDivider.isHidden = !hasResults || theme.design != .liquidGlass
-        headerIcon.translatesAutoresizingMaskIntoConstraints = false
-        headerIcon.imageScaling = .scaleProportionallyUpOrDown
-        headerIcon.isHidden = !(hasResults || hasLiquidSuggestionIcon)
-        headerSuggestionLabel.translatesAutoresizingMaskIntoConstraints = false
-        headerSuggestionLabel.font = .systemFont(ofSize: 15, weight: .medium)
-        headerSuggestionLabel.textColor = .secondaryLabelColor
-        headerSuggestionLabel.alignment = .right
-        headerSuggestionLabel.lineBreakMode = .byTruncatingTail
-        headerSuggestionLabel.maximumNumberOfLines = 1
-        headerSuggestionLabel.setAccessibilityLabel("Suggested result")
-        headerSuggestionLabel.isHidden = !hasLiquidInlineSuggestion
-        content.addSubview(headerDivider)
-        content.addSubview(headerSuggestionLabel)
-        content.addSubview(headerIcon)
-        updateInlineSuggestionContent()
-        let searchTrailingInset = liquidSearchTrailingInset(
-            hasResults: hasResults,
-            hasSuggestionIcon: hasLiquidSuggestionIcon
-        )
         let searchTrailingConstraint = searchChrome.trailingAnchor.constraint(
             equalTo: content.trailingAnchor,
-            constant: -searchTrailingInset
+            constant: -theme.searchHorizontalInset
         )
         self.searchTrailingConstraint = searchTrailingConstraint
         var constraints = [
             searchTrailingConstraint,
-            searchChrome.topAnchor.constraint(equalTo: content.topAnchor, constant: theme.searchVerticalInset),
-            searchChrome.heightAnchor.constraint(equalToConstant: theme.searchHeight - theme.searchVerticalInset * 2),
+            // Split the native field's extra clipping headroom equally around the authored
+            // search line so its visible icon and text remain vertically centered together.
+            searchChrome.topAnchor.constraint(
+                equalTo: content.topAnchor,
+                constant: theme.searchControlTopInset
+            ),
+            searchChrome.heightAnchor.constraint(
+                equalToConstant: theme.searchHeight - theme.searchControlVerticalInset * 2
+            ),
             resultsChrome.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: theme.resultHorizontalInset),
             resultsTopConstraint,
             resultsBottomConstraint,
             modeBadge.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: theme.searchHorizontalInset),
             modeBadge.centerYAnchor.constraint(equalTo: searchChrome.centerYAnchor),
             modeBadge.heightAnchor.constraint(equalToConstant: 26),
-            headerDivider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            headerDivider.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            headerDivider.topAnchor.constraint(equalTo: content.topAnchor, constant: theme.searchHeight - 1),
-            headerDivider.heightAnchor.constraint(equalToConstant: 1),
-            headerIcon.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            headerIcon.centerYAnchor.constraint(equalTo: content.topAnchor, constant: theme.searchHeight / 2),
-            headerIcon.widthAnchor.constraint(equalToConstant: 28),
-            headerIcon.heightAnchor.constraint(equalToConstant: 28),
-            headerSuggestionLabel.trailingAnchor.constraint(equalTo: headerIcon.leadingAnchor, constant: -10),
-            headerSuggestionLabel.centerYAnchor.constraint(equalTo: headerIcon.centerYAnchor),
-            headerSuggestionLabel.leadingAnchor.constraint(
-                greaterThanOrEqualTo: content.centerXAnchor,
-                constant: 8
-            ),
         ]
-        let headerSuggestionWidthConstraint = headerSuggestionLabel.widthAnchor.constraint(
-            equalToConstant: inlineSuggestionWidth
-        )
-        constraints.append(headerSuggestionWidthConstraint)
-        self.headerSuggestionWidthConstraint = headerSuggestionWidthConstraint
         let modeBadgeWidthConstraint = modeBadge.widthAnchor.constraint(equalToConstant: 54)
         constraints.append(modeBadgeWidthConstraint)
         self.modeBadgeWidthConstraint = modeBadgeWidthConstraint
@@ -1324,6 +1746,31 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 constant: -theme.resultHorizontalInset
             ))
         }
+        if theme.showsHeaderSeparator {
+            headerSeparator.translatesAutoresizingMaskIntoConstraints = false
+            headerSeparator.color = theme.headerSeparatorColor
+            headerSeparator.lineThickness = theme.headerSeparatorThickness
+            headerSeparator.angleDegrees = theme.headerSeparatorAngleDegrees
+            headerSeparator.isHidden = !hasResults
+            content.addSubview(headerSeparator)
+            constraints += [
+                headerSeparator.leadingAnchor.constraint(
+                    equalTo: content.leadingAnchor,
+                    constant: theme.headerSeparatorLeadingInset
+                ),
+                headerSeparator.trailingAnchor.constraint(
+                    equalTo: content.trailingAnchor,
+                    constant: -theme.headerSeparatorTrailingInset
+                ),
+                headerSeparator.topAnchor.constraint(
+                    equalTo: content.topAnchor,
+                    constant: theme.headerSeparatorTopInset
+                ),
+                headerSeparator.heightAnchor.constraint(
+                    equalToConstant: theme.headerSeparatorLayoutHeight
+                ),
+            ]
+        }
         NSLayoutConstraint.activate(constraints)
         updateModeChrome()
         tableView.rowHeight = theme.rowHeight
@@ -1331,7 +1778,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         resetTableScrollPosition()
         refreshSelectionAppearance()
         updatePreview()
-        updateHeaderIcon()
     }
 
     private func install(_ content: NSView, in container: NSView) {
@@ -1389,8 +1835,21 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         guard panel.makeFirstResponder(searchField) else { return }
         nativeSearchField.alignFieldEditorToSearchTextBounds()
         guard let editor = searchField.currentEditor() as? NSTextView else { return }
-        editor.insertionPointColor = .labelColor
-        editor.textColor = .labelColor
+        if let editor = editor as? LauncherSearchFieldEditor {
+            editor.insertionPointHeight = theme.searchMetrics.insertionPointHeight
+            editor.emptyInsertionPointLeadingGap =
+                theme.searchMetrics.emptyInsertionPointLeadingGap
+        }
+        editor.typingAttributes[.baselineOffset] = theme.searchMetrics.textBaselineOffset
+        if let textStorage = editor.textStorage, textStorage.length > 0 {
+            textStorage.addAttribute(
+                .baselineOffset,
+                value: theme.searchMetrics.textBaselineOffset,
+                range: NSRange(location: 0, length: textStorage.length)
+            )
+        }
+        editor.insertionPointColor = theme.searchTextColor
+        editor.textColor = theme.searchTextColor
         editor.backgroundColor = .clear
         editor.selectedRange = NSRange(location: editor.string.utf16.count, length: 0)
     }
@@ -1403,7 +1862,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         case .main:
             modeBadge.isHidden = true
             defaultSearchLeadingConstraint?.isActive = true
-            searchField.placeholderString = theme.design == .liquidGlass ? "Search Broccoli" : nil
+            searchField.placeholderString = "Search Broccoli"
         case .fileSearch:
             modeBadge.stringValue = "Files"
             modeBadgeWidthConstraint?.constant = 54
@@ -1417,28 +1876,38 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             modeSearchLeadingConstraint?.isActive = true
             searchField.placeholderString = "Filter history"
         }
-        if theme.design == .liquidGlass, let placeholder = searchField.placeholderString {
-            nativeSearchField.placeholderAttributedString = NSAttributedString(
-                string: placeholder,
-                attributes: [
-                    .font: LauncherSearchGeometry.font,
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ]
-            )
+        if let placeholder = searchField.placeholderString {
+            nativeSearchField.placeholderAttributedString =
+                LauncherNativeSearchFieldStyle.placeholder(
+                    placeholder,
+                    metrics: nativeSearchField.searchMetrics,
+                    color: theme.searchTextColor
+                )
         }
     }
 
     private func updateHeight() {
+        let animatesReveal = animatesNextLiquidGeometryChange && presentsResultViewport
+        if animatesReveal { scrollView.alphaValue = 0 }
         updateResultsGeometry()
         resizePanel(to: desiredPanelHeight(for: results.count), display: true)
+        animatesNextLiquidGeometryChange = false
+        guard animatesReveal else {
+            scrollView.alphaValue = 1
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = LauncherMotion.resultRevealDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            scrollView.animator().alphaValue = 1
+        }
     }
 
     private func desiredPanelHeight(for resultCount: Int) -> CGFloat {
-        if theme.design == .liquidGlass, currentMode == .main {
-            guard presentsResultViewport else { return theme.searchHeight }
-            // Once opened, use one fixed result capacity. The panel therefore grows once and
-            // keeps its top and bottom edges steady while asynchronous result sets change.
-            return theme.panelHeight(resultCount: theme.visibleResultCount)
+        if theme.design == .liquidGlass,
+           currentMode == .main,
+           !presentsResultViewport {
+            return theme.searchHeight
         }
         return theme.panelHeight(resultCount: resultCount)
     }
@@ -1449,63 +1918,23 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         return liquidResultsExpanded
     }
 
-    private var presentsLiquidSuggestionIcon: Bool {
-        theme.design == .liquidGlass
-            && currentMode == .main
-            && !results.isEmpty
-            && !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var presentsLiquidInlineSuggestion: Bool {
-        theme.design == .liquidGlass
-            && currentMode == .main
-            && !presentsResultViewport
-            && results.count == 1
-            && !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var inlineSuggestionWidth: CGFloat {
-        guard presentsLiquidInlineSuggestion else { return 0 }
-        return min(180, ceil(headerSuggestionLabel.intrinsicContentSize.width))
-    }
-
-    private func liquidSearchTrailingInset(
-        hasResults: Bool,
-        hasSuggestionIcon: Bool
-    ) -> CGFloat {
-        guard theme.design == .liquidGlass, hasResults || hasSuggestionIcon else {
-            return theme.searchHorizontalInset
-        }
-        guard presentsLiquidInlineSuggestion else { return 64 }
-        return 76 + inlineSuggestionWidth
-    }
-
-    private func updateInlineSuggestionContent() {
-        guard presentsLiquidInlineSuggestion, let result = results.first else {
-            headerSuggestionLabel.stringValue = ""
-            headerSuggestionLabel.isHidden = true
-            headerSuggestionWidthConstraint?.constant = 0
-            return
-        }
-        headerSuggestionLabel.stringValue = result.entry.title
-        headerSuggestionLabel.isHidden = false
-        headerSuggestionWidthConstraint?.constant = inlineSuggestionWidth
-    }
-
     private func updateLiquidPresentationState() {
         guard theme.design == .liquidGlass, currentMode == .main else { return }
+        let wasExpanded = liquidResultsExpanded
         guard !searchField.stringValue
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
         else {
             liquidResultsExpanded = false
+            animatesNextLiquidGeometryChange = wasExpanded
+                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             return
         }
-        // One match can be named inline. Multiple matches must be visible immediately; hiding
-        // them for the first few characters makes the launcher look empty while search works.
-        if results.count > 1 {
-            liquidResultsExpanded = true
-        }
+        // A match is useful only when it is visibly presented. Always open the result region
+        // for a non-empty query, including the common single-result Finder/application case.
+        liquidResultsExpanded = !results.isEmpty
+        animatesNextLiquidGeometryChange = wasExpanded != liquidResultsExpanded
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     private func revealCompactLiquidResultsIfNeeded() {
@@ -1529,29 +1958,29 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             + (hasResults ? theme.resultTopInset : 0)
         resultsBottomConstraint?.constant = hasResults ? -theme.resultBottomInset : 0
         scrollView.isHidden = !hasResults
-        headerDivider.isHidden = !hasResults || theme.design != .liquidGlass
-        headerIcon.isHidden = !(hasResults || presentsLiquidSuggestionIcon)
-        updateInlineSuggestionContent()
-        searchTrailingConstraint?.constant = -liquidSearchTrailingInset(
-            hasResults: hasResults,
-            hasSuggestionIcon: presentsLiquidSuggestionIcon
-        )
-        updateHeaderIcon()
+        headerSeparator.isHidden = !theme.showsHeaderSeparator || !hasResults
+        searchTrailingConstraint?.constant = -theme.searchHorizontalInset
     }
 
     private func resizePanel(to height: CGFloat, display: Bool) {
-        contentHeightConstraint?.constant = height
-        let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: height)
-        // AppKit cannot interpolate a borderless window's native glass backdrop and its
-        // Auto Layout content as one coherent shape. Animating the frame made the bottom edge
-        // lag behind the rows and produced a rubbery flash when results appeared. Spotlight's
-        // state change reads as a direct material reconfiguration, so commit it atomically.
-        panel.setFrame(frame, display: display)
+        let outerHeight = height + surfaceCompositingOutset * 2
+        let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: outerHeight)
+        let animatesLiquidResize = display
+            && panel.isVisible
+            && theme.design == .liquidGlass
+            && abs(currentPanelHeight - height) > 0.5
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        panel.setFrame(frame, display: display, animate: animatesLiquidResize)
         // Keep the frame-based window root synchronized with the borderless panel. This also
         // commits correct native-glass geometry before the hidden panel is ordered front.
-        let contentFrame = NSRect(origin: .zero, size: frame.size)
-        retainedContentView?.frame = contentFrame
-        panel.contentView?.frame = contentFrame
+        // During a live resize AppKit drives the content view through every intermediate
+        // frame. Overwriting it with the destination frame here would make rows and glass
+        // move at different speeds and recreate the rubber-band effect.
+        if !animatesLiquidResize {
+            let contentFrame = NSRect(origin: .zero, size: frame.size)
+            retainedContentView?.frame = contentFrame
+            panel.contentView?.frame = contentFrame
+        }
         panel.contentView?.layoutSubtreeIfNeeded()
     }
 
@@ -1570,19 +1999,27 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         tableView.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
         refreshSelectionAppearance()
         updatePreview()
-        updateHeaderIcon()
     }
 
     private func position(on screen: NSScreen?) {
         guard let screen else { return }
-        let height = max(theme.searchHeight, panel.frame.height)
-        let frame = LauncherPanelGeometry.positionedFrame(
+        let height = max(theme.searchHeight, currentPanelHeight)
+        let visualFrame = LauncherPanelGeometry.positionedFrame(
             in: screen.visibleFrame,
             preferredWidth: theme.width,
             height: height,
             verticalPosition: theme.verticalPosition
         )
+        let frame = LauncherPanelGeometry.addingCompositingOutset(
+            surfaceCompositingOutset,
+            to: visualFrame
+        )
         panel.setFrame(frame, display: false)
+    }
+
+    private var surfaceCompositingOutset: CGFloat {
+        guard theme.design == .liquidGlass, theme.surface == .glass else { return 0 }
+        return LauncherLiquidGlassMetrics.liveCompositingOutset
     }
 
     private func makePreviewView() -> NSView {
@@ -1615,24 +2052,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             previewSubtitle.topAnchor.constraint(equalTo: previewTitle.bottomAnchor, constant: 4),
         ])
         return view
-    }
-
-    private func updateHeaderIcon() {
-        guard theme.design == .liquidGlass else {
-            headerIcon.image = nil
-            headerIcon.isHidden = true
-            return
-        }
-        let selectedRow = tableView.selectedRow
-        let row = results.indices.contains(selectedRow) ? selectedRow : results.indices.first
-        guard let row else {
-            headerIcon.image = nil
-            headerIcon.isHidden = true
-            return
-        }
-        headerIcon.image = iconCache.image(for: results[row].entry)
-        headerIcon.contentTintColor = headerIcon.image?.isTemplate == true ? .labelColor : nil
-        headerIcon.isHidden = false
     }
 
     private func updatePreview() {

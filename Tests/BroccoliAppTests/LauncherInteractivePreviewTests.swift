@@ -140,6 +140,44 @@ final class LauncherInteractivePreviewTests: XCTestCase {
         XCTAssertEqual(clipView.frame, field.searchTextBounds.integral)
     }
 
+    func testEveryLauncherDesignUsesOneNativeSearchControlAndOpticalSpacing() throws {
+        _ = NSApplication.shared
+
+        for design in LauncherDesign.allCases {
+            let preferences = LauncherAppearancePreferences.defaults(design: design)
+            let descriptor = LauncherThemeController().descriptor(
+                for: preferences,
+                reducedTransparency: false,
+                increasedContrast: false
+            )
+            let content = LauncherPreviewContentView(
+                descriptor: descriptor,
+                fixture: .standard,
+                iconProvider: LauncherPreviewIconProvider(),
+                interactive: true
+            )
+            let field = try XCTUnwrap(
+                content.previewSearchField as? LauncherNativeSearchField,
+                design.title
+            )
+
+            XCTAssertEqual(field.searchMetrics.fontSize, descriptor.searchFontSize, design.title)
+            XCTAssertEqual(
+                field.searchTextBounds.minX - field.searchButtonBounds.maxX,
+                field.searchMetrics.symbolTextGap
+                    + field.searchMetrics.textLeadingCompensation,
+                accuracy: 0.001,
+                design.title
+            )
+            XCTAssertEqual(
+                field.searchButtonBounds.midY - field.bounds.midY,
+                field.searchMetrics.symbolVerticalOffset,
+                accuracy: 0.51,
+                design.title
+            )
+        }
+    }
+
     func testAppearanceStageFitsEveryCompleteLauncherPreviewWithoutCropping() throws {
         _ = NSApplication.shared
         let renderer = LauncherPreviewRenderer()

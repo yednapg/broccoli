@@ -128,7 +128,20 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         XCTAssertEqual(controller.numberOfRows(in: NSTableView()), 1)
     }
 
-    func testLiquidMainNamesOneInlineSuggestionAndImmediatelyShowsMultipleSuggestions() {
+    func testEveryLauncherDesignExposesTheSameSearchPlaceholderAndNativeControl() {
+        _ = NSApplication.shared
+
+        for design in LauncherDesign.allCases {
+            let controller = LauncherPanelController()
+            controller.applyAppearance(.defaults(design: design), force: true)
+            controller.setMode(.main)
+
+            XCTAssertTrue(controller.usesNativeSearchField, design.title)
+            XCTAssertEqual(controller.searchPlaceholder, "Search Broccoli", design.title)
+        }
+    }
+
+    func testLiquidMainImmediatelyShowsSingleAndMultipleSuggestions() {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
         let preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
@@ -147,22 +160,25 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
 
         controller.setMode(.main, initialQuery: "wal")
         controller.apply(Array(fixtures.prefix(1)))
-        XCTAssertFalse(controller.isResultViewportVisible)
-        XCTAssertEqual(controller.inlineSuggestionText, "Fixture 0")
-        XCTAssertEqual(controller.currentPanelHeight, 58)
+        XCTAssertTrue(controller.isResultViewportVisible)
+        XCTAssertNil(controller.inlineSuggestionText)
+        let oneResultHeight = controller.currentPanelHeight
+        XCTAssertEqual(
+            oneResultHeight,
+            LauncherThemeController().descriptor(for: preferences).panelHeight(resultCount: 1)
+        )
 
         controller.setMode(.main, initialQuery: "w")
         controller.apply(fixtures)
         XCTAssertTrue(controller.isResultViewportVisible)
         XCTAssertNil(controller.inlineSuggestionText)
-        let expandedHeight = controller.currentPanelHeight
         XCTAssertEqual(
-            expandedHeight,
-            LauncherThemeController().descriptor(for: preferences).panelHeight(resultCount: 7)
+            controller.currentPanelHeight,
+            LauncherThemeController().descriptor(for: preferences).panelHeight(resultCount: 2)
         )
 
         controller.apply(Array(fixtures.prefix(1)))
         XCTAssertTrue(controller.isResultViewportVisible)
-        XCTAssertEqual(controller.currentPanelHeight, expandedHeight)
+        XCTAssertEqual(controller.currentPanelHeight, oneResultHeight)
     }
 }

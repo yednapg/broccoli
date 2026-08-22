@@ -35,6 +35,15 @@ final class ShortcutRecorderControl: NSView {
         _ = beginRecording()
     }
 
+    /// Command-modified keystrokes are offered to the window as key equivalents before the
+    /// first responder receives `keyDown`. Consume them while recording so Command–Arrow is
+    /// captured as that two-key gesture; the plus signs in `displayName` are typography only.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard isRecording else { return super.performKeyEquivalent(with: event) }
+        keyDown(with: event)
+        return true
+    }
+
     /// Moves keyboard focus to the recorder and enters recording mode.
     ///
     /// The operation intentionally fails without changing state when the control is not in a

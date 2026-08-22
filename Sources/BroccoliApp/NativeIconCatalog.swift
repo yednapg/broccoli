@@ -23,6 +23,7 @@ enum NativeIconCatalog {
         "window.topHalf": ["rectangle.tophalf.inset.filled"],
         "window.bottomHalf": ["rectangle.bottomhalf.inset.filled"],
         "window.maximize": ["arrow.up.left.and.arrow.down.right"],
+        "window.minimized": ["arrow.down.right.and.arrow.up.left", "rectangle.inset.filled", "rectangle"],
         "window.center": ["rectangle.center.inset.filled"],
         "window.nextDisplay": ["arrow.right.to.line"],
         "window.previousDisplay": ["arrow.left.to.line"],

@@ -77,6 +77,14 @@ enum LauncherToggleDecision: Equatable, Sendable {
 /// launcher, which is unlike Spotlight and also obscures the user's previous application.
 @MainActor
 final class LauncherWindowVisibilitySession {
+    enum RestorationOrdering {
+        /// Reconstruct the Broccoli window stack after an ordinary launcher dismissal.
+        case original
+        /// Make the windows visible again without putting them above the application that the
+        /// launcher just opened. This is the Spotlight-style external-dispatch behavior.
+        case behindForegroundApplication
+    }
+
     private var suppressedWindows: [NSWindow] = []
 
     var suppressedWindowCount: Int { suppressedWindows.count }
@@ -101,13 +109,24 @@ final class LauncherWindowVisibilitySession {
         }
     }
 
-    func restore() {
+    func restore(ordering: RestorationOrdering = .original) {
         let windows = suppressedWindows
         suppressedWindows.removeAll(keepingCapacity: true)
-        // NSApplication.orderedWindows is front-to-back. Replaying it in reverse preserves the
-        // original top-level ordering without activating Broccoli by itself.
-        for window in windows.reversed() where !window.isVisible {
-            window.orderFront(nil)
+        switch ordering {
+        case .original:
+            // NSApplication.orderedWindows is front-to-back. Replaying it in reverse preserves
+            // the original top-level ordering without activating Broccoli by itself.
+            for window in windows.reversed() where !window.isVisible {
+                window.orderFront(nil)
+            }
+        case .behindForegroundApplication:
+            // `orderFront` can place Settings above a target whose activation is still settling
+            // (notably Screenshot, which behaves like a utility rather than a normal app).
+            // `orderBack` restores Mission Control presence while keeping the user's target—or
+            // their previous app for background utilities—visually in front.
+            for window in windows where !window.isVisible {
+                window.orderBack(nil)
+            }
         }
     }
 }
@@ -143,6 +162,10 @@ final class LauncherCoordinator {
     private var previousApplication: NSRunningApplication?
     private weak var previousKeyWindow: NSWindow?
     private weak var previousFirstResponder: NSResponder?
+    /// External launches activate asynchronously. Keep Settings suppressed until the target
+    /// application is frontmost so restoring its visibility cannot steal focus from the app
+    /// the user just opened through Broccoli.
+    private var defersSuppressedWindowRestoration = false
     private var confirmation = DisruptiveActionConfirmation()
     private var appliedAppearance: LauncherAppearancePreferences
     private var appliedSearchConfiguration: SearchConfiguration
@@ -168,7 +191,10 @@ final class LauncherCoordinator {
         appliedClipboardPreferences = preferences.clipboard
         panel.onQueryChanged = { [weak self] query in self?.search(query) }
         panel.onExecute = { [weak self] result in self?.execute(result) }
-        panel.onDidHide = { [weak self] in self?.windowVisibilitySession.restore() }
+        panel.onDidHide = { [weak self] in
+            guard let self, !self.defersSuppressedWindowRestoration else { return }
+            self.windowVisibilitySession.restore()
+        }
         panel.onDismiss = { [weak self] in self?.restorePreviousApplication() }
         panel.onCancel = { [weak self] in self?.cancelOrDismiss() }
         panel.onReveal = { [weak self] result in self?.reveal(result) }
@@ -454,16 +480,17 @@ final class LauncherCoordinator {
 
         switch result.entry.target {
         case .application(let path, let bundleIdentifier):
-            panel.dismiss(notify: false)
+            dismissForExternalDispatch()
             launchApplication(path: path, bundleIdentifier: bundleIdentifier)
         case .setting(let route):
-            panel.dismiss(notify: false)
+            dismissForExternalDispatch()
             openSetting(route: route)
         case .action(let id):
             dispatchAction(id: id)
         case .file(let path, _):
-            panel.dismiss(notify: false)
-            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            dismissForExternalDispatch()
+            _ = NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            finishExternalDispatchAfterActivation()
         case .calculator(let result):
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -585,30 +612,111 @@ final class LauncherCoordinator {
     private func launchApplication(path: String, bundleIdentifier: String?) {
         if let bundleIdentifier,
            let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first {
-            if running.activate(options: [.activateAllWindows]) { return }
+            if running.activate(options: [.activateAllWindows]) {
+                finishExternalDispatchAfterActivation(expectedApplication: running)
+                return
+            }
         }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(
             at: URL(fileURLWithPath: path),
             configuration: configuration
-        ) { [weak self] _, error in
-            guard let error else { return }
+        ) { [weak self] application, error in
+            guard let self else { return }
+            guard let error else {
+                Task { @MainActor [weak self] in
+                    _ = application?.activate(options: [.activateAllWindows])
+                    self?.finishExternalDispatchAfterActivation(expectedApplication: application)
+                }
+                return
+            }
             let nsError = error as NSError
             Logger.launcher.error(
                 "Application launch failed (domain: \(nsError.domain, privacy: .public), code: \(nsError.code, privacy: .public))"
             )
             Task { @MainActor [weak self] in
+                self?.finishExternalDispatchImmediately()
                 self?.panel.showError(error, automationRelated: false)
             }
         }
     }
 
     private func openSetting(route: String?) {
-        if let route, let url = URL(string: route), NSWorkspace.shared.open(url) { return }
-        if let settingsURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") {
-            NSWorkspace.shared.openApplication(at: settingsURL, configuration: .init())
+        if let route, let url = URL(string: route), NSWorkspace.shared.open(url) {
+            let settingsApplication = NSRunningApplication.runningApplications(
+                withBundleIdentifier: "com.apple.systempreferences"
+            ).first
+            finishExternalDispatchAfterActivation(expectedApplication: settingsApplication)
+            return
         }
+        if let settingsURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: settingsURL, configuration: configuration) {
+                [weak self] application, _ in
+                Task { @MainActor [weak self] in
+                    _ = application?.activate(options: [.activateAllWindows])
+                    self?.finishExternalDispatchAfterActivation(expectedApplication: application)
+                }
+            }
+        } else {
+            finishExternalDispatchImmediately()
+        }
+    }
+
+    private func dismissForExternalDispatch() {
+        defersSuppressedWindowRestoration = true
+        panel.dismiss(notify: false)
+    }
+
+    private func finishExternalDispatchAfterActivation(
+        expectedApplication: NSRunningApplication? = nil
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            // Workspace completion means the application launched, not necessarily that its
+            // activation transaction has reached the window server. Wait for actual foreground
+            // ownership instead of relying on a fixed delay that fails on cold launches.
+            let expectedProcessIdentifier = expectedApplication?.processIdentifier
+            for _ in 0..<40 {
+                let frontmost = NSWorkspace.shared.frontmostApplication
+                let targetIsFrontmost: Bool
+                if let expectedProcessIdentifier {
+                    targetIsFrontmost = frontmost?.processIdentifier == expectedProcessIdentifier
+                } else {
+                    targetIsFrontmost = frontmost?.bundleIdentifier != Bundle.main.bundleIdentifier
+                }
+                if targetIsFrontmost { break }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+
+            // Some Apple utilities (including Screenshot on some macOS builds) intentionally do
+            // not become the frontmost application. In that case return focus to the app that
+            // was active before Broccoli, never to Broccoli Settings.
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier,
+               let previousApplication = self.previousApplication,
+               previousApplication.bundleIdentifier != Bundle.main.bundleIdentifier,
+               !previousApplication.isTerminated {
+                _ = previousApplication.activate(options: [.activateAllWindows])
+                for _ in 0..<8 where !previousApplication.isActive {
+                    try? await Task.sleep(for: .milliseconds(25))
+                }
+            }
+
+            self.finishExternalDispatchImmediately(
+                restorationOrdering: .behindForegroundApplication
+            )
+        }
+    }
+
+    private func finishExternalDispatchImmediately(
+        restorationOrdering: LauncherWindowVisibilitySession.RestorationOrdering = .original
+    ) {
+        defersSuppressedWindowRestoration = false
+        windowVisibilitySession.restore(ordering: restorationOrdering)
+        clearPreviousFocusState()
     }
 
     private func recordSelection(_ id: String) {
