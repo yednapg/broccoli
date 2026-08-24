@@ -892,9 +892,8 @@ final class LauncherLiquidGlassSurfaceView: NSView {
             glass.cornerRadius = !isExpanded
                 ? bounds.height / 2
                 : Self.expandedCornerRadius
-            // Geometry may morph when results appear, but the material must not suddenly turn
-            // opaque. Light mode therefore stays clear glass in both compact and expanded
-            // states; dark mode keeps the denser regular treatment needed for legibility.
+            // Light mode uses clear glass. Dark mode needs the denser regular material used by
+            // Spotlight so wallpaper color does not overpower the dark surface.
             glass.style = isDark ? .regular : .clear
             glass.tintColor = glassTintColor
         }
@@ -1005,6 +1004,7 @@ private final class LauncherResultsScrollView: NSScrollView {
 /// from the actual icon, typography, shortcut, selection, and accessibility treatment.
 final class ResultRowView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("BroccoliResultRow")
+    static let noResultsIconSize: CGFloat = 22
 
     private let iconSlot = NSLayoutGuide()
     private let resultIcon = NSImageView()
@@ -1300,7 +1300,10 @@ final class ResultRowView: NSTableCellView {
     ) {
         let usesMinimalLayout = theme.design == .minimal
         let usesLiquidGlassLayout = theme.design == .liquidGlass
-        let templatePointSize: CGFloat = if usesMinimalLayout {
+        let isNoResults = result.entry.iconKey == "status:no-results"
+        let templatePointSize: CGFloat = if isNoResults {
+            Self.noResultsIconSize
+        } else if usesMinimalLayout {
             LauncherMinimalMetrics.resultTemplatePointSize
         } else if usesLiquidGlassLayout {
             Self.liquidOpticalIconSize(for: result.entry.kind)
@@ -1325,7 +1328,13 @@ final class ResultRowView: NSTableCellView {
                 weight: templateWeight
             )) ?? sourceIcon)
             : sourceIcon
-        resultIcon.image = if usesMinimalLayout {
+        resultIcon.image = if isNoResults {
+            Self.normalizedIcon(
+                configuredIcon,
+                canvasSize: Self.noResultsIconSize,
+                opticalSize: Self.noResultsIconSize
+            )
+        } else if usesMinimalLayout {
             Self.normalizedIcon(
                 configuredIcon,
                 canvasSize: Self.minimalIconCanvasSize(for: result.entry.kind),
@@ -1395,9 +1404,13 @@ final class ResultRowView: NSTableCellView {
         let iconSlotSize = usesLiquidGlassLayout
             ? Self.liquidIconSize(for: result.entry.kind)
             : (usesMinimalLayout ? minimalSlotSize : 40)
-        let iconDrawingSize = usesLiquidGlassLayout
-            ? Self.liquidDrawingCanvasSize(for: result.entry.kind)
-            : (usesMinimalLayout ? minimalIconSize : 40)
+        let iconDrawingSize = isNoResults
+            ? Self.noResultsIconSize
+            : (
+                usesLiquidGlassLayout
+                    ? Self.liquidDrawingCanvasSize(for: result.entry.kind)
+                    : (usesMinimalLayout ? minimalIconSize : 40)
+            )
         iconWidthConstraint.constant = iconSlotSize
         iconHeightConstraint.constant = iconSlotSize
         iconDrawingWidthConstraint.constant = iconDrawingSize
