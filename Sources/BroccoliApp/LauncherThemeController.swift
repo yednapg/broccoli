@@ -81,19 +81,21 @@ enum LauncherLiquidGlassMetrics {
     static let searchFontSize: CGFloat = 26
     static let searchHorizontalInset: CGFloat = 20
     static let searchVerticalInset = figmaSearchVerticalInset * scale
-    // Match the magnifier's canvas and configured point size directly to the live query type.
-    static let searchSymbolSize: CGFloat = searchFontSize
-    static let searchSymbolPointSize: CGFloat = searchFontSize
+    // Spotlight's magnifier has slightly more optical height than its 26-point query. Give the
+    // symbol a real 28-point canvas instead of asking a 26-point bitmap to scale past its bounds
+    // (which was clamped and therefore produced no visible size change).
+    static let searchSymbolSize: CGFloat = 28
+    static let searchSymbolPointSize: CGFloat = 27.8
     static let searchTextLeading = figmaSearchTextLeading * scale
     static let searchTextHorizontalOffset: CGFloat = -10
     static let searchSymbolTextGap: CGFloat = searchHorizontalInset
-    // Figma's vector fills its 29 × 30 frame, while SF Symbols carries optical bearings. These
-    // scale values preserve its visual size; placement is derived from the canvas center.
-    static let searchSymbolDrawingScale: CGFloat = 1.27
-    static let searchSymbolDrawingVerticalScale: CGFloat = 1.27
-    // Keep the Liquid Glass caret at the requested fixed visual height instead of letting
-    // AppKit stretch it to the full field-editor line fragment.
-    static let insertionPointHeight: CGFloat = 30
+    // The output canvas now carries the intended optical size directly, so no ineffective
+    // post-render enlargement is needed and the magnifier handle remains safely inside it.
+    static let searchSymbolDrawingScale: CGFloat = 1
+    static let searchSymbolDrawingVerticalScale: CGFloat = 1
+    // Keep the caret two points taller than the query without overpowering it as the old
+    // 30-point insertion bar did.
+    static let insertionPointHeight: CGFloat = 28
     static let resultIconSize: CGFloat = 50
     static let resultActionIconOpticalSize: CGFloat = 40
     static let resultClipboardIconOpticalSize: CGFloat = 48

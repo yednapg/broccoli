@@ -114,6 +114,12 @@ final class IconCache {
         case .clipboard:
             return NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard") ?? genericApplication
         case .status:
+            if entry.iconKey == "status:no-results" {
+                return NSImage(
+                    systemSymbolName: "questionmark",
+                    accessibilityDescription: "No results"
+                ) ?? genericApplication
+            }
             return NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Status") ?? genericApplication
         case .systemSetting, .action:
             guard let icon = staticIcons[entry.iconKey] else { return genericApplication }

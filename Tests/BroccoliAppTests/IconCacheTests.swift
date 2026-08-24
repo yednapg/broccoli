@@ -619,6 +619,51 @@ final class IconCacheTests: XCTestCase {
         XCTAssertEqual(LauncherLiquidGlassMetrics.resultClipboardIconOpticalSize, 48)
     }
 
+    func testNoResultsUsesACentredSmallQuestionMarkAcrossEveryTheme() throws {
+        _ = NSApplication.shared
+        let entry = SearchEntry(
+            id: "status:no-results",
+            kind: .status,
+            title: "No results",
+            subtitle: "Try a different search",
+            iconKey: "status:no-results",
+            target: .none
+        )
+        let cache = IconCache(startsNativeIconResolution: false)
+        let icon = cache.image(for: entry)
+        XCTAssertEqual(icon.accessibilityDescription, "No results")
+
+        for design in LauncherDesign.allCases {
+            let theme = LauncherThemeController().descriptor(
+                for: .defaults(design: design),
+                reducedTransparency: false,
+                increasedContrast: false
+            )
+            let row = ResultRowView()
+            row.frame = NSRect(x: 0, y: 0, width: theme.width, height: theme.rowHeight)
+            row.configure(
+                result: RankedResult(entry: entry, score: 0),
+                icon: icon,
+                confirmation: false,
+                row: 0,
+                selected: false,
+                theme: theme
+            )
+            row.layoutSubtreeIfNeeded()
+            let imageView = try XCTUnwrap(
+                row.subviews.compactMap { $0 as? NSImageView }.first
+            )
+            XCTAssertEqual(
+                imageView.frame.size,
+                NSSize(
+                    width: ResultRowView.noResultsIconSize,
+                    height: ResultRowView.noResultsIconSize
+                ),
+                design.title
+            )
+        }
+    }
+
     func testLiquidRowNormalizationChangesVisibleSymbolSizeWithoutMovingText() throws {
         _ = NSApplication.shared
         let theme = LauncherThemeController().descriptor(
