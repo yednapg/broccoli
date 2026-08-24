@@ -1687,6 +1687,9 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(SettingsShellLayout.searchFieldHeight, 34)
         XCTAssertEqual(SettingsShellLayout.searchHorizontalInset, 16)
         XCTAssertEqual(SettingsShellLayout.searchTopInset, 8)
+        XCTAssertEqual(SettingsShellLayout.sidebarRowContentHeight, 26)
+        XCTAssertEqual(SettingsShellLayout.sidebarIconCanvasSize, 18)
+        XCTAssertEqual(SettingsShellLayout.sidebarIconTrailingPadding, 3)
         XCTAssertEqual(
             SettingsShellLayout.sidebarWidth
                 + SettingsShellLayout.splitDividerWidth
@@ -1914,6 +1917,36 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(shell.destination, .launcherPreview)
         XCTAssertTrue(shell.canGoBack)
         XCTAssertFalse(shell.canGoForward)
+    }
+
+    func testSettingsSearchFieldKeepsTheCompleteFieldEditorTransparent() throws {
+        let field = SpotlightSettingsNativeTextField(
+            frame: NSRect(x: 0, y: 0, width: 180, height: 22)
+        )
+        field.isBezeled = false
+        field.drawsBackground = false
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 80),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(field)
+
+        XCTAssertTrue(window.makeFirstResponder(field))
+        field.makeCurrentEditorTransparent()
+
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        XCTAssertFalse(field.drawsBackground)
+        XCTAssertFalse(editor.drawsBackground)
+
+        if let clipView = editor.superview as? NSClipView {
+            XCTAssertFalse(clipView.drawsBackground)
+            if let scrollView = clipView.superview as? NSScrollView {
+                XCTAssertFalse(scrollView.drawsBackground)
+            }
+        }
     }
 
     func testSettingsShellSearchOwnsToolbarTitleAndSectionReset() {

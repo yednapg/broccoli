@@ -7,6 +7,15 @@ import SwiftUI
 /// Broccoli-specific settings state and behavior in its native SwiftUI Settings scene.
 struct SpotlightSettingsSearchField: View {
     @Binding var text: String
+    let onCancel: () -> Bool
+
+    init(
+        text: Binding<String>,
+        onCancel: @escaping () -> Bool
+    ) {
+        _text = text
+        self.onCancel = onCancel
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -15,14 +24,137 @@ struct SpotlightSettingsSearchField: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
-            TextField("Search settings", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .accessibilityLabel("Search Settings")
+            SpotlightSettingsTextField(
+                text: $text,
+                onCancel: onCancel
+            )
+            .frame(height: 22)
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
         .spotlightSettingsSearchFieldSurface()
+    }
+}
+
+private struct SpotlightSettingsTextField: NSViewRepresentable {
+    @Binding var text: String
+    let onCancel: () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onCancel: onCancel)
+    }
+
+    func makeNSView(context: Context) -> SpotlightSettingsNativeTextField {
+        let textField = SpotlightSettingsNativeTextField()
+        textField.delegate = context.coordinator
+        textField.placeholderString = "Search settings"
+        textField.font = .systemFont(ofSize: 15)
+        textField.isEditable = true
+        textField.isSelectable = true
+        textField.isEnabled = true
+        textField.isBezeled = false
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.backgroundColor = .clear
+        textField.focusRingType = .none
+        textField.lineBreakMode = .byClipping
+        textField.usesSingleLineMode = true
+        textField.cell?.isScrollable = true
+        textField.setAccessibilityLabel("Search Settings")
+        return textField
+    }
+
+    func updateNSView(
+        _ textField: SpotlightSettingsNativeTextField,
+        context: Context
+    ) {
+        context.coordinator.text = $text
+        context.coordinator.onCancel = onCancel
+
+        if textField.stringValue != text {
+            textField.stringValue = text
+        }
+
+        textField.makeCurrentEditorTransparent()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var onCancel: () -> Bool
+
+        init(
+            text: Binding<String>,
+            onCancel: @escaping () -> Bool
+        ) {
+            self.text = text
+            self.onCancel = onCancel
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            guard let textField = notification.object as? SpotlightSettingsNativeTextField else {
+                return
+            }
+            textField.makeCurrentEditorTransparent()
+            DispatchQueue.main.async { [weak textField] in
+                textField?.makeCurrentEditorTransparent()
+            }
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? SpotlightSettingsNativeTextField else {
+                return
+            }
+            textField.makeCurrentEditorTransparent()
+            if text.wrappedValue != textField.stringValue {
+                text.wrappedValue = textField.stringValue
+            }
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy commandSelector: Selector
+        ) -> Bool {
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)),
+                  let textField = control as? SpotlightSettingsNativeTextField else {
+                return false
+            }
+
+            if onCancel() {
+                textField.stringValue = text.wrappedValue
+            } else {
+                textField.window?.makeFirstResponder(nil)
+            }
+            return true
+        }
+    }
+}
+
+@MainActor
+final class SpotlightSettingsNativeTextField: NSTextField {
+    override func layout() {
+        super.layout()
+        makeCurrentEditorTransparent()
+    }
+
+    func makeCurrentEditorTransparent() {
+        drawsBackground = false
+        backgroundColor = .clear
+
+        guard let editor = currentEditor() as? NSTextView else { return }
+        editor.drawsBackground = false
+        editor.backgroundColor = .clear
+
+        if let clipView = editor.superview as? NSClipView {
+            if let scrollView = clipView.superview as? NSScrollView {
+                scrollView.drawsBackground = false
+                scrollView.backgroundColor = .clear
+            } else {
+                clipView.drawsBackground = false
+                clipView.backgroundColor = .clear
+            }
+        }
     }
 }
 
@@ -105,7 +237,7 @@ private struct SpotlightSettingsSearchFieldSurfaceModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.interactive(), in: Capsule())
+            content.glassEffect(.regular, in: Capsule())
         } else {
             content.background(.regularMaterial, in: Capsule())
         }
@@ -136,16 +268,13 @@ extension View {
 
 struct SpotlightSettingsPane<Content: View>: View {
     let title: String
-    let subtitle: String
     let content: Content
 
     init(
         title: String,
-        subtitle: String,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
-        self.subtitle = subtitle
         self.content = content()
     }
 
@@ -157,11 +286,14 @@ struct SpotlightSettingsPane<Content: View>: View {
             .padding(.horizontal, 28)
             .padding(.top, 16)
             .padding(.bottom, 24)
-            .frame(maxWidth: 660, alignment: .topLeading)
+            .frame(width: 660, alignment: .topLeading)
+            .frame(
+                maxWidth: .infinity,
+                alignment: .top
+            )
         }
-        .navigationTitle(title)
-        .navigationSubtitle(subtitle)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .navigationTitle(title)
     }
 }
 
@@ -277,7 +409,10 @@ extension SpotlightSettingsRow where Accessory == EmptyView {
 
 struct SpotlightSettingsDivider: View {
     var body: some View {
-        Divider().padding(.leading, 18)
+        Rectangle()
+            .fill(Color.primary.opacity(0.20))
+            .frame(height: 0.5)
+            .padding(.leading, 18)
     }
 }
 
@@ -340,17 +475,14 @@ struct SpotlightSettingsSlider: View {
     }
 }
 
-/// The same native Settings-scene chrome configurator Cherry uses. The callback only lets the
-/// background launcher track the window SwiftUI created for the scene.
+/// Applies Cherry's native Settings-scene chrome once per attached window. Ordinary SwiftUI
+/// updates only refresh the window reference so split-view animations stay on the native path.
 struct SpotlightSettingsNativeWindowConfigurator: NSViewRepresentable {
     let onWindowAttached: (NSWindow) -> Void
 
     func makeNSView(context: Context) -> SpotlightSettingsNativeWindowChromeView {
         let view = SpotlightSettingsNativeWindowChromeView()
         view.onWindowAttached = onWindowAttached
-        DispatchQueue.main.async {
-            view.configureWindowChrome()
-        }
         return view
     }
 
@@ -359,37 +491,23 @@ struct SpotlightSettingsNativeWindowConfigurator: NSViewRepresentable {
         context: Context
     ) {
         nsView.onWindowAttached = onWindowAttached
-        DispatchQueue.main.async {
-            nsView.configureWindowChrome()
-        }
+        nsView.reportAttachedWindow()
     }
 }
 
 @MainActor
 final class SpotlightSettingsNativeWindowChromeView: NSView {
-    private static let preferredSidebarWidth = SettingsShellLayout.sidebarWidth
-
     var onWindowAttached: (NSWindow) -> Void = { _ in }
     private weak var attachedWindow: NSWindow?
-    private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
-    private var sidebarCleanupGeneration = 0
-    private var configuredInitialSidebarWidth = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window !== attachedWindow {
-            attachedWindow = window
-            configuredInitialSidebarWidth = false
-            registerWindowObservers()
-        }
+        guard window !== attachedWindow else { return }
+        attachedWindow = window
         configureWindowChrome()
     }
 
-    deinit {
-        observers.forEach(NotificationCenter.default.removeObserver)
-    }
-
-    func configureWindowChrome() {
+    private func configureWindowChrome() {
         guard let window else { return }
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
@@ -397,105 +515,13 @@ final class SpotlightSettingsNativeWindowChromeView: NSView {
         window.styleMask.insert(.fullSizeContentView)
         window.toolbarStyle = .unified
         onWindowAttached(window)
-        removeSidebarToolbarItems()
-        configureInitialSidebarWidth()
-        scheduleSidebarToolbarCleanup()
+        // The Settings split view keeps its sidebar permanently visible and removes SwiftUI's
+        // generated sidebar item; navigation history owns the leading toolbar group instead.
     }
 
-    private func registerWindowObservers() {
-        observers.forEach(NotificationCenter.default.removeObserver)
-        observers.removeAll()
+    func reportAttachedWindow() {
         guard let window else { return }
-
-        let names: [NSNotification.Name] = [
-            NSWindow.didBecomeKeyNotification,
-            NSWindow.didResizeNotification,
-        ]
-
-        observers = names.map { name in
-            NotificationCenter.default.addObserver(
-                forName: name,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in self?.configureWindowChrome() }
-            }
-        }
-
+        onWindowAttached(window)
     }
 
-    private func removeSidebarToolbarItems() {
-        guard let toolbar = window?.toolbar else { return }
-        for index in toolbar.items.indices.reversed() {
-            if isSidebarToolbarItem(toolbar.items[index]) {
-                toolbar.removeItem(at: index)
-            }
-        }
-    }
-
-    private func scheduleSidebarToolbarCleanup() {
-        sidebarCleanupGeneration += 1
-        let generation = sidebarCleanupGeneration
-        let delays: [Duration] = [
-            .milliseconds(0),
-            .milliseconds(50),
-            .milliseconds(150),
-            .milliseconds(400),
-        ]
-
-        for delay in delays {
-            Task { @MainActor [weak self] in
-                if delay != .zero { try? await Task.sleep(for: delay) }
-                guard let self, sidebarCleanupGeneration == generation else { return }
-                removeSidebarToolbarItems()
-                configureInitialSidebarWidth()
-            }
-        }
-    }
-
-    private func configureInitialSidebarWidth() {
-        guard !configuredInitialSidebarWidth,
-              let contentView = window?.contentView,
-              let splitView = sidebarSplitView(in: contentView),
-              splitView.bounds.width > Self.preferredSidebarWidth else {
-            return
-        }
-
-        splitView.setPosition(Self.preferredSidebarWidth, ofDividerAt: 0)
-        configuredInitialSidebarWidth = true
-    }
-
-    private func sidebarSplitView(in view: NSView) -> NSSplitView? {
-        if let splitView = view as? NSSplitView,
-           splitView.isVertical,
-           splitView.subviews.count >= 2 {
-            return splitView
-        }
-
-        for subview in view.subviews {
-            if let splitView = sidebarSplitView(in: subview) {
-                return splitView
-            }
-        }
-        return nil
-    }
-
-    private func isSidebarToolbarItem(_ item: NSToolbarItem) -> Bool {
-        if item.itemIdentifier == .toggleSidebar
-            || item.itemIdentifier == .sidebarTrackingSeparator {
-            return true
-        }
-
-        let fields = [
-            item.itemIdentifier.rawValue,
-            item.label,
-            item.paletteLabel,
-            item.toolTip ?? "",
-        ]
-
-        return fields.contains {
-            let value = $0.lowercased()
-            return value.contains("sidebar") || value.contains("side bar")
-        }
-    }
 }
