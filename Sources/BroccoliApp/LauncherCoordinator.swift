@@ -137,7 +137,7 @@ final class LauncherCoordinator {
     private let preferences: AppPreferences
     private let usageStore: UsageStore
     private let diagnosticsStore: DiagnosticsStore
-    private let actionExecutor = ActionExecutor()
+    private let actionExecutor: ActionExecutor
     private let searchEngine = SearchEngine()
     private let calculatorEngine = CalculatorEngine()
     private let searchQueue = DispatchQueue(
@@ -162,6 +162,7 @@ final class LauncherCoordinator {
     private var previousApplication: NSRunningApplication?
     private weak var previousKeyWindow: NSWindow?
     private weak var previousFirstResponder: NSResponder?
+    private var windowActionTask: Task<Void, Never>?
     /// External launches activate asynchronously. Keep Settings suppressed until the target
     /// application is frontmost so restoring its visibility cannot steal focus from the app
     /// the user just opened through Broccoli.
@@ -173,18 +174,21 @@ final class LauncherCoordinator {
 
     var onRefreshCatalog: (() -> Void)?
     var onOpenPreferences: ((PreferencesSection) -> Void)?
+    var onResolveWindowTarget: ((NSRunningApplication?) -> pid_t?)?
 
     init(
         panel: LauncherPanelController,
         preferences: AppPreferences,
         usageStore: UsageStore,
         diagnosticsStore: DiagnosticsStore,
+        windowManager: WindowManager,
         clipboardMonitor: ClipboardMonitor? = nil
     ) {
         self.panel = panel
         self.preferences = preferences
         self.usageStore = usageStore
         self.diagnosticsStore = diagnosticsStore
+        actionExecutor = ActionExecutor(windowManager: windowManager)
         self.clipboardMonitor = clipboardMonitor
         appliedAppearance = preferences.appearance
         appliedSearchConfiguration = SearchConfiguration(preferences: preferences)
@@ -596,12 +600,17 @@ final class LauncherCoordinator {
             return
         }
 
-        let targetPID = previousApplication?.processIdentifier
+        let targetPID = onResolveWindowTarget?(previousApplication)
         panel.dismiss(notify: false)
-        Task {
+        windowActionTask?.cancel()
+        windowActionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 _ = try await actionExecutor.execute(id: id, targetPID: targetPID)
-                restorePreviousApplication()
+                try Task.checkCancellation()
+                restorePreviousApplication(activateAllWindows: false)
+            } catch is CancellationError {
+                return
             } catch {
                 clearPreviousFocusState()
                 panel.showError(error, automationRelated: false)
@@ -740,7 +749,7 @@ final class LauncherCoordinator {
         panel.clearConfirmation()
     }
 
-    private func restorePreviousApplication() {
+    private func restorePreviousApplication(activateAllWindows: Bool = true) {
         guard let previousApplication, !previousApplication.isTerminated else {
             clearPreviousFocusState()
             return
@@ -750,7 +759,9 @@ final class LauncherCoordinator {
             previousKeyWindow.makeKeyAndOrderFront(nil)
             previousKeyWindow.makeFirstResponder(previousFirstResponder)
         } else {
-            previousApplication.activate(options: [.activateAllWindows])
+            previousApplication.activate(
+                options: activateAllWindows ? [.activateAllWindows] : []
+            )
         }
         clearPreviousFocusState()
     }
