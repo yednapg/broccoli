@@ -49,6 +49,31 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         XCTAssertFalse(controller.visibilityIsolationWindow.hidesOnDeactivate)
     }
 
+    func testPlaceholderSwiftUISceneCannotBecomeVisible() {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = SuppressedLauncherSceneView()
+
+        XCTAssertFalse(window.isRestorable)
+        XCTAssertTrue(window.isExcludedFromWindowsMenu)
+        XCTAssertTrue(window.ignoresMouseEvents)
+        XCTAssertFalse(window.isOpaque)
+        XCTAssertEqual(window.alphaValue, 0)
+
+        window.orderFront(nil)
+        NotificationCenter.default.post(
+            name: NSWindow.didUpdateNotification,
+            object: window
+        )
+
+        XCTAssertFalse(window.isVisible)
+    }
+
     func testResigningKeyDismissesWithoutRequestingPreviousApplicationRestore() {
         _ = NSApplication.shared
         let controller = LauncherPanelController()

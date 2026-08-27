@@ -2041,6 +2041,38 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertNil(info["LSUIElement"])
     }
 
+    func testApplicationPresentationModeTracksSettingsWithoutChangingDuringTermination() {
+        var lifecycle = ApplicationLifecycleState()
+        XCTAssertEqual(lifecycle.presentationMode, .background)
+
+        lifecycle.beginSettingsPresentation()
+        XCTAssertEqual(lifecycle.presentationMode, .settings)
+
+        lifecycle.endSettingsPresentation()
+        XCTAssertEqual(lifecycle.presentationMode, .background)
+
+        lifecycle.beginSettingsPresentation()
+        lifecycle.beginTermination()
+        lifecycle.endSettingsPresentation()
+
+        XCTAssertTrue(lifecycle.isTerminating)
+        XCTAssertEqual(lifecycle.presentationMode, .settings)
+    }
+
+    func testApplicationIconResourceTracksTheResolvedSystemAppearance() throws {
+        let light = try XCTUnwrap(NSAppearance(named: .aqua))
+        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+
+        XCTAssertEqual(
+            ApplicationIconResource.name(for: light),
+            "Broccoli-AppIcon-Light-1024"
+        )
+        XCTAssertEqual(
+            ApplicationIconResource.name(for: dark),
+            "Broccoli-AppIcon-Dark-1024"
+        )
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "BroccoliAppTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

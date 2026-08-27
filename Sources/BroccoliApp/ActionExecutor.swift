@@ -24,11 +24,13 @@ enum ActionExecutionError: LocalizedError {
 
 final class ActionExecutor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.gauravpandey.broccoli.actions", qos: .userInitiated)
+    private let windowManager: WindowManager
     private let audio = AudioController()
     private var scripts: [String: NSAppleScript] = [:]
     private let lock = NSLock()
 
-    init() {
+    init(windowManager: WindowManager) {
+        self.windowManager = windowManager
         prepareScripts()
     }
 
@@ -37,9 +39,7 @@ final class ActionExecutor: @unchecked Sendable {
             throw ActionExecutionError.unknownAction
         }
         if let action = WindowAction.allCases.first(where: { $0.actionID == id }) {
-            try await MainActor.run {
-                try WindowManager().perform(action, targetPID: targetPID)
-            }
+            try await windowManager.perform(action, targetPID: targetPID)
             return definition.keepsPanelOpen ? .keepPanelOpen : .completed
         }
         return try await withCheckedThrowingContinuation { continuation in
