@@ -8,6 +8,47 @@ private final class SendableImage: @unchecked Sendable {
     init(_ image: NSImage) { self.image = image }
 }
 
+/// Resolves macOS application artwork under Aqua and immediately flattens it to a bounded,
+/// non-template bitmap. IconServices images can otherwise choose a dark variant later when an
+/// `NSImageView` draws them inside a dark launcher, even if they were fetched in Light Mode.
+enum LightModeApplicationIcon {
+    nonisolated static func load(
+        atPath path: String,
+        pointSize: CGFloat,
+        backingScale: CGFloat
+    ) -> NSImage? {
+        guard let lightAppearance = NSAppearance(named: .aqua) else { return nil }
+        var workspaceImage: NSImage?
+        lightAppearance.performAsCurrentDrawingAppearance {
+            workspaceImage = NSWorkspace.shared.icon(forFile: path)
+        }
+        guard let workspaceImage else { return nil }
+        return materialize(
+            workspaceImage,
+            pointSize: pointSize,
+            backingScale: backingScale
+        )
+    }
+
+    nonisolated static func materialize(
+        _ workspaceImage: NSImage,
+        pointSize: CGFloat,
+        backingScale: CGFloat
+    ) -> NSImage? {
+        guard let lightAppearance = NSAppearance(named: .aqua) else { return nil }
+        var renderedImage: NSImage?
+        lightAppearance.performAsCurrentDrawingAppearance {
+            renderedImage = SystemSettingsNativeIconResolver.materializeImage(
+                workspaceImage,
+                pointSize: pointSize,
+                backingScale: backingScale
+            )?.image
+        }
+        renderedImage?.isTemplate = false
+        return renderedImage
+    }
+}
+
 @MainActor
 final class IconCache {
     private let cache = NSCache<NSString, NSImage>()
@@ -27,6 +68,7 @@ final class IconCache {
     private var interactiveLoading: Set<String> = []
     private var thumbnailLoading: Set<String> = []
     private var prewarming: Set<String> = []
+    private let backingScale: CGFloat
     private let genericApplication = NSImage(
         systemSymbolName: "app",
         accessibilityDescription: "Application"
@@ -48,6 +90,7 @@ final class IconCache {
         startsNativeIconResolution: Bool = true
     ) {
         self.systemSettingsIconStore = systemSettingsIconStore
+        self.backingScale = max(2, backingScale ?? NSScreen.main?.backingScaleFactor ?? 2)
         cache.totalCostLimit = 16 * 1_024 * 1_024
         systemSettingsIconObserver = NotificationCenter.default.addObserver(
             forName: SystemSettingsNativeIconStore.didLoadNotification,
@@ -70,10 +113,9 @@ final class IconCache {
             }
         }
         if startsNativeIconResolution {
-            let capturedScale = max(2, backingScale ?? NSScreen.main?.backingScaleFactor ?? 2)
             systemSettingsIconStore.ensureResolution(
                 requests: requests,
-                backingScale: capturedScale
+                backingScale: self.backingScale
             )
         }
     }
@@ -373,16 +415,31 @@ final class IconCache {
             prewarming.insert(path)
         }
         let queue = interactive ? interactiveQueue : prewarmQueue
+        let backingScale = self.backingScale
         queue.async { [weak self] in
             // System applications such as Safari can be exposed through /Applications as
             // symlinks. Asking NSWorkspace for the link icon adds an alias badge; resolve only
             // for presentation while retaining the original launch/cache identity.
             let iconPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-            let box = SendableImage(NSWorkspace.shared.icon(forFile: iconPath))
+            guard let icon = LightModeApplicationIcon.load(
+                atPath: iconPath,
+                pointSize: 40,
+                backingScale: backingScale
+            ) else {
+                Task { @MainActor [weak self] in
+                    if interactive { self?.interactiveLoading.remove(path) }
+                    else { self?.prewarming.remove(path) }
+                }
+                return
+            }
+            let box = SendableImage(icon)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                box.image.size = NSSize(width: 40, height: 40)
-                self.cache.setObject(box.image, forKey: path as NSString, cost: 40 * 40 * 4)
+                self.cache.setObject(
+                    box.image,
+                    forKey: path as NSString,
+                    cost: Self.boundedImageCost(box.image)
+                )
                 if interactive { self.interactiveLoading.remove(path) }
                 else { self.prewarming.remove(path) }
                 self.onIconLoaded?(path)

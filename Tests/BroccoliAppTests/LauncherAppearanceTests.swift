@@ -2059,18 +2059,43 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(lifecycle.presentationMode, .settings)
     }
 
-    func testApplicationIconResourceTracksTheResolvedSystemAppearance() throws {
-        let light = try XCTUnwrap(NSAppearance(named: .aqua))
-        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+    func testApplicationIconResourceAlwaysUsesLightArtwork() {
+        XCTAssertEqual(ApplicationIconResource.name, "Broccoli-AppIcon-Light-1024")
+    }
 
-        XCTAssertEqual(
-            ApplicationIconResource.name(for: light),
-            "Broccoli-AppIcon-Light-1024"
+    func testApplicationIconControllerReappliesResolvedImageWithoutLoadingFallback() {
+        let lightImage = NSImage(size: NSSize(width: 32, height: 32))
+        var loadedResourceNames: [String] = []
+        var appliedImages: [NSImage] = []
+        let controller = ApplicationIconController(
+            imageLoader: { resourceName in
+                loadedResourceNames.append(resourceName)
+                return lightImage
+            },
+            imageSetter: { appliedImages.append($0) }
         )
-        XCTAssertEqual(
-            ApplicationIconResource.name(for: dark),
-            "Broccoli-AppIcon-Dark-1024"
+
+        controller.update()
+        controller.reapplyCurrentImage()
+
+        XCTAssertEqual(loadedResourceNames, ["Broccoli-AppIcon-Light-1024"])
+        XCTAssertEqual(controller.resourceName, "Broccoli-AppIcon-Light-1024")
+        XCTAssertEqual(appliedImages.count, 2)
+        XCTAssertTrue(appliedImages.allSatisfy { $0 === lightImage })
+        XCTAssertFalse(lightImage.isTemplate)
+    }
+
+    func testApplicationIconControllerDoesNotReapplyBeforeAnImageResolves() {
+        var appliedImageCount = 0
+        let controller = ApplicationIconController(
+            imageLoader: { _ in nil },
+            imageSetter: { _ in appliedImageCount += 1 }
         )
+
+        controller.reapplyCurrentImage()
+
+        XCTAssertNil(controller.resourceName)
+        XCTAssertEqual(appliedImageCount, 0)
     }
 
     private func makeDefaults() -> UserDefaults {

@@ -516,8 +516,11 @@ final class LauncherPreviewIconProvider {
         }
         if let cached = applicationIcons[path] { return cached }
         guard FileManager.default.fileExists(atPath: path) else { return genericApplication }
-        let image = NSWorkspace.shared.icon(forFile: path)
-        image.size = NSSize(width: 40, height: 40)
+        guard let image = LightModeApplicationIcon.load(
+            atPath: path,
+            pointSize: 40,
+            backingScale: max(2, NSScreen.main?.backingScaleFactor ?? 2)
+        ) else { return genericApplication }
         applicationIcons[path] = image
         return image
     }

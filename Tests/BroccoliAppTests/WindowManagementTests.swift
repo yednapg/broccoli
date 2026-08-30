@@ -328,11 +328,29 @@ final class WindowManagementTests: XCTestCase {
         let mainWindow = AXUIElementCreateApplication(200)
         var waitedForRetry = false
         let operation = WindowAccessibilityOperation(
-            attributeReader: { _, attribute in
+            attributeReader: { element, attribute in
                 if CFEqual(attribute, kAXFocusedWindowAttribute as CFString) {
                     return AccessibilityAttributeRead(error: .noValue, value: nil)
                 }
-                return AccessibilityAttributeRead(error: .success, value: mainWindow)
+                if CFEqual(element, application),
+                   CFEqual(attribute, kAXMainWindowAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: mainWindow)
+                }
+                if CFEqual(element, mainWindow),
+                   CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXWindowRole as CFString
+                    )
+                }
+                if CFEqual(element, mainWindow),
+                   CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXStandardWindowSubrole as CFString
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
             },
             retryWaiter: { _ in waitedForRetry = true }
         )
@@ -343,18 +361,135 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertFalse(waitedForRetry)
     }
 
+    func testWindowLookupRejectsFocusedDialogWithoutResizingMainWindow() throws {
+        let application = AXUIElementCreateApplication(100)
+        let dialog = AXUIElementCreateApplication(200)
+        let mainWindow = AXUIElementCreateApplication(300)
+        var mainWindowReadCount = 0
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { element, attribute in
+                if CFEqual(element, application),
+                   CFEqual(attribute, kAXFocusedWindowAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: dialog)
+                }
+                if CFEqual(element, application),
+                   CFEqual(attribute, kAXMainWindowAttribute as CFString) {
+                    mainWindowReadCount += 1
+                    return AccessibilityAttributeRead(error: .success, value: mainWindow)
+                }
+                if CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXWindowRole as CFString
+                    )
+                }
+                if CFEqual(element, dialog),
+                   CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXDialogSubrole as CFString
+                    )
+                }
+                if CFEqual(element, mainWindow),
+                   CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXStandardWindowSubrole as CFString
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            retryWaiter: { _ in
+                XCTFail("A valid main window must not require a retry")
+            }
+        )
+
+        XCTAssertThrowsError(try operation.resolveFocusedWindow(in: application)) { error in
+            guard case WindowManagementError.unsupported = error else {
+                return XCTFail("Expected the focused dialog to be rejected, got \(error)")
+            }
+        }
+        XCTAssertEqual(mainWindowReadCount, 0)
+    }
+
+    func testWindowLookupRejectsFocusedSheetWithoutResizingMainWindow() throws {
+        let application = AXUIElementCreateApplication(100)
+        let sheet = AXUIElementCreateApplication(200)
+        let mainWindow = AXUIElementCreateApplication(300)
+        var mainWindowReadCount = 0
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { element, attribute in
+                if CFEqual(element, application),
+                   CFEqual(attribute, kAXFocusedWindowAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: sheet)
+                }
+                if CFEqual(element, application),
+                   CFEqual(attribute, kAXMainWindowAttribute as CFString) {
+                    mainWindowReadCount += 1
+                    return AccessibilityAttributeRead(error: .success, value: mainWindow)
+                }
+                if CFEqual(element, sheet),
+                   CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXSheetRole as CFString
+                    )
+                }
+                if CFEqual(element, mainWindow),
+                   CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXWindowRole as CFString
+                    )
+                }
+                if CFEqual(element, mainWindow),
+                   CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXStandardWindowSubrole as CFString
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            retryWaiter: { _ in
+                XCTFail("A valid main window must not require a retry")
+            }
+        )
+
+        XCTAssertThrowsError(try operation.resolveFocusedWindow(in: application)) { error in
+            guard case WindowManagementError.unsupported = error else {
+                return XCTFail("Expected the focused sheet to be rejected, got \(error)")
+            }
+        }
+        XCTAssertEqual(mainWindowReadCount, 0)
+    }
+
     func testWindowLookupRetriesTransientAccessibilityServerFailure() throws {
         let application = AXUIElementCreateApplication(100)
         let focusedWindow = AXUIElementCreateApplication(200)
         var focusedReadCount = 0
         var retryCount = 0
         let operation = WindowAccessibilityOperation(
-            attributeReader: { _, attribute in
+            attributeReader: { element, attribute in
                 if CFEqual(attribute, kAXFocusedWindowAttribute as CFString) {
                     focusedReadCount += 1
                     return focusedReadCount == 1
                         ? AccessibilityAttributeRead(error: .cannotComplete, value: nil)
                         : AccessibilityAttributeRead(error: .success, value: focusedWindow)
+                }
+                if CFEqual(element, focusedWindow),
+                   CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXWindowRole as CFString
+                    )
+                }
+                if CFEqual(element, focusedWindow),
+                   CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXStandardWindowSubrole as CFString
+                    )
                 }
                 return AccessibilityAttributeRead(error: .noValue, value: nil)
             },
@@ -446,14 +581,16 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(appliedPosition, target.origin)
         XCTAssertEqual(appliedSize, target.size)
         XCTAssertEqual(sizeWriteCount, 2)
-        XCTAssertEqual(settlementWaitCount, 1)
+        XCTAssertEqual(settlementWaitCount, 7)
     }
 
     func testFrameWriteReportsPersistentClampInsteadOfReturningSuccess() throws {
         let window = AXUIElementCreateApplication(100)
         let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
-        var appliedPosition = target.origin
-        var appliedSize = CGSize(width: target.width, height: target.height - 80)
+        let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
+        let rejectedSize = CGSize(width: target.width, height: target.height - 80)
+        var appliedPosition = original.origin
+        var appliedSize = original.size
         var sizeWriteCount = 0
 
         let operation = WindowAccessibilityOperation(
@@ -483,10 +620,7 @@ final class WindowManagementTests: XCTestCase {
                 if CFEqual(attribute, kAXSizeAttribute as CFString) {
                     var requestedSize = CGSize.zero
                     AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
-                    appliedSize = CGSize(
-                        width: requestedSize.width,
-                        height: requestedSize.height - 80
-                    )
+                    appliedSize = requestedSize == target.size ? rejectedSize : requestedSize
                     sizeWriteCount += 1
                     return .success
                 }
@@ -501,9 +635,300 @@ final class WindowManagementTests: XCTestCase {
                 return XCTFail("Expected a rejected frame, got \(error)")
             }
             XCTAssertEqual(expected, target)
-            XCTAssertEqual(actual.size, appliedSize)
+            XCTAssertEqual(actual.size, rejectedSize)
         }
-        XCTAssertEqual(sizeWriteCount, 3)
+        XCTAssertEqual(CGRect(origin: appliedPosition, size: appliedSize), original)
+        XCTAssertEqual(sizeWriteCount, 4)
+    }
+
+    func testFrameWriteMovesExpandedAxisToDynamicScreenOriginBeforeSizing() throws {
+        let window = AXUIElementCreateApplication(100)
+        // Use a second MacBook-sized display instead of the development Mac's 1680 x 1050
+        // geometry. The behavior must derive entirely from the supplied target frame.
+        let target = CGRect(x: 756, y: 26, width: 756, height: 956)
+        let original = CGRect(x: 76, y: 74, width: 1_360, height: 860)
+        var appliedFrame = original
+        var pendingPosition: CGPoint?
+        var positionWrites: [CGPoint] = []
+
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { _, attribute in
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgPoint, &value)
+                    )
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgSize, &value)
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { _, attribute, value in
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var requestedPosition = CGPoint.zero
+                    AXValueGetValue(accessibilityValue, .cgPoint, &requestedPosition)
+                    positionWrites.append(requestedPosition)
+                    pendingPosition = requestedPosition
+                    return .success
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var requestedSize = CGSize.zero
+                    AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
+                    let availableHeight = target.maxY - appliedFrame.minY
+                    appliedFrame.size = CGSize(
+                        width: requestedSize.width,
+                        height: min(requestedSize.height, availableHeight)
+                    )
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in
+                if let pendingPosition {
+                    appliedFrame.origin = pendingPosition
+                }
+                pendingPosition = nil
+            }
+        )
+
+        try operation.setFrame(target, of: window)
+
+        XCTAssertEqual(appliedFrame, target)
+        XCTAssertEqual(positionWrites.first, CGPoint(x: original.minX, y: target.minY))
+        XCTAssertEqual(positionWrites.last, target.origin)
+    }
+
+    func testFrameWriteShrinksBeforeApplyingFinalPosition() throws {
+        let window = AXUIElementCreateApplication(100)
+        let target = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        var appliedFrame = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        var writes: [String] = []
+
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { _, attribute in
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgPoint, &value)
+                    )
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgSize, &value)
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { _, attribute, value in
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    writes.append("position")
+                    AXValueGetValue(accessibilityValue, .cgPoint, &appliedFrame.origin)
+                    return .success
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    writes.append("size")
+                    AXValueGetValue(accessibilityValue, .cgSize, &appliedFrame.size)
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
+        )
+
+        try operation.setFrame(target, of: window)
+
+        XCTAssertEqual(appliedFrame, target)
+        XCTAssertEqual(writes, ["size", "position"])
+    }
+
+    func testFrameWriteAlignsLeftEdgeBeforeExpandingWidth() throws {
+        let window = AXUIElementCreateApplication(100)
+        let target = CGRect(x: 0, y: 30, width: 1_680, height: 510)
+        var appliedFrame = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        var pendingPosition: CGPoint?
+
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { _, attribute in
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgPoint, &value)
+                    )
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgSize, &value)
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { _, attribute, value in
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var requestedPosition = CGPoint.zero
+                    AXValueGetValue(accessibilityValue, .cgPoint, &requestedPosition)
+                    pendingPosition = requestedPosition
+                    return .success
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var requestedSize = CGSize.zero
+                    AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
+                    appliedFrame.size = CGSize(
+                        width: min(requestedSize.width, 1_680 - appliedFrame.minX),
+                        height: requestedSize.height
+                    )
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in
+                if let pendingPosition {
+                    appliedFrame.origin = pendingPosition
+                }
+                pendingPosition = nil
+            }
+        )
+
+        try operation.setFrame(target, of: window)
+
+        XCTAssertEqual(appliedFrame, target)
+    }
+
+    func testFrameWriteWaitsForTargetOwnedAnimationBeforeReapplying() throws {
+        let window = AXUIElementCreateApplication(100)
+        let target = CGRect(x: 0, y: 30, width: 840, height: 1_020)
+        let animatedFrames = [
+            CGRect(x: 24, y: 54, width: 1_632, height: 972),
+            CGRect(x: 18, y: 50, width: 1_400, height: 980),
+            CGRect(x: 12, y: 46, width: 1_100, height: 988),
+            CGRect(x: 24, y: 54, width: 1_632, height: 972),
+            CGRect(x: 24, y: 54, width: 1_632, height: 972),
+            CGRect(x: 24, y: 54, width: 1_632, height: 972),
+        ]
+        var appliedFrame = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        var sizeWriteCount = 0
+        var animationReadIndex = 0
+
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { _, attribute in
+                if CFEqual(attribute, kAXPositionAttribute as CFString),
+                   sizeWriteCount == 1 {
+                    appliedFrame = animatedFrames[min(animationReadIndex, animatedFrames.count - 1)]
+                    animationReadIndex += 1
+                }
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgPoint, &value)
+                    )
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgSize, &value)
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { _, attribute, value in
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var position = CGPoint.zero
+                    AXValueGetValue(accessibilityValue, .cgPoint, &position)
+                    appliedFrame.origin = position
+                    return .success
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var size = CGSize.zero
+                    AXValueGetValue(accessibilityValue, .cgSize, &size)
+                    appliedFrame.size = size
+                    sizeWriteCount += 1
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
+        )
+
+        try operation.setFrame(target, of: window)
+
+        XCTAssertEqual(appliedFrame, target)
+        XCTAssertEqual(sizeWriteCount, 2)
+        XCTAssertGreaterThanOrEqual(animationReadIndex, 5)
+    }
+
+    func testFrameWriteAcceptsHarmlessWindowServerPositionNormalization() throws {
+        let window = AXUIElementCreateApplication(100)
+        let target = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        var appliedFrame = CGRect(x: 100, y: 100, width: 900, height: 700)
+        var didWriteSize = false
+
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { _, attribute in
+                if didWriteSize {
+                    appliedFrame = CGRect(
+                        x: target.minX,
+                        y: target.minY - 7,
+                        width: target.width,
+                        height: target.height
+                    )
+                }
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgPoint, &value)
+                    )
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgSize, &value)
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { _, attribute, value in
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    AXValueGetValue(accessibilityValue, .cgPoint, &appliedFrame.origin)
+                    return .success
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    AXValueGetValue(accessibilityValue, .cgSize, &appliedFrame.size)
+                    didWriteSize = true
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
+        )
+
+        XCTAssertNoThrow(try operation.setFrame(target, of: window))
+        XCTAssertEqual(appliedFrame.minY, target.minY - 7)
+        XCTAssertEqual(appliedFrame.size, target.size)
     }
 
     func testAccessibilityWorkerRunsOffMainThreadAndConfiguresTimeout() async throws {
@@ -522,6 +947,18 @@ final class WindowManagementTests: XCTestCase {
                 observedMainThread = observedMainThread && Thread.isMainThread
                 if CFEqual(attribute, kAXFocusedWindowAttribute as CFString) {
                     return AccessibilityAttributeRead(error: .success, value: window)
+                }
+                if CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXWindowRole as CFString
+                    )
+                }
+                if CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: kAXStandardWindowSubrole as CFString
+                    )
                 }
                 if CFEqual(attribute, kAXPositionAttribute as CFString) {
                     var value = appliedPosition
@@ -554,12 +991,6 @@ final class WindowManagementTests: XCTestCase {
                 }
                 return .attributeUnsupported
             },
-            actionPerformer: { _, _ in
-                lock.lock()
-                observedMainThread = observedMainThread && Thread.isMainThread
-                lock.unlock()
-                return .success
-            },
             messagingTimeoutSetter: { _, timeout in
                 lock.lock()
                 observedMainThread = observedMainThread && Thread.isMainThread
@@ -580,6 +1011,6 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(finalPosition, target.origin)
         XCTAssertEqual(finalSize, target.size)
         XCTAssertFalse(ranOnMainThread)
-        XCTAssertEqual(timeout, 0.35)
+        XCTAssertEqual(timeout, 0.75)
     }
 }
