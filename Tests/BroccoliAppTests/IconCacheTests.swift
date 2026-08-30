@@ -5,6 +5,36 @@ import XCTest
 
 @MainActor
 final class IconCacheTests: XCTestCase {
+    func testApplicationIconMaterializationAlwaysUsesLightAppearance() throws {
+        _ = NSApplication.shared
+        let source = NSImage(size: NSSize(width: 40, height: 40), flipped: false) { rect in
+            let isDark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua])
+                == .darkAqua
+            (isDark ? NSColor.black : NSColor.white).setFill()
+            rect.fill()
+            return true
+        }
+        let darkAppearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        var materialized: NSImage?
+
+        darkAppearance.performAsCurrentDrawingAppearance {
+            materialized = LightModeApplicationIcon.materialize(
+                source,
+                pointSize: 40,
+                backingScale: 2
+            )
+        }
+
+        let image = try XCTUnwrap(materialized)
+        let bitmap = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
+        let center = try XCTUnwrap(bitmap.colorAt(x: 40, y: 40))
+        XCTAssertGreaterThan(center.redComponent, 0.95)
+        XCTAssertGreaterThan(center.greenComponent, 0.95)
+        XCTAssertGreaterThan(center.blueComponent, 0.95)
+        XCTAssertFalse(image.isTemplate)
+        XCTAssertEqual(image.representations.count, 1)
+    }
+
     func testEverySettingsEntryProducesExactlyOneNativeIconRequest() {
         let requests = SystemSettingsIconRequestMapper.requests(
             for: SettingsCatalog.searchEntries

@@ -452,19 +452,27 @@ struct AccessibilityAttributeRead {
 final class WindowAccessibilityOperation: @unchecked Sendable {
     typealias AttributeReader = (AXUIElement, CFString) -> AccessibilityAttributeRead
     typealias AttributeWriter = (AXUIElement, CFString, CFTypeRef) -> AXError
-    typealias ActionPerformer = (AXUIElement, CFString) -> AXError
     typealias MessagingTimeoutSetter = (AXUIElement, Float) -> AXError
     typealias RetryWaiter = (Int) -> Void
     typealias FrameSettlementWaiter = (Int) -> Void
     typealias UptimeProvider = () -> TimeInterval
 
     private static let maximumAccessibilityAttempts = 2
-    private static let maximumFrameSettlementAttempts = 3
-    private static let frameSettlementTolerance: CGFloat = 1
+    private static let maximumFrameApplicationAttempts = 3
+    private static let maximumFrameStabilityPolls = 10
+    private static let requiredStableFrameSamples = 2
+    private static let frameOriginTolerance: CGFloat = 8
+    private static let frameSizeTolerance: CGFloat = 2
+    private static let frameStabilityTolerance: CGFloat = 1
+
+    private enum WindowCandidateResolution {
+        case accepted
+        case rejected
+        case failed(AXError)
+    }
 
     private let attributeReader: AttributeReader
     private let attributeWriter: AttributeWriter
-    private let actionPerformer: ActionPerformer
     private let messagingTimeoutSetter: MessagingTimeoutSetter
     private let retryWaiter: RetryWaiter
     private let frameSettlementWaiter: FrameSettlementWaiter
@@ -481,9 +489,6 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         attributeWriter: @escaping AttributeWriter = { element, attribute, value in
             AXUIElementSetAttributeValue(element, attribute, value)
         },
-        actionPerformer: @escaping ActionPerformer = { element, action in
-            AXUIElementPerformAction(element, action)
-        },
         messagingTimeoutSetter: @escaping MessagingTimeoutSetter = { element, timeout in
             AXUIElementSetMessagingTimeout(element, timeout)
         },
@@ -491,15 +496,14 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.04 * Double(attempt))
         },
         frameSettlementWaiter: @escaping FrameSettlementWaiter = { _ in
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.08)
         },
         uptimeProvider: @escaping UptimeProvider = { ProcessInfo.processInfo.systemUptime },
-        messagingTimeout: Float = 0.35,
-        actionTimeout: TimeInterval = 2
+        messagingTimeout: Float = 0.75,
+        actionTimeout: TimeInterval = 4
     ) {
         self.attributeReader = attributeReader
         self.attributeWriter = attributeWriter
-        self.actionPerformer = actionPerformer
         self.messagingTimeoutSetter = messagingTimeoutSetter
         self.retryWaiter = retryWaiter
         self.frameSettlementWaiter = frameSettlementWaiter
@@ -562,12 +566,6 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             deadline: deadline,
             checkCancellation: checkCancellation
         )
-        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
-        let raiseError = actionPerformer(window, kAXRaiseAction as CFString)
-        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
-        if raiseError != .success, raiseError != .actionUnsupported {
-            throw WindowManagementError.operationFailed(raiseError)
-        }
     }
 
     private func focusedWindow(
@@ -632,7 +630,27 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                 if read.error == .success,
                    let value = read.value,
                    CFGetTypeID(value) == AXUIElementGetTypeID() {
-                    return unsafeDowncast(value, to: AXUIElement.self)
+                    let candidate = unsafeDowncast(value, to: AXUIElement.self)
+                    switch try windowCandidateResolution(
+                        candidate,
+                        deadline: deadline,
+                        checkCancellation: checkCancellation
+                    ) {
+                    case .accepted:
+                        return candidate
+                    case .rejected:
+                        // Sheets, dialogs, popovers, and other transient surfaces can expose
+                        // writable position and size attributes while still enforcing their own
+                        // geometry. Do not resize the main window behind a modal surface: AppKit
+                        // can accept only one dimension and leave the window half-resized.
+                        if attribute == kAXFocusedWindowAttribute {
+                            throw WindowManagementError.unsupported
+                        }
+                        finalErrors.append(.attributeUnsupported)
+                    case .failed(let error):
+                        finalErrors.append(error)
+                    }
+                    continue
                 }
                 finalErrors.append(read.error == .success ? .noValue : read.error)
             }
@@ -646,6 +664,40 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             throw WindowManagementError.operationFailed(error)
         }
         throw WindowManagementError.noWindow
+    }
+
+    private func windowCandidateResolution(
+        _ window: AXUIElement,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) throws -> WindowCandidateResolution {
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+        let role = attributeReader(window, kAXRoleAttribute as CFString)
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+        guard role.error == .success else {
+            return Self.representsMissingWindow(role.error) ? .rejected : .failed(role.error)
+        }
+        guard let roleValue = role.value,
+              CFGetTypeID(roleValue) == CFStringGetTypeID(),
+              CFEqual(roleValue, kAXWindowRole as CFString) else {
+            return .rejected
+        }
+
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+        let subrole = attributeReader(window, kAXSubroleAttribute as CFString)
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+        guard subrole.error == .success else {
+            // AXWindow is sufficient for applications that do not publish a subrole. Known
+            // transient AppKit surfaces do publish AXDialog/AXSystemDialog/AXFloatingWindow.
+            return Self.representsMissingWindow(subrole.error) ? .accepted : .failed(subrole.error)
+        }
+        guard let subroleValue = subrole.value,
+              CFGetTypeID(subroleValue) == CFStringGetTypeID() else {
+            return .accepted
+        }
+        return CFEqual(subroleValue, kAXStandardWindowSubrole as CFString)
+            ? .accepted
+            : .rejected
     }
 
     private func frame(
@@ -698,15 +750,37 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             throw WindowManagementError.unsupported
         }
 
-        var finalAppliedFrame = frame
-        for attempt in 1...Self.maximumFrameSettlementAttempts {
-            try writeAttribute(
-                kAXPositionAttribute as CFString,
-                value: positionValue,
-                to: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
+        let originalFrame = try self.frame(
+            of: window,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+        var finalAppliedFrame = originalFrame
+        for attempt in 1...Self.maximumFrameApplicationAttempts {
+            let expandsWidth = frame.width > finalAppliedFrame.width + Self.frameSizeTolerance
+            let expandsHeight = frame.height > finalAppliedFrame.height + Self.frameSizeTolerance
+            if expandsWidth || expandsHeight {
+                // AX size changes grow from the current top-left corner. Move each expanding
+                // axis to its destination edge first so the target application measures the
+                // available space from the actual screen boundary. Keep a shrinking axis where
+                // it is until after the size change to avoid temporarily pushing it offscreen.
+                var stagingPosition = CGPoint(
+                    x: expandsWidth ? frame.minX : finalAppliedFrame.minX,
+                    y: expandsHeight ? frame.minY : finalAppliedFrame.minY
+                )
+                guard let stagingPositionValue = AXValueCreate(.cgPoint, &stagingPosition) else {
+                    throw WindowManagementError.unsupported
+                }
+                try writeAttribute(
+                    kAXPositionAttribute as CFString,
+                    value: stagingPositionValue,
+                    to: window,
+                    deadline: deadline,
+                    checkCancellation: checkCancellation
+                )
+                frameSettlementWaiter(0)
+                try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+            }
             try writeAttribute(
                 kAXSizeAttribute as CFString,
                 value: sizeValue,
@@ -714,8 +788,8 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                 deadline: deadline,
                 checkCancellation: checkCancellation
             )
-            // Some applications constrain size by moving an edge. Reapply the requested
-            // origin after resizing so left/top anchored layouts stay flush with the screen.
+            // Size changes can preserve a different edge depending on the target application.
+            // Always finish with the requested top-left origin after the new size is in place.
             try writeAttribute(
                 kAXPositionAttribute as CFString,
                 value: positionValue,
@@ -724,27 +798,125 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                 checkCancellation: checkCancellation
             )
 
+            // A successful AX write only means that the target accepted the message. AppKit or
+            // the target can still animate or restore a different frame on a later run-loop
+            // turn, so confirm the result twice instead of trusting an immediate readback.
+            frameSettlementWaiter(0)
             finalAppliedFrame = try self.frame(
                 of: window,
                 deadline: deadline,
                 checkCancellation: checkCancellation
             )
-            if Self.framesApproximatelyMatch(finalAppliedFrame, frame) { return }
-            guard attempt < Self.maximumFrameSettlementAttempts else { break }
+            if Self.framesApproximatelyMatch(finalAppliedFrame, frame) {
+                frameSettlementWaiter(1)
+                finalAppliedFrame = try self.frame(
+                    of: window,
+                    deadline: deadline,
+                    checkCancellation: checkCancellation
+                )
+                if Self.framesApproximatelyMatch(finalAppliedFrame, frame) { return }
+            }
+            guard attempt < Self.maximumFrameApplicationAttempts else { break }
 
-            // AX setters can report success while the target app temporarily clamps its frame
-            // to the onscreen Dock. Give the Dock/window-server transition time to settle, then
-            // reapply the complete frame instead of leaving the accepted-but-clamped result.
-            frameSettlementWaiter(attempt)
+            // Do not fight a target-owned launch or layout animation with rapid writes. Wait
+            // until its frame is quiet, then reapply the user's newest requested layout.
+            finalAppliedFrame = try waitForStableFrame(
+                of: window,
+                startingAt: finalAppliedFrame,
+                deadline: deadline,
+                checkCancellation: checkCancellation
+            )
         }
-        throw WindowManagementError.frameRejected(expected: frame, actual: finalAppliedFrame)
+        let rejectedFrame = finalAppliedFrame
+        restoreFrame(
+            originalFrame,
+            of: window,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+        throw WindowManagementError.frameRejected(expected: frame, actual: rejectedFrame)
+    }
+
+    private func restoreFrame(
+        _ frame: CGRect,
+        of window: AXUIElement,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) {
+        var position = frame.origin
+        var size = frame.size
+        guard let positionValue = AXValueCreate(.cgPoint, &position),
+              let sizeValue = AXValueCreate(.cgSize, &size) else { return }
+
+        // A failed target frame may still have changed one dimension. Best-effort rollback keeps
+        // that partial result from becoming the user's new window geometry.
+        try? writeAttribute(
+            kAXSizeAttribute as CFString,
+            value: sizeValue,
+            to: window,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+        try? writeAttribute(
+            kAXPositionAttribute as CFString,
+            value: positionValue,
+            to: window,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+    }
+
+    private func waitForStableFrame(
+        of window: AXUIElement,
+        startingAt initialFrame: CGRect,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) throws -> CGRect {
+        var previousFrame = initialFrame
+        var stableSampleCount = 0
+
+        for poll in 1...Self.maximumFrameStabilityPolls {
+            frameSettlementWaiter(poll)
+            let currentFrame = try frame(
+                of: window,
+                deadline: deadline,
+                checkCancellation: checkCancellation
+            )
+            if Self.framesMatch(
+                currentFrame,
+                previousFrame,
+                originTolerance: Self.frameStabilityTolerance,
+                sizeTolerance: Self.frameStabilityTolerance
+            ) {
+                stableSampleCount += 1
+                if stableSampleCount >= Self.requiredStableFrameSamples { return currentFrame }
+            } else {
+                stableSampleCount = 0
+            }
+            previousFrame = currentFrame
+        }
+        return previousFrame
     }
 
     private static func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        abs(lhs.minX - rhs.minX) <= frameSettlementTolerance
-            && abs(lhs.minY - rhs.minY) <= frameSettlementTolerance
-            && abs(lhs.width - rhs.width) <= frameSettlementTolerance
-            && abs(lhs.height - rhs.height) <= frameSettlementTolerance
+        framesMatch(
+            lhs,
+            rhs,
+            originTolerance: frameOriginTolerance,
+            sizeTolerance: frameSizeTolerance
+        )
+    }
+
+    private static func framesMatch(
+        _ lhs: CGRect,
+        _ rhs: CGRect,
+        originTolerance: CGFloat,
+        sizeTolerance: CGFloat
+    ) -> Bool {
+        abs(lhs.minX - rhs.minX) <= originTolerance
+            && abs(lhs.minY - rhs.minY) <= originTolerance
+            && abs(lhs.width - rhs.width) <= sizeTolerance
+            && abs(lhs.height - rhs.height) <= sizeTolerance
     }
 
     private func readRequiredAttribute(
@@ -905,11 +1077,31 @@ final class WindowManager {
                 "Window action \(action.rawValue, privacy: .public) target \(target, privacy: .public) completed in \(milliseconds, privacy: .public) ms"
             )
         } catch {
-            let description = String(describing: error)
+            let description = Self.diagnosticDescription(for: error)
             Self.logger.error(
                 "Window action \(action.rawValue, privacy: .public) target \(target, privacy: .public) failed: \(description, privacy: .public)"
             )
             throw error
+        }
+    }
+
+    private static func diagnosticDescription(for error: Error) -> String {
+        guard let error = error as? WindowManagementError else {
+            return String(describing: error)
+        }
+        switch error {
+        case .accessibilityRequired:
+            return "accessibilityRequired"
+        case .noWindow:
+            return "noWindow"
+        case .unsupported:
+            return "unsupported"
+        case .timedOut:
+            return "timedOut"
+        case .frameRejected(let expected, let actual):
+            return "frameRejected(expected: \(expected), actual: \(actual))"
+        case .operationFailed(let accessibilityError):
+            return "operationFailed(axError: \(accessibilityError.rawValue))"
         }
     }
 
