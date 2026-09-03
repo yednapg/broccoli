@@ -21,7 +21,6 @@ enum LauncherMinimalMetrics {
     static let searchSymbolTextGap: CGFloat = searchHorizontalInset
     // Deliberately large diagnostic correction used to make the query shift unmistakable.
     static let nativeTextLeadingCompensation: CGFloat = -10
-    static let insertionPointHeight: CGFloat = 24
     // Give the SF Symbol just enough optical correction to fill its compact 24-point box.
     static let searchSymbolDrawingScale: CGFloat = 1.08
     static let searchSymbolDrawingVerticalScale: CGFloat = 1.10
@@ -42,7 +41,7 @@ enum LauncherMinimalMetrics {
     static let resultIconOpticalSize: CGFloat = 26
     static let resultNativeIconSize: CGFloat = 35
     static let resultNativeIconOpticalSize: CGFloat = 35
-    static let resultActionIconOpticalSize: CGFloat = 22
+    static let resultActionIconOpticalSize: CGFloat = 16.5
     static let resultTemplatePointSize: CGFloat = 22
     static let resultTitleFontSize: CGFloat = 16
     static let resultSubtitleFontSize: CGFloat = 12
@@ -93,13 +92,18 @@ enum LauncherLiquidGlassMetrics {
     // post-render enlargement is needed and the magnifier handle remains safely inside it.
     static let searchSymbolDrawingScale: CGFloat = 1
     static let searchSymbolDrawingVerticalScale: CGFloat = 1
-    // Keep the caret two points taller than the query without overpowering it as the old
-    // 30-point insertion bar did.
-    static let insertionPointHeight: CGFloat = 28
     static let resultIconSize: CGFloat = 50
-    static let resultActionIconOpticalSize: CGFloat = 40
+    static let resultActionIconOpticalSize: CGFloat = 30
     static let resultClipboardIconOpticalSize: CGFloat = 48
-    static let lightGlassTintAlpha: CGFloat = 0.30
+    static let statusIconSize: CGFloat = 22
+    // Keep result selection bars clear of both the header rule and the rounded lower edge.
+    // Matching top and bottom insets preserves the panel's rhythm at every result count.
+    static let resultTopInset: CGFloat = 8
+    static let resultBottomInset: CGFloat = 8
+    // Regular Dark glass already supplies the adaptive separation needed for legibility. This
+    // restrained neutral tint anchors its brightness so vivid wallpaper cannot make it flare,
+    // without turning the surface into an opaque card.
+    static let darkGlassTintAlpha: CGFloat = 0.18
     // Enlarge the invisible native field equally above and below the authored inset. This
     // provides font-rendering headroom without changing either centered midY.
     static let searchControlVerticalOutset: CGFloat = 8
@@ -123,7 +127,6 @@ struct LauncherThemeDescriptor {
         case ultraThick
         case vibrancy
         case glass
-        case classic
     }
 
     let design: LauncherDesign
@@ -140,8 +143,6 @@ struct LauncherThemeDescriptor {
     let resultBottomInset: CGFloat
     let rowSpacing: CGFloat
     let surface: Surface
-    let showsPreview: Bool
-    let previewWidth: CGFloat
     let appearance: NSAppearance?
     let backgroundColor: NSColor
     let glassTintColor: NSColor?
@@ -156,14 +157,6 @@ struct LauncherThemeDescriptor {
         switch design {
         case .minimal: .figmaMinimal
         case .liquidGlass: .figmaLiquidGlass
-        case .yosemiteClassic:
-            LauncherSearchMetrics(
-                fontSize: searchFontSize,
-                symbolSize: searchFontSize,
-                symbolPointSize: searchFontSize,
-                symbolTextGap: searchHorizontalInset,
-                textLeadingCompensation: -10
-            )
         }
     }
 
@@ -175,7 +168,6 @@ struct LauncherThemeDescriptor {
                 0,
                 searchVerticalInset - LauncherLiquidGlassMetrics.searchControlVerticalOutset
             )
-        case .yosemiteClassic: return searchVerticalInset
         }
     }
 
@@ -187,8 +179,6 @@ struct LauncherThemeDescriptor {
                 : NSColor.black
         case .liquidGlass:
             return isDark ? .white : .black
-        case .yosemiteClassic:
-            return .labelColor
         }
     }
 
@@ -198,19 +188,16 @@ struct LauncherThemeDescriptor {
             return isDark
                 ? NSColor.white.withAlphaComponent(0.85)
                 : NSColor.black.withAlphaComponent(0.85)
-        case .yosemiteClassic:
-            return .labelColor
         }
     }
 
     var headerSeparatorColor: NSColor {
-        guard design != .yosemiteClassic else { return .clear }
         return isDark
             ? NSColor.white.withAlphaComponent(0.25)
             : NSColor.black.withAlphaComponent(0.25)
     }
 
-    var showsHeaderSeparator: Bool { design != .yosemiteClassic }
+    var showsHeaderSeparator: Bool { true }
 
     /// Minimal's first selected result is a continuation of the header edge. Its blue row
     /// replaces the divider instead of leaving a one-point rule visible above the selection.
@@ -262,7 +249,6 @@ struct LauncherThemeDescriptor {
         switch design {
         case .minimal: 0
         case .liquidGlass: 12
-        case .yosemiteClassic: 2
         }
     }
 
@@ -278,9 +264,8 @@ struct LauncherThemeDescriptor {
     }
 
     func panelHeight(resultCount: Int) -> CGFloat {
-        // Every theme grows by exactly the rows it displays. In particular, Classic must not
-        // reserve a three-row preview canvas for one result: that creates an empty viewport
-        // and makes query changes look like the whole launcher is jumping.
+        // Every theme grows by exactly the rows it displays so query changes do not leave an
+        // empty viewport or make the whole launcher appear to jump.
         let displayedRows = displayedResultCount(for: resultCount)
         // NSTableView reserves its vertical intercell spacing after every row, including the
         // last one. Keep the visual bottom inset outside the scroll viewport so the viewport
@@ -361,8 +346,6 @@ final class LauncherThemeController {
                 resultBottomInset: LauncherMinimalMetrics.resultBottomInset,
                 rowSpacing: LauncherMinimalMetrics.rowSpacing,
                 surface: surface,
-                showsPreview: false,
-                previewWidth: 0,
                 appearance: appearance,
                 backgroundColor: dark
                     ? .black
@@ -379,9 +362,12 @@ final class LauncherThemeController {
             let liquidSurface: LauncherThemeDescriptor.Surface
             if reducedTransparency || contrast {
                 liquidSurface = .opaque
-            } else if #available(macOS 26, *) {
+            } else if #available(macOS 26, *), dark {
                 liquidSurface = .glass
             } else {
+                // Native regular glass paints a pronounced dark perimeter against bright
+                // desktops. Use the borderless system material in Light appearance; Dark
+                // appearance keeps native glass, where its edge is visually absorbed.
                 liquidSurface = .vibrancy
             }
             return LauncherThemeDescriptor(
@@ -390,64 +376,33 @@ final class LauncherThemeController {
                 width: LauncherLiquidGlassMetrics.width,
                 cornerRadius: LauncherLiquidGlassMetrics.compactCornerRadius,
                 searchHeight: LauncherLiquidGlassMetrics.searchHeight,
-                rowHeight: 56,
+                // Search and results remain equal-height bands. Insets live outside the table
+                // viewport so they create breathing room without stretching any result row.
+                rowHeight: LauncherLiquidGlassMetrics.searchHeight,
                 searchFontSize: LauncherLiquidGlassMetrics.searchFontSize,
                 searchHorizontalInset: LauncherLiquidGlassMetrics.searchHorizontalInset,
                 searchVerticalInset: LauncherLiquidGlassMetrics.searchVerticalInset,
                 resultHorizontalInset: 10,
-                resultTopInset: 6,
-                resultBottomInset: 8,
+                resultTopInset: LauncherLiquidGlassMetrics.resultTopInset,
+                resultBottomInset: LauncherLiquidGlassMetrics.resultBottomInset,
                 rowSpacing: 0,
                 surface: liquidSurface,
-                showsPreview: false,
-                previewWidth: 0,
                 appearance: appearance,
                 backgroundColor: dark ? NSColor(calibratedWhite: 0.035, alpha: 0.99) : NSColor(calibratedWhite: 0.99, alpha: 0.99),
-                // Light Spotlight glass carries a restrained white wash so black labels remain
-                // legible over varied wallpaper. Keep dark glass untinted and let it derive its
-                // luminosity from the content behind the launcher.
-                glassTintColor: dark
-                    ? nil
-                    : NSColor.white.withAlphaComponent(
-                        LauncherLiquidGlassMetrics.lightGlassTintAlpha
-                    ),
+                // Bound wallpaper-driven brightness on the Dark native-glass surface. The
+                // borderless Light material does not need an additional tint layer.
+                glassTintColor: liquidSurface == .glass
+                    ? NSColor.black.withAlphaComponent(
+                        LauncherLiquidGlassMetrics.darkGlassTintAlpha
+                    )
+                    : nil,
                 // The selected result is an inset adaptive glass wash, not a saturated blue
                 // table selection. Semantic label color keeps it neutral in both appearances.
                 selectionColor: NSColor.labelColor.withAlphaComponent(contrast ? 0.24 : 0.11),
-                // NSPanel shadows are rectangular for a borderless window and showed up as
-                // a dark backplate around the rounded glass. The native glass edge supplies
-                // the shape-aware separation from the desktop.
+                // NSPanel shadows are rectangular for a borderless window and show up as a
+                // dark backplate. Dark native glass supplies its own edge; Light deliberately
+                // stays borderless.
                 hasShadow: false,
-                showsSubtitles: preferences.showsSubtitles,
-                showsShortcuts: preferences.showsShortcuts,
-                verticalPosition: CGFloat(preferences.verticalPosition),
-                visibleResultCount: preferences.visibleResultCount
-            )
-        case .yosemiteClassic:
-            return LauncherThemeDescriptor(
-                design: .yosemiteClassic,
-                isDark: dark,
-                width: 820,
-                cornerRadius: 10,
-                searchHeight: 68,
-                rowHeight: 52,
-                searchFontSize: 26,
-                searchHorizontalInset: 16,
-                // Keep the shared native search control vertically centered in the taller
-                // classic header rather than stretching the control itself.
-                searchVerticalInset: 17,
-                resultHorizontalInset: 0,
-                resultTopInset: 0,
-                resultBottomInset: 0,
-                rowSpacing: 0,
-                surface: reducedTransparency ? .opaque : .classic,
-                showsPreview: true,
-                previewWidth: 310,
-                appearance: appearance,
-                backgroundColor: dark ? NSColor(calibratedWhite: 0.12, alpha: 0.96) : NSColor(calibratedWhite: 0.94, alpha: 0.96),
-                glassTintColor: nil,
-                selectionColor: .controlAccentColor,
-                hasShadow: true,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,
                 verticalPosition: CGFloat(preferences.verticalPosition),

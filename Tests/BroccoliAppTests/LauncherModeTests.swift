@@ -71,41 +71,6 @@ final class LauncherModeTests: XCTestCase {
         XCTAssertEqual(LauncherNumericShortcut.label(forRow: 9), "⌘0")
     }
 
-    func testClassicPreviewRejectsStaleThumbnailAndMetadataUpdates() {
-        XCTAssertTrue(LauncherPreviewUpdateGuard.shouldApply(
-            deliveredGeneration: 8,
-            currentGeneration: 8,
-            expectedRow: 2,
-            selectedRow: 2,
-            expectedEntryID: "file:/tmp/current",
-            visibleEntryID: "file:/tmp/current"
-        ))
-        XCTAssertFalse(LauncherPreviewUpdateGuard.shouldApply(
-            deliveredGeneration: 7,
-            currentGeneration: 8,
-            expectedRow: 2,
-            selectedRow: 2,
-            expectedEntryID: "file:/tmp/current",
-            visibleEntryID: "file:/tmp/current"
-        ))
-        XCTAssertFalse(LauncherPreviewUpdateGuard.shouldApply(
-            deliveredGeneration: 8,
-            currentGeneration: 8,
-            expectedRow: 2,
-            selectedRow: 3,
-            expectedEntryID: "file:/tmp/current",
-            visibleEntryID: "file:/tmp/current"
-        ))
-        XCTAssertFalse(LauncherPreviewUpdateGuard.shouldApply(
-            deliveredGeneration: 8,
-            currentGeneration: 8,
-            expectedRow: 2,
-            selectedRow: 2,
-            expectedEntryID: "file:/tmp/current",
-            visibleEntryID: "file:/tmp/replacement"
-        ))
-    }
-
     func testMomentumScrollWorkIsBoundedAndResetAtEnd() {
         var accumulator = LauncherScrollAccumulator()
         XCTAssertEqual(
@@ -190,6 +155,45 @@ final class LauncherModeTests: XCTestCase {
         XCTAssertEqual(ActionRegistry.definition(id: "audio.volumeUp")?.keepsPanelOpen, true)
         XCTAssertEqual(ActionRegistry.definition(id: "audio.volumeDown")?.keepsPanelOpen, true)
         XCTAssertEqual(ActionRegistry.definition(id: "audio.toggleMute")?.keepsPanelOpen, false)
+    }
+
+    func testAppearanceActionOffersTheOppositeOfTheCurrentSystemMode() throws {
+        let enabledActionIDs = ActionRegistry.defaultEnabledActionIDs
+        let lightModeEntries = ActionRegistry.searchEntries(
+            enabledActionIDs: enabledActionIDs,
+            isDarkMode: false
+        )
+        let darkModeEntries = ActionRegistry.searchEntries(
+            enabledActionIDs: enabledActionIDs,
+            isDarkMode: true
+        )
+
+        let lightModeAction = try XCTUnwrap(
+            lightModeEntries.first { $0.id == "action:\(ActionRegistry.appearanceToggleID)" }
+        )
+        let darkModeAction = try XCTUnwrap(
+            darkModeEntries.first { $0.id == "action:\(ActionRegistry.appearanceToggleID)" }
+        )
+        XCTAssertEqual(lightModeAction.title, "Switch to Dark Mode")
+        XCTAssertEqual(darkModeAction.title, "Switch to Light Mode")
+        XCTAssertTrue(lightModeAction.keywords.contains("light mode"))
+        XCTAssertTrue(darkModeAction.keywords.contains("dark mode"))
+
+        let engine = SearchEngine()
+        let resultWhileLight = engine.search(
+            query: "light mode",
+            snapshot: SearchSnapshot(entries: lightModeEntries),
+            usage: [:],
+            preferences: SearchPreferences()
+        ).first { $0.entry.id == lightModeAction.id }
+        let resultWhileDark = engine.search(
+            query: "dark mode",
+            snapshot: SearchSnapshot(entries: darkModeEntries),
+            usage: [:],
+            preferences: SearchPreferences()
+        ).first { $0.entry.id == darkModeAction.id }
+        XCTAssertEqual(resultWhileLight?.entry.title, "Switch to Dark Mode")
+        XCTAssertEqual(resultWhileDark?.entry.title, "Switch to Light Mode")
     }
 
     func testAutomationPermissionStatusMapping() {

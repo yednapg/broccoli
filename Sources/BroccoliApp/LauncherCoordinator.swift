@@ -65,10 +65,79 @@ enum LauncherToggleDecision: Equatable, Sendable {
 
     static func resolve(
         panelIsVisible: Bool,
-        panelIsKey: Bool,
-        applicationIsActive: Bool
+        panelIsKey: Bool
     ) -> Self {
-        panelIsVisible && panelIsKey && applicationIsActive ? .dismiss : .present
+        panelIsVisible && panelIsKey ? .dismiss : .present
+    }
+}
+
+/// Resolves the main launcher's mutually exclusive search states. A calculator expression is
+/// not also a catalog query: presenting both at once produces irrelevant matches such as the
+/// System Settings term “802.1X” for `1+1` and leaves selection semantics ambiguous.
+enum LauncherMainSearchResultComposer {
+    static func compose(
+        catalogResults: [RankedResult],
+        calculatorEvaluation: CalculatorEvaluation,
+        hasVisibleQuery: Bool,
+        limit: Int
+    ) -> [RankedResult] {
+        let resolved: [RankedResult]
+        switch calculatorEvaluation {
+        case .value(let calculation):
+            let entry = SearchEntry(
+                id: "calculator:answer",
+                kind: .calculator,
+                title: calculation.displayText,
+                subtitle: "Calculator · Return to copy",
+                iconKey: "calculator",
+                target: .calculator(result: calculation.copyText)
+            )
+            resolved = [RankedResult(entry: entry, score: Int.max)]
+        case .incomplete:
+            resolved = hasVisibleQuery ? [statusResult(
+                id: "status:calculator-incomplete",
+                title: "Continue typing",
+                subtitle: "Complete the expression to calculate",
+                iconKey: "calculator"
+            )] : []
+        case .invalid:
+            // Once the calculator has claimed a query, an invalid expression must not fall
+            // through to fuzzy catalog matching. Show a deterministic status row instead.
+            resolved = hasVisibleQuery ? [noResultsResult] : []
+        case .notExpression:
+            resolved = catalogResults.isEmpty && hasVisibleQuery
+                ? [noResultsResult]
+                : catalogResults
+        }
+        return Array(resolved.prefix(max(0, limit)))
+    }
+
+    private static var noResultsResult: RankedResult {
+        statusResult(
+            id: "status:no-results",
+            title: "No results",
+            subtitle: "Try a different search",
+            iconKey: "status:no-results"
+        )
+    }
+
+    private static func statusResult(
+        id: String,
+        title: String,
+        subtitle: String,
+        iconKey: String
+    ) -> RankedResult {
+        RankedResult(
+            entry: SearchEntry(
+                id: id,
+                kind: .status,
+                title: title,
+                subtitle: subtitle,
+                iconKey: iconKey,
+                target: .none
+            ),
+            score: 0
+        )
     }
 }
 
@@ -133,6 +202,10 @@ final class LauncherWindowVisibilitySession {
 
 @MainActor
 final class LauncherCoordinator {
+    private static var systemIsDarkMode: Bool {
+        NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
     private let panel: LauncherPanelController
     private let preferences: AppPreferences
     private let usageStore: UsageStore
@@ -154,6 +227,7 @@ final class LauncherCoordinator {
     )
     private var snapshot = SearchSnapshot.empty
     private var applications: [CachedApplication] = []
+    private var systemSettings: [SearchEntry] = []
     private var usage: [String: UsageRecord] = [:]
     private var queryGeneration = 0
     private var searchCancellationToken: SearchCancellationToken?
@@ -209,10 +283,10 @@ final class LauncherCoordinator {
         panel.onSelectionChanged = { [weak self] in self?.cancelConfirmation() }
         panel.applyAppearance(preferences.appearance)
         snapshot = SearchSnapshot(entries:
-            (preferences.settingsEnabled ? SettingsCatalog.searchEntries : [])
-                + ActionRegistry.searchEntries(
+            ActionRegistry.searchEntries(
                     actionsEnabled: preferences.actionsEnabled,
-                    enabledActionIDs: preferences.enabledActionIDs
+                    enabledActionIDs: preferences.enabledActionIDs,
+                    isDarkMode: Self.systemIsDarkMode
                 )
                 + [Self.clipboardCommand]
         )
@@ -229,11 +303,17 @@ final class LauncherCoordinator {
         scheduleSnapshotRebuild(prewarmIcons: true)
     }
 
+    func setSystemSettings(_ entries: [SearchEntry]) {
+        guard entries != systemSettings else { return }
+        systemSettings = entries
+        panel.prepareIcons(for: entries)
+        scheduleSnapshotRebuild(prewarmIcons: false)
+    }
+
     func togglePanel() {
         let toggleDecision = LauncherToggleDecision.resolve(
             panelIsVisible: panel.isVisible,
-            panelIsKey: panel.isKeyWindow,
-            applicationIsActive: NSApp.isActive
+            panelIsKey: panel.isKeyWindow
         )
         if toggleDecision == .dismiss {
             panel.dismiss()
@@ -304,6 +384,7 @@ final class LauncherCoordinator {
         // System/contrast/transparency state can change while the persisted preference value
         // remains identical, so this is the one path that deliberately forces a restyle.
         panel.applyAppearance(preferences.appearance, force: true)
+        scheduleSnapshotRebuild(prewarmIcons: false)
     }
 
     func setClipboardMonitor(_ monitor: ClipboardMonitor?) {
@@ -332,11 +413,13 @@ final class LauncherCoordinator {
         snapshotBuildGeneration += 1
         let generation = snapshotBuildGeneration
         let applications = applications
+        let systemSettings = systemSettings
         let runningIDs = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let enabledActionIDs = preferences.enabledActionIDs
         let applicationsEnabled = preferences.applicationsEnabled
         let settingsEnabled = preferences.settingsEnabled
         let actionsEnabled = preferences.actionsEnabled
+        let isDarkMode = Self.systemIsDarkMode
         let clipboardCommand = Self.clipboardCommand
         snapshotBuildTask?.cancel()
         snapshotBuildTask = Task.detached(priority: .utility) { [weak self] in
@@ -348,10 +431,11 @@ final class LauncherCoordinator {
             guard !Task.isCancelled else { return }
             let nextSnapshot = SearchSnapshot(
                 entries: appEntries
-                    + (settingsEnabled ? SettingsCatalog.searchEntries : [])
+                    + (settingsEnabled ? systemSettings : [])
                     + ActionRegistry.searchEntries(
                         actionsEnabled: actionsEnabled,
-                        enabledActionIDs: enabledActionIDs
+                        enabledActionIDs: enabledActionIDs,
+                        isDarkMode: isDarkMode
                     )
                     + [clipboardCommand]
             )
@@ -408,53 +492,37 @@ final class LauncherCoordinator {
                 }
                 return
             }
-            var results = searchEngine.search(
-                query: query,
-                snapshot: snapshot,
-                usage: usage,
-                preferences: searchPreferences,
+            let calculatorEvaluation: CalculatorEvaluation = calculatorPreferences.enabled
+                ? calculatorEngine.classify(
+                    query,
+                    maximumSignificantDigits: calculatorPreferences.significantDigits,
+                    usesGroupingSeparator: calculatorPreferences.usesGroupingSeparator
+                ) : .notExpression
+            // Calculator classification is substantially cheaper than a 10,000-entry search
+            // and decides whether catalog matching is semantically applicable at all.
+            let catalogResults: [RankedResult] = if calculatorEvaluation == .notExpression {
+                searchEngine.search(
+                    query: query,
+                    snapshot: snapshot,
+                    usage: usage,
+                    preferences: searchPreferences,
+                    limit: resultLimit
+                )
+            } else {
+                []
+            }
+            let results = LauncherMainSearchResultComposer.compose(
+                catalogResults: catalogResults,
+                calculatorEvaluation: calculatorEvaluation,
+                hasVisibleQuery: hasVisibleQuery,
                 limit: resultLimit
             )
-            if calculatorPreferences.enabled,
-               let calculation = calculatorEngine.evaluate(
-                query,
-                maximumSignificantDigits: calculatorPreferences.significantDigits,
-                usesGroupingSeparator: calculatorPreferences.usesGroupingSeparator
-               ) {
-                let entry = SearchEntry(
-                    id: "calculator:answer",
-                    kind: .calculator,
-                    title: calculation.displayText,
-                    subtitle: "Calculator · Return to copy",
-                    iconKey: "calculator",
-                    target: .calculator(result: calculation.copyText)
-                )
-                results.insert(RankedResult(entry: entry, score: Int.max), at: 0)
-                results = Array(results.prefix(resultLimit))
-            }
-            if results.isEmpty, hasVisibleQuery {
-                let looksLikeIncompleteCalculation = calculatorPreferences.enabled
-                    && calculatorEngine.looksLikeIncompleteExpression(query)
-                let entry = SearchEntry(
-                    id: looksLikeIncompleteCalculation
-                        ? "status:calculator-incomplete"
-                        : "status:no-results",
-                    kind: .status,
-                    title: looksLikeIncompleteCalculation ? "Continue typing" : "No results",
-                    subtitle: looksLikeIncompleteCalculation
-                        ? "Complete the expression to calculate"
-                        : "Try a different search",
-                    iconKey: looksLikeIncompleteCalculation ? "calculator" : "status:no-results",
-                    target: .none
-                )
-                results = [RankedResult(entry: entry, score: 0)]
-            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.signposter.endInterval("QueryToResults", state)
                 guard !cancellationToken.isCancelled,
                       generation == self.queryGeneration else { return }
-                self.panel.apply(results)
+                self.panel.apply(results, preservingSelection: true)
                 self.recordDuration(from: start, metric: .queryToResults)
             }
         }
@@ -758,7 +826,10 @@ final class LauncherCoordinator {
            let previousKeyWindow {
             previousKeyWindow.makeKeyAndOrderFront(nil)
             previousKeyWindow.makeFirstResponder(previousFirstResponder)
-        } else {
+        } else if !previousApplication.isActive {
+            // A non-activating launcher normally leaves the external application active, so
+            // ordering the panel out is enough to return keyboard ownership. Activate only
+            // for fallback paths where foreground ownership actually changed.
             previousApplication.activate(
                 options: activateAllWindows ? [.activateAllWindows] : []
             )
@@ -843,8 +914,8 @@ final class LauncherCoordinator {
                     self.panel.apply([RankedResult(entry: entry, score: 0)])
                 } else {
                     // Metadata queries stream additional matches. Keep the user's chosen
-                    // stable entry selected while rows reorder around it so Return and the
-                    // Classic preview cannot silently jump to a different file.
+                    // stable entry selected while rows reorder around it so Return cannot
+                    // silently jump to a different file.
                     self.panel.apply(results, preservingSelection: true)
                 }
             case .unavailable:

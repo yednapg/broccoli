@@ -5,45 +5,15 @@ import XCTest
 
 @MainActor
 final class IconCacheTests: XCTestCase {
-    func testApplicationIconMaterializationAlwaysUsesLightAppearance() throws {
-        _ = NSApplication.shared
-        let source = NSImage(size: NSSize(width: 40, height: 40), flipped: false) { rect in
-            let isDark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua])
-                == .darkAqua
-            (isDark ? NSColor.black : NSColor.white).setFill()
-            rect.fill()
-            return true
-        }
-        let darkAppearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
-        var materialized: NSImage?
-
-        darkAppearance.performAsCurrentDrawingAppearance {
-            materialized = LightModeApplicationIcon.materialize(
-                source,
-                pointSize: 40,
-                backingScale: 2
-            )
-        }
-
-        let image = try XCTUnwrap(materialized)
-        let bitmap = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
-        let center = try XCTUnwrap(bitmap.colorAt(x: 40, y: 40))
-        XCTAssertGreaterThan(center.redComponent, 0.95)
-        XCTAssertGreaterThan(center.greenComponent, 0.95)
-        XCTAssertGreaterThan(center.blueComponent, 0.95)
-        XCTAssertFalse(image.isTemplate)
-        XCTAssertEqual(image.representations.count, 1)
-    }
-
     func testEverySettingsEntryProducesExactlyOneNativeIconRequest() {
         let requests = SystemSettingsIconRequestMapper.requests(
-            for: SettingsCatalog.searchEntries
+            for: SystemSettingsTestFixtures.entries
         )
 
-        XCTAssertEqual(requests.count, SettingsCatalog.definitions.count)
+        XCTAssertEqual(requests.count, SystemSettingsTestFixtures.entries.count)
         XCTAssertEqual(
             Set(requests.map(\.iconKey)),
-            Set(SettingsCatalog.definitions.map { "setting:\($0.id)" })
+            Set(SystemSettingsTestFixtures.entries.map(\.iconKey))
         )
         XCTAssertEqual(Set(requests.map(\.bundleIdentifier)).count, requests.count - 1)
     }
@@ -87,7 +57,7 @@ final class IconCacheTests: XCTestCase {
 
     func testWallpaperEntryMapsToItsInstalledExtensionBundleIdentifier() throws {
         let wallpaper = try XCTUnwrap(
-            SettingsCatalog.searchEntries.first(where: { $0.id == "setting:wallpaper" })
+            SystemSettingsTestFixtures.entries.first(where: { $0.id == "setting:wallpaper" })
         )
 
         XCTAssertEqual(
@@ -109,7 +79,7 @@ final class IconCacheTests: XCTestCase {
             ]
         )
 
-        let entries = SettingsCatalog.searchEntries
+        let entries = SystemSettingsTestFixtures.entries
         let passwords = try XCTUnwrap(entries.first(where: { $0.id == "setting:passwords" }))
         let screenSaver = try XCTUnwrap(entries.first(where: { $0.id == "setting:screen-saver" }))
 
@@ -161,7 +131,7 @@ final class IconCacheTests: XCTestCase {
 
     func testDuplicateKeyboardRoutesShareOneNativeSource() throws {
         let requests = SystemSettingsIconRequestMapper.requests(
-            for: SettingsCatalog.searchEntries
+            for: SystemSettingsTestFixtures.entries
         )
         let groups = SystemSettingsIconRequestMapper.iconKeysBySource(
             for: requests,
@@ -203,7 +173,7 @@ final class IconCacheTests: XCTestCase {
 
     func testBatteryRequestUsesInjectedLaptopOrDesktopGraphicIcon() throws {
         let request = try XCTUnwrap(
-            SystemSettingsIconRequestMapper.requests(for: SettingsCatalog.searchEntries)
+            SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
                 .first(where: { $0.iconKey == "setting:battery" })
         )
         XCTAssertEqual(
@@ -230,7 +200,7 @@ final class IconCacheTests: XCTestCase {
 
     func testSelectedPowerGraphicIconDiffersFromGenericExtensionCube() async throws {
         let request = try XCTUnwrap(
-            SystemSettingsIconRequestMapper.requests(for: SettingsCatalog.searchEntries)
+            SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
                 .first(where: { $0.iconKey == "setting:battery" })
         )
 
@@ -259,7 +229,7 @@ final class IconCacheTests: XCTestCase {
     }
 
     func testInstalledCatalogExtensionIconsDoNotDuplicateKnownGenericCube() async throws {
-        let requests = SystemSettingsIconRequestMapper.requests(for: SettingsCatalog.searchEntries)
+        let requests = SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
         let urls = await SystemSettingsExtensionIndex.shared.bundleURLs(
             for: Set(requests.map(\.bundleIdentifier))
         )
@@ -288,7 +258,7 @@ final class IconCacheTests: XCTestCase {
     }
 
     func testInstalledResolverMaterializesEverySettingsRequestOnce() async throws {
-        let requests = SystemSettingsIconRequestMapper.requests(for: SettingsCatalog.searchEntries)
+        let requests = SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
         let resolution = await SystemSettingsNativeIconResolver.resolve(
             requests: requests,
             backingScale: 2
@@ -433,13 +403,13 @@ final class IconCacheTests: XCTestCase {
             startsNativeIconResolution: false
         )
 
-        for entry in SettingsCatalog.searchEntries {
+        for entry in SystemSettingsTestFixtures.entries {
             _ = cache.image(for: entry)
         }
         XCTAssertEqual(store.resolutionAttemptCount, 0)
     }
 
-    func testMultipleIconCachesStartOneSharedResolutionAttempt() {
+    func testMultipleIconCachesStartOneSharedResolutionAfterCatalogPrewarm() {
         let store = SystemSettingsNativeIconStore { _, _ in
             await Task.yield()
             return SystemSettingsNativeIconResolution(
@@ -450,9 +420,11 @@ final class IconCacheTests: XCTestCase {
 
         let first = IconCache(systemSettingsIconStore: store, backingScale: 2)
         let second = IconCache(systemSettingsIconStore: store, backingScale: 2)
+        first.prewarm(SystemSettingsTestFixtures.entries)
+        second.prewarm(SystemSettingsTestFixtures.entries)
         XCTAssertEqual(store.resolutionAttemptCount, 1)
-        _ = first.image(for: SettingsCatalog.searchEntries[0])
-        _ = second.image(for: SettingsCatalog.searchEntries[0])
+        _ = first.image(for: SystemSettingsTestFixtures.entries[0])
+        _ = second.image(for: SystemSettingsTestFixtures.entries[0])
         XCTAssertEqual(store.resolutionAttemptCount, 1)
     }
 
@@ -645,7 +617,7 @@ final class IconCacheTests: XCTestCase {
             LauncherLiquidGlassMetrics.resultIconSize
         )
         XCTAssertEqual(LauncherLiquidGlassMetrics.resultIconSize, 50)
-        XCTAssertEqual(LauncherLiquidGlassMetrics.resultActionIconOpticalSize, 40)
+        XCTAssertEqual(LauncherLiquidGlassMetrics.resultActionIconOpticalSize, 30)
         XCTAssertEqual(LauncherLiquidGlassMetrics.resultClipboardIconOpticalSize, 48)
     }
 
@@ -686,12 +658,45 @@ final class IconCacheTests: XCTestCase {
             XCTAssertEqual(
                 imageView.frame.size,
                 NSSize(
-                    width: ResultRowView.noResultsIconSize,
-                    height: ResultRowView.noResultsIconSize
+                    width: ResultRowView.statusIconSize,
+                    height: ResultRowView.statusIconSize
                 ),
                 design.title
             )
         }
+    }
+
+    func testLiquidCalculatorIncompleteStatusUsesCompactIcon() throws {
+        _ = NSApplication.shared
+        let entry = SearchEntry(
+            id: "status:calculator-incomplete",
+            kind: .status,
+            title: "Continue typing",
+            iconKey: "calculator",
+            target: .none
+        )
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .liquidGlass),
+            reducedTransparency: false,
+            increasedContrast: false
+        )
+        let row = ResultRowView()
+        row.frame = NSRect(x: 0, y: 0, width: theme.width, height: theme.rowHeight)
+        row.configure(
+            result: RankedResult(entry: entry, score: 0),
+            icon: IconCache(startsNativeIconResolution: false).image(for: entry),
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.layoutSubtreeIfNeeded()
+
+        let imageView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        XCTAssertEqual(
+            imageView.frame.size,
+            NSSize(width: ResultRowView.statusIconSize, height: ResultRowView.statusIconSize)
+        )
     }
 
     func testLiquidRowNormalizationChangesVisibleSymbolSizeWithoutMovingText() throws {
@@ -760,7 +765,7 @@ final class IconCacheTests: XCTestCase {
         let clipboardBitmap = try renderedMinimalIconBitmap(try XCTUnwrap(iconView.image))
         let clipboardBounds = try XCTUnwrap(nonTransparentBounds(in: clipboardBitmap))
 
-        XCTAssertEqual(actionFrame.size, NSSize(width: 40, height: 40))
+        XCTAssertEqual(actionFrame.size, NSSize(width: 30, height: 30))
         XCTAssertEqual(clipboardFrame.size, NSSize(width: 50, height: 50))
         XCTAssertEqual(
             actionFrame.midX,
@@ -773,15 +778,12 @@ final class IconCacheTests: XCTestCase {
             LauncherLiquidGlassMetrics.resultActionIconOpticalSize * 2,
             accuracy: 2
         )
-        // Clipboard's 48-point full-source fit compensates for the SF Symbol bearings so its
-        // visible ink matches a trimmed 40-point action symbol without cropping either edge.
-        XCTAssertEqual(
+        XCTAssertGreaterThan(
             max(clipboardBounds.width, clipboardBounds.height),
             max(actionBounds.width, actionBounds.height),
-            accuracy: 3
+            "Non-action result icons keep their existing visual size"
         )
         XCTAssertEqual(titleLabel.frame.minX, actionTitleX, accuracy: 0.001)
-        XCTAssertGreaterThan(actionBounds.width, clipboardBounds.width)
     }
 
     func testMinimalRowNormalizationRendersTheRequestedNativeAndActionPixelBounds() throws {
@@ -845,7 +847,7 @@ final class IconCacheTests: XCTestCase {
         let actionBounds = try XCTUnwrap(nonTransparentBounds(in: actionBitmap))
 
         XCTAssertEqual(max(nativeBounds.width, nativeBounds.height), 70, accuracy: 1)
-        XCTAssertEqual(max(actionBounds.width, actionBounds.height), 44, accuracy: 2)
+        XCTAssertEqual(max(actionBounds.width, actionBounds.height), 33, accuracy: 2)
         XCTAssertEqual(nativeIconFrame.size, NSSize(width: 35, height: 35))
         XCTAssertEqual(actionIconFrame.size, NSSize(width: 30, height: 30))
         XCTAssertEqual(nativeIconFrame.midX, actionIconFrame.midX, accuracy: 0.001)

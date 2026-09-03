@@ -17,7 +17,7 @@ enum NativeIconCatalog {
         "audio.toggleMute": ["speaker.slash.fill", "speaker.slash", "speaker"],
         "audio.volumeUp": ["speaker.plus.fill", "speaker.wave.3.fill", "speaker.plus", "speaker.wave.3", "speaker"],
         "audio.volumeDown": ["speaker.minus.fill", "speaker.wave.1.fill", "speaker.minus", "speaker.wave.1", "speaker"],
-        "screensaver.start": ["tv.fill", "display", "tv.fill", "display", "rectangle"],
+        "screensaver.start": ["tv.fill", "display", "rectangle"],
         "window.leftHalf": ["rectangle.lefthalf.inset.filled"],
         "window.rightHalf": ["rectangle.righthalf.inset.filled"],
         "window.topHalf": ["rectangle.tophalf.inset.filled"],

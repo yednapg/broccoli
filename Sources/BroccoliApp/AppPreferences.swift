@@ -12,8 +12,6 @@ final class AppPreferences: ObservableObject {
         static let recentItemsEnabled = "search.recentItemsEnabled"
         static let adaptiveRankingEnabled = "search.adaptiveRankingEnabled"
         static let hotKey = "shortcut.configuration"
-        static let onboardingCompleted = "onboarding.completed"
-        static let menuBarIconEnabled = "menuBar.iconEnabled"
         static let appearance = "appearance.configuration.v1"
         static let fileSearch = "files.configuration.v1"
         static let calculator = "calculator.configuration.v1"
@@ -30,8 +28,6 @@ final class AppPreferences: ObservableObject {
     @Published var recentItemsEnabled: Bool { didSet { save(recentItemsEnabled, Key.recentItemsEnabled) } }
     @Published var adaptiveRankingEnabled: Bool { didSet { save(adaptiveRankingEnabled, Key.adaptiveRankingEnabled) } }
     @Published var hotKey: HotKeyConfiguration { didSet { saveHotKey() } }
-    @Published var onboardingCompleted: Bool { didSet { save(onboardingCompleted, Key.onboardingCompleted) } }
-    @Published var menuBarIconEnabled: Bool { didSet { save(menuBarIconEnabled, Key.menuBarIconEnabled) } }
     @Published var appearance: LauncherAppearancePreferences {
         didSet {
             save(appearance, Key.appearance)
@@ -51,24 +47,19 @@ final class AppPreferences: ObservableObject {
             Key.applicationsEnabled: true,
             Key.settingsEnabled: true,
             Key.actionsEnabled: true,
-            Key.recentItemsEnabled: true,
+            Key.recentItemsEnabled: false,
             Key.adaptiveRankingEnabled: true,
-            Key.onboardingCompleted: false,
-            Key.menuBarIconEnabled: true,
         ])
         applicationsEnabled = defaults.bool(forKey: Key.applicationsEnabled)
         settingsEnabled = defaults.bool(forKey: Key.settingsEnabled)
         actionsEnabled = defaults.bool(forKey: Key.actionsEnabled)
         recentItemsEnabled = defaults.bool(forKey: Key.recentItemsEnabled)
         adaptiveRankingEnabled = defaults.bool(forKey: Key.adaptiveRankingEnabled)
-        let wasOnboarded = defaults.bool(forKey: Key.onboardingCompleted)
-        onboardingCompleted = wasOnboarded
-        menuBarIconEnabled = defaults.bool(forKey: Key.menuBarIconEnabled)
         var loadedAppearance = Self.load(
             LauncherAppearancePreferences.self,
             key: Key.appearance,
             defaults: defaults
-        ) ?? .defaults(design: wasOnboarded ? .minimal : .liquidGlass)
+        ) ?? .defaults(design: .liquidGlass)
         loadedAppearance.sanitize()
         appearance = loadedAppearance
         fileSearch = Self.load(FileSearchPreferences.self, key: Key.fileSearch, defaults: defaults)

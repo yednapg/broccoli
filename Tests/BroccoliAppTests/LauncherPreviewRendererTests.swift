@@ -12,7 +12,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
         XCTAssertEqual(fixture.results.map(\.entry.kind), [.application, .systemSetting, .action])
         XCTAssertEqual(fixture.results.map(\.entry.id), [
             "preview:application:screen-sharing",
-            "setting:screen-saver",
+            "setting:com.apple.ScreenSaver-Settings.extension",
             "action:screensaver.start",
         ])
     }
@@ -178,7 +178,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
                 surface.subviews.compactMap { $0 as? NSGlassEffectView }.count,
                 1
             )
-            XCTAssertEqual(glass.style, .clear)
+            XCTAssertEqual(glass.style, .regular)
             XCTAssertEqual(
                 glass.cornerRadius,
                 LauncherLiquidGlassSurfaceView.collapsedHeight / 2
@@ -201,7 +201,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
             surface.frame.size.height = 184
             surface.layoutSubtreeIfNeeded()
             XCTAssertEqual(glass.frame, surface.bounds)
-            XCTAssertEqual(glass.style, .clear)
+            XCTAssertEqual(glass.style, .regular)
             XCTAssertEqual(glass.cornerRadius, LauncherLiquidGlassSurfaceView.expandedCornerRadius)
         } else {
             let fallback = try XCTUnwrap(
@@ -357,7 +357,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
         let revision = renderer.environmentRevision
         XCTAssertEqual(renderer.cachedImageCount, 1)
 
-        renderer.nativePaneIconDidLoad("setting:screen-saver")
+        renderer.nativePaneIconDidLoad("setting:com.apple.ScreenSaver-Settings.extension")
         XCTAssertEqual(renderer.cachedImageCount, 0)
         XCTAssertEqual(renderer.environmentRevision, revision + 1)
 
@@ -379,73 +379,6 @@ final class LauncherPreviewRendererTests: XCTestCase {
             _ = await renderer.image(for: .defaults(design: design))
         }
         XCTAssertEqual(renderer.cachedImageCount, 1)
-    }
-
-    func testClassicScreenshotBodyContainsResultsAndContextualPreview() async throws {
-        _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer()
-        renderer.beginSettingsSession()
-        defer { renderer.endSettingsSession() }
-
-        var preferences = LauncherAppearancePreferences.defaults(design: .yosemiteClassic)
-        preferences.mode = .dark
-        let rendered = await renderer.image(for: preferences)
-        let image = try XCTUnwrap(rendered)
-        let bitmap = try XCTUnwrap(
-            image.representations.compactMap { $0 as? NSBitmapImageRep }.first
-        )
-
-        let scaleX = CGFloat(bitmap.pixelsWide) / image.size.width
-        let scaleY = CGFloat(bitmap.pixelsHigh) / image.size.height
-        let descriptor = LauncherThemeController().descriptor(for: preferences)
-        let bodyHeight = image.size.height - descriptor.searchHeight
-        let leftBody = NSRect(
-            x: 4 * scaleX,
-            y: 4 * scaleY,
-            width: (image.size.width - descriptor.previewWidth - 12) * scaleX,
-            height: (bodyHeight - 8) * scaleY
-        )
-        let rightBody = NSRect(
-            x: (image.size.width - descriptor.previewWidth + 8) * scaleX,
-            y: 4 * scaleY,
-            width: (descriptor.previewWidth - 16) * scaleX,
-            height: (bodyHeight - 8) * scaleY
-        )
-
-        XCTAssertGreaterThan(
-            highContrastEdgeCount(in: bitmap, region: leftBody),
-            100,
-            "Classic results pane must render row icons, titles, and selection"
-        )
-        XCTAssertGreaterThan(
-            highContrastEdgeCount(in: bitmap, region: rightBody),
-            40,
-            "Classic contextual pane must render its icon and labels"
-        )
-    }
-
-    private func highContrastEdgeCount(in bitmap: NSBitmapImageRep, region: NSRect) -> Int {
-        let minX = max(1, Int(region.minX))
-        let maxX = min(bitmap.pixelsWide - 1, Int(region.maxX))
-        let minY = max(1, Int(region.minY))
-        let maxY = min(bitmap.pixelsHigh - 1, Int(region.maxY))
-        var count = 0
-
-        for y in stride(from: minY, to: maxY, by: 2) {
-            for x in stride(from: minX, to: maxX, by: 2) {
-                guard let pixel = bitmap.colorAt(x: x, y: y),
-                      let neighbor = bitmap.colorAt(x: x + 1, y: y) else { continue }
-                let delta = abs(pixel.redComponent - neighbor.redComponent)
-                    + abs(pixel.greenComponent - neighbor.greenComponent)
-                    + abs(pixel.blueComponent - neighbor.blueComponent)
-                // Native SF Symbols and label text are antialiased against an adaptive
-                // material, so their per-pixel edge is intentionally subtle. Flat surface
-                // pixels have no horizontal delta; a small nonzero floor detects rendered
-                // ink without depending on one display profile's antialiasing strength.
-                if delta > 0.04 { count += 1 }
-            }
-        }
-        return count
     }
 
     private func luminance(_ color: NSColor) -> CGFloat {

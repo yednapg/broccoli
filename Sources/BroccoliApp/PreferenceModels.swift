@@ -3,15 +3,24 @@ import Foundation
 enum LauncherDesign: String, Codable, CaseIterable, Identifiable, Sendable {
     case minimal
     case liquidGlass
-    case yosemiteClassic
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .minimal: "Minimal"
         case .liquidGlass: "Liquid Glass"
-        case .yosemiteClassic: "Yosemite Classic"
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = Self(rawValue: rawValue) ?? .liquidGlass
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 

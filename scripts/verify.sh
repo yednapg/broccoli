@@ -24,9 +24,25 @@ UNIVERSAL="${VERIFY_UNIVERSAL}" zsh "${SCRIPT_DIR}/build-app.sh"
 
 APP_PATH="${PROJECT_DIR}/build/Broccoli.app"
 EXECUTABLE_PATH="${APP_PATH}/Contents/MacOS/Broccoli"
+ASSET_CATALOG_PATH="${APP_PATH}/Contents/Resources/Assets.car"
 
 print "==> Verifying application signature"
 codesign --verify --deep --strict "${APP_PATH}"
+
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${APP_PATH}/Contents/Info.plist")" != "Broccoli" ]]; then
+  print -u2 "Expected CFBundleIconName to reference the adaptive Broccoli icon."
+  exit 1
+fi
+if [[ ! -f "${ASSET_CATALOG_PATH}" ]]; then
+  print -u2 "Expected the application bundle to contain an adaptive icon asset catalog."
+  exit 1
+fi
+ASSET_CATALOG_INFO="$(xcrun assetutil --info "${ASSET_CATALOG_PATH}")"
+if [[ "${ASSET_CATALOG_INFO}" != *'"Appearance" : "NSAppearanceNameAqua"'* \
+      || "${ASSET_CATALOG_INFO}" != *'"Appearance" : "NSAppearanceNameDarkAqua"'* ]]; then
+  print -u2 "Expected the Broccoli asset catalog to contain Light and Dark icon renditions."
+  exit 1
+fi
 
 BUILT_ARCHITECTURES="$(lipo -archs "${EXECUTABLE_PATH}")"
 if [[ "${VERIFY_UNIVERSAL}" == "1" ]]; then

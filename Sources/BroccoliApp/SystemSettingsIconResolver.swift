@@ -113,7 +113,12 @@ enum SystemSettingsIconRequestMapper {
     }
 
     static func requests(for entries: [SearchEntry]) -> [SystemSettingsIconRequest] {
-        entries.compactMap { request(for: $0) }
+        var seen = Set<String>()
+        return entries.compactMap { entry in
+            guard let request = request(for: entry),
+                  seen.insert(request.iconKey).inserted else { return nil }
+            return request
+        }
     }
 
     /// Selects the extension whenever it is installed. The application is only a public native

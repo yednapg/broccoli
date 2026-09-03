@@ -18,6 +18,7 @@ public struct SearchEngine: Sendable {
     ) -> [RankedResult] {
         let normalizedQuery = SearchNormalizer.normalize(query)
         let compactQuery = SearchNormalizer.compact(query)
+        let queryTokens = SearchNormalizer.tokens(query)
         var best: [Candidate] = []
         best.reserveCapacity(limit)
 
@@ -42,7 +43,17 @@ public struct SearchEngine: Sendable {
         }
 
         let candidateIndices: any Sequence<Int>
-        if normalizedQuery.count >= 3 {
+        if queryTokens.count > 1 {
+            let perToken = queryTokens
+                .map { candidates(for: $0, snapshot: snapshot) }
+                .sorted { $0.count < $1.count }
+            guard let first = perToken.first, !first.isEmpty else { return [] }
+            var intersection = first
+            for candidates in perToken.dropFirst() where !intersection.isEmpty {
+                intersection.formIntersection(candidates)
+            }
+            candidateIndices = intersection
+        } else if normalizedQuery.count >= 3 {
             var candidates: Set<Int> = []
             if let high = snapshot.highPrefixIndex[normalizedQuery] {
                 candidates.formUnion(high)
@@ -95,6 +106,7 @@ public struct SearchEngine: Sendable {
             guard let baseScore = matchScore(
                 query: normalizedQuery,
                 compactQuery: compactQuery,
+                queryTokens: queryTokens,
                 entry: entry
             ) else { continue }
             let runningBonus = entry.isRunning ? 20 : 0
@@ -116,11 +128,43 @@ public struct SearchEngine: Sendable {
         return best.map(\.result)
     }
 
-    private func matchScore(query: String, compactQuery: String, entry: SearchEntry) -> Int? {
+    private func matchScore(
+        query: String,
+        compactQuery: String,
+        queryTokens: [String],
+        entry: SearchEntry
+    ) -> Int? {
         if entry.normalizedTitle == query { return 1_000 }
         if !compactQuery.isEmpty, entry.compactTitle == compactQuery { return 1_000 }
         if entry.normalizedTitle.hasPrefix(query) { return 800 }
         if !compactQuery.isEmpty, entry.compactTitle.hasPrefix(compactQuery) { return 800 }
+        // A bare number is much more likely to be the beginning of a calculation than a
+        // request for every catalog item containing that digit. Keep genuinely numeric app
+        // names (for example, 1Password) searchable through the direct-prefix checks above,
+        // but do not surface incidental matches such as the System Settings term “802.1X”.
+        if query.allSatisfy(\.isNumber) { return nil }
+        if queryTokens.count > 1 {
+            let keywordTokens = entry.keywords.flatMap(SearchNormalizer.tokens)
+            var score = 400
+            for token in queryTokens {
+                if entry.tokens.contains(token) {
+                    score += 150
+                } else if entry.tokens.contains(where: { $0.hasPrefix(token) }) {
+                    score += 130
+                } else if entry.normalizedTitle.contains(token) {
+                    score += 105
+                } else if keywordTokens.contains(token) {
+                    score += 90
+                } else if keywordTokens.contains(where: { $0.hasPrefix(token) }) {
+                    score += 75
+                } else if entry.keywords.contains(where: { $0.contains(token) }) {
+                    score += 60
+                } else {
+                    return nil
+                }
+            }
+            return score
+        }
         for token in entry.tokens where token.hasPrefix(query) { return 650 }
         if entry.acronym.hasPrefix(query) { return 600 }
         if entry.normalizedTitle.contains(query) { return 450 }
@@ -132,6 +176,22 @@ public struct SearchEngine: Sendable {
         if !compactQuery.isEmpty,
            entry.compactKeywords.contains(where: { $0.contains(compactQuery) }) { return 250 }
         return nil
+    }
+
+    private func candidates(for term: String, snapshot: SearchSnapshot) -> Set<Int> {
+        var result = Set(snapshot.highPrefixIndex[term] ?? [])
+        result.formUnion(snapshot.keywordPrefixIndex[term] ?? [])
+        if term.count >= 3 {
+            result.formUnion(intersectedTrigramCandidates(
+                query: term,
+                index: snapshot.titleTrigramIndex
+            ))
+            result.formUnion(intersectedTrigramCandidates(
+                query: term,
+                index: snapshot.keywordTrigramIndex
+            ))
+        }
+        return result
     }
 
     private func insert(_ result: Candidate, into best: inout [Candidate], limit: Int) {

@@ -109,6 +109,9 @@ public struct SearchSnapshot: Sendable {
             var entryKeywordTrigrams: Set<String> = []
             for keyword in entry.keywords {
                 entryKeywordPrefixes.formUnion(Self.prefixes(of: keyword))
+                for token in SearchNormalizer.tokens(keyword) {
+                    entryKeywordPrefixes.formUnion(Self.prefixes(of: token))
+                }
                 entryKeywordTrigrams.formUnion(Self.trigrams(in: keyword))
             }
             for keyword in entry.compactKeywords {
@@ -202,7 +205,7 @@ public struct SearchPreferences: Sendable {
         applicationsEnabled: Bool = true,
         settingsEnabled: Bool = true,
         actionsEnabled: Bool = true,
-        recentItemsEnabled: Bool = true,
+        recentItemsEnabled: Bool = false,
         adaptiveRankingEnabled: Bool = true,
         alwaysIncludedEntryIDs: Set<String> = []
     ) {

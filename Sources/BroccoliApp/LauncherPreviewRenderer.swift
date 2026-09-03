@@ -118,8 +118,18 @@ struct LauncherPreviewFixture: Sendable {
                 bundleIdentifier: "com.apple.ScreenSharing"
             )
         )
-        let setting = SettingsCatalog.definitions.first(where: { $0.id == "screen-saver" })!
-            .searchEntry
+        let screenSaverBundleIdentifier = "com.apple.ScreenSaver-Settings.extension"
+        let setting = SearchEntry(
+            id: "setting:\(screenSaverBundleIdentifier)",
+            kind: .systemSetting,
+            title: "Screen Saver",
+            subtitle: "System Settings → Screen Saver",
+            keywords: ["screensaver", "idle"],
+            iconKey: "setting:\(screenSaverBundleIdentifier)",
+            target: .setting(
+                route: "x-apple.systempreferences:\(screenSaverBundleIdentifier)"
+            )
+        )
         let action = ActionRegistry.definition(id: "screensaver.start")!.searchEntry
 
         return Self(
@@ -516,11 +526,8 @@ final class LauncherPreviewIconProvider {
         }
         if let cached = applicationIcons[path] { return cached }
         guard FileManager.default.fileExists(atPath: path) else { return genericApplication }
-        guard let image = LightModeApplicationIcon.load(
-            atPath: path,
-            pointSize: 40,
-            backingScale: max(2, NSScreen.main?.backingScaleFactor ?? 2)
-        ) else { return genericApplication }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        image.size = NSSize(width: 40, height: 40)
         applicationIcons[path] = image
         return image
     }
@@ -545,9 +552,6 @@ final class LauncherPreviewContentView: NSView,
     private let searchField: NSTextField
     private let liquidGlassSurface = LauncherLiquidGlassSurfaceView(interactive: false)
     private let headerSeparator = LauncherHeaderSeparatorView()
-    private let previewIcon = NSImageView()
-    private let previewTitle = NSTextField(labelWithString: "")
-    private let previewSubtitle = NSTextField(wrappingLabelWithString: "")
     private let preparedRows: [ResultRowView]
     private var displayedResults: [RankedResult]
     private var selectedRow = 0
@@ -630,7 +634,6 @@ final class LauncherPreviewContentView: NSView,
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         refreshRows()
         updateHeaderSeparatorVisibility()
-        updateClassicPreview()
         return true
     }
 
@@ -694,14 +697,14 @@ final class LauncherPreviewContentView: NSView,
             material.setContentView(content)
             surface = material
             surfaceManagesContent = true
-        case .vibrancy, .classic:
+        case .vibrancy:
             let effect = NSVisualEffectView()
             // This renderer is deliberately detached from a window, so it has no background
             // window for `.behindWindow` to sample. Use the same native material with local
             // compositing; the explicit production-height constraint below owns geometry.
             effect.blendingMode = .withinWindow
             effect.state = .active
-            effect.material = descriptor.surface == .classic ? .sidebar : .hudWindow
+            effect.material = .underWindowBackground
             surface = effect
             surfaceManagesContent = false
         case .opaque:
@@ -838,33 +841,10 @@ final class LauncherPreviewContentView: NSView,
             ),
         ]
 
-        if descriptor.showsPreview {
-            let divider = NSBox()
-            divider.boxType = .separator
-            divider.translatesAutoresizingMaskIntoConstraints = false
-            let preview = makeClassicPreview()
-            content.addSubview(divider)
-            content.addSubview(preview)
-            constraints += [
-                scrollView.trailingAnchor.constraint(equalTo: divider.leadingAnchor),
-                divider.widthAnchor.constraint(equalToConstant: 1),
-                divider.topAnchor.constraint(equalTo: scrollView.topAnchor),
-                divider.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
-                preview.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
-                preview.trailingAnchor.constraint(
-                    equalTo: content.trailingAnchor,
-                    constant: -descriptor.resultHorizontalInset
-                ),
-                preview.topAnchor.constraint(equalTo: scrollView.topAnchor),
-                preview.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
-                preview.widthAnchor.constraint(equalToConstant: descriptor.previewWidth),
-            ]
-        } else {
-            constraints.append(resultsChrome.trailingAnchor.constraint(
-                equalTo: content.trailingAnchor,
-                constant: -descriptor.resultHorizontalInset
-            ))
-        }
+        constraints.append(resultsChrome.trailingAnchor.constraint(
+            equalTo: content.trailingAnchor,
+            constant: -descriptor.resultHorizontalInset
+        ))
         if descriptor.showsHeaderSeparator {
             headerSeparator.translatesAutoresizingMaskIntoConstraints = false
             headerSeparator.color = descriptor.headerSeparatorColor
@@ -899,7 +879,6 @@ final class LauncherPreviewContentView: NSView,
         if !displayedResults.isEmpty {
             tableView.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
         }
-        updateClassicPreview()
         layoutSubtreeIfNeeded()
         layoutTableDocument()
     }
@@ -940,7 +919,6 @@ final class LauncherPreviewContentView: NSView,
         selectedRow = tableView.selectedRow
         refreshRows()
         updateHeaderSeparatorVisibility()
-        updateClassicPreview()
         layoutTableDocument()
     }
 
@@ -972,7 +950,6 @@ final class LauncherPreviewContentView: NSView,
             tableView.deselectAll(nil)
         }
         refreshRows()
-        updateClassicPreview()
         layoutTableDocument()
     }
 
@@ -991,50 +968,4 @@ final class LauncherPreviewContentView: NSView,
         }
     }
 
-    private func makeClassicPreview() -> NSView {
-        let view = NSView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        previewIcon.translatesAutoresizingMaskIntoConstraints = false
-        previewIcon.imageScaling = .scaleProportionallyUpOrDown
-        previewTitle.translatesAutoresizingMaskIntoConstraints = false
-        previewTitle.font = .systemFont(ofSize: 19, weight: .semibold)
-        previewTitle.alignment = .center
-        previewTitle.lineBreakMode = .byTruncatingTail
-        previewSubtitle.translatesAutoresizingMaskIntoConstraints = false
-        previewSubtitle.font = .systemFont(ofSize: 12)
-        previewSubtitle.textColor = .secondaryLabelColor
-        previewSubtitle.alignment = .center
-        previewSubtitle.maximumNumberOfLines = 5
-
-        view.addSubview(previewIcon)
-        view.addSubview(previewTitle)
-        view.addSubview(previewSubtitle)
-        NSLayoutConstraint.activate([
-            previewIcon.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            previewIcon.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            previewIcon.widthAnchor.constraint(equalToConstant: 64),
-            previewIcon.heightAnchor.constraint(equalToConstant: 64),
-            previewTitle.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
-            previewTitle.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
-            previewTitle.topAnchor.constraint(equalTo: previewIcon.bottomAnchor, constant: 8),
-            previewSubtitle.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
-            previewSubtitle.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
-            previewSubtitle.topAnchor.constraint(equalTo: previewTitle.bottomAnchor, constant: 4),
-        ])
-        return view
-    }
-
-    private func updateClassicPreview() {
-        guard descriptor.showsPreview else { return }
-        guard displayedResults.indices.contains(selectedRow) else {
-            previewIcon.image = nil
-            previewTitle.stringValue = "No Preview"
-            previewSubtitle.stringValue = "Try another fixture query."
-            return
-        }
-        let selected = displayedResults[selectedRow].entry
-        previewIcon.image = iconProvider.image(for: selected)
-        previewTitle.stringValue = selected.title
-        previewSubtitle.stringValue = selected.subtitle
-    }
 }

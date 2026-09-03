@@ -23,6 +23,17 @@ final class CalculatorEngineTests: XCTestCase {
         XCTAssertNil(calculator.evaluate("42", locale: locale))
     }
 
+    func testOneAccidentalEqualsAtAnExpressionBoundaryIsAccepted() {
+        XCTAssertEqual(calculator.evaluate("10 + 1 =", locale: locale)?.copyText, "11")
+        XCTAssertEqual(calculator.evaluate("10 += 1", locale: locale)?.copyText, "11")
+        XCTAssertEqual(calculator.evaluate("= 10 + 1", locale: locale)?.copyText, "11")
+    }
+
+    func testEqualsInsideOperandsOrRepeatedEqualsIsInvalid() {
+        XCTAssertEqual(calculator.classify("1 = 1", locale: locale), .invalid)
+        XCTAssertEqual(calculator.classify("10 + 1 ==", locale: locale), .invalid)
+    }
+
     func testLengthAndTemperatureConversions() {
         XCTAssertEqual(calculator.evaluate("10 km in mi", locale: locale)?.copyText, "6.21371192237")
         XCTAssertEqual(calculator.evaluate("32 f in c", locale: locale)?.copyText, "0")
@@ -48,6 +59,8 @@ final class CalculatorEngineTests: XCTestCase {
         XCTAssertTrue(calculator.looksLikeIncompleteExpression("= sqrt("))
         XCTAssertFalse(calculator.looksLikeIncompleteExpression("visual studio code"))
         XCTAssertFalse(calculator.looksLikeIncompleteExpression("version 2"))
+        XCTAssertEqual(calculator.classify("2 +", locale: locale), .incomplete)
+        XCTAssertEqual(calculator.classify("2 + )", locale: locale), .invalid)
     }
 
     func testFormattingPreferencesAndLocale() {
