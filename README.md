@@ -1,5 +1,7 @@
 # Broccoli
 
+Release, Sparkle, notarization, and Homebrew procedures are documented in [docs/releasing.md](docs/releasing.md).
+
 A fast, native macOS launcher.
 
 ## Build

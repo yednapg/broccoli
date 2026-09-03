@@ -14,3 +14,5 @@ DerivedData/
 *.dSYM
 *.dmg
 Support/Release.xcconfig
+/.release-work/
+/release-output/

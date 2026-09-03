@@ -6,26 +6,31 @@ PROJECT_DIR="${SCRIPT_DIR:h}"
 source "${SCRIPT_DIR}/select-xcode.sh"
 
 CONFIGURATION="${CONFIGURATION:-release}"
-UNIVERSAL="${UNIVERSAL:-1}"
-APP_DIR="${PROJECT_DIR}/build/Broccoli.app"
+APP_DIR="${BROCCOLI_APP_DIR:-${PROJECT_DIR}/build/Broccoli.app}"
+if [[ "${APP_DIR}" != /*/Broccoli.app ]]; then
+  print -u2 "BROCCOLI_APP_DIR must be an absolute path ending in /Broccoli.app."
+  exit 2
+fi
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
+SPARKLE_FRAMEWORK="${PROJECT_DIR}/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 
 cd "${PROJECT_DIR}"
-ARCH_ARGUMENTS=()
-if [[ "${UNIVERSAL}" == "1" ]]; then
-  ARCH_ARGUMENTS=(--arch arm64 --arch x86_64)
-fi
+ARCH_ARGUMENTS=(--arch arm64)
 swift build -c "${CONFIGURATION}" --product Broccoli "${ARCH_ARGUMENTS[@]}"
 BIN_DIR="$(swift build -c "${CONFIGURATION}" "${ARCH_ARGUMENTS[@]}" --show-bin-path)"
 
-if [[ "${APP_DIR}" == "${PROJECT_DIR}/build/Broccoli.app" ]]; then
-  rm -rf -- "${APP_DIR}"
-fi
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+rm -rf -- "${APP_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 cp "${BIN_DIR}/Broccoli" "${MACOS_DIR}/Broccoli"
 cp "${PROJECT_DIR}/Support/Info.plist" "${CONTENTS_DIR}/Info.plist"
+if [[ ! -d "${SPARKLE_FRAMEWORK}" ]]; then
+  print -u2 "Sparkle.framework 2.9.6 was not resolved at the expected SwiftPM artifact path."
+  exit 1
+fi
+ditto "${SPARKLE_FRAMEWORK}" "${FRAMEWORKS_DIR}/Sparkle.framework"
 ICON_COMPOSER_DOCUMENT="${PROJECT_DIR}/Support/Broccoli.icon"
 if [[ -d "${ICON_COMPOSER_DOCUMENT}" ]] && ACTOOL="$(xcrun --find actool 2>/dev/null)"; then
   ICON_PARTIAL_INFO="${CONTENTS_DIR}/BroccoliIconInfo.plist"
@@ -59,9 +64,25 @@ fi
 if [[ -n "${BROCCOLI_BUILD_NUMBER:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BROCCOLI_BUILD_NUMBER}" "${CONTENTS_DIR}/Info.plist"
 fi
+if [[ -n "${BROCCOLI_BUNDLE_ID:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BROCCOLI_BUNDLE_ID}" "${CONTENTS_DIR}/Info.plist"
+fi
+if [[ -n "${BROCCOLI_FEED_URL:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${BROCCOLI_FEED_URL}" "${CONTENTS_DIR}/Info.plist"
+fi
+if [[ -n "${BROCCOLI_SPARKLE_PUBLIC_KEY:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${BROCCOLI_SPARKLE_PUBLIC_KEY}" "${CONTENTS_DIR}/Info.plist"
+fi
+if [[ "${BROCCOLI_UPDATE_ENV:-production}" == "local" ]]; then
+  LOCAL_BUNDLE_ID="${BROCCOLI_BUNDLE_ID:-dev.gauravpandey.broccoli.updatetest}"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${LOCAL_BUNDLE_ID}" "${CONTENTS_DIR}/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "${CONTENTS_DIR}/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "${CONTENTS_DIR}/Info.plist"
+fi
+ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${CONTENTS_DIR}/Info.plist")"
 IDENTITY="${CODE_SIGN_IDENTITY:--}"
 ENTITLEMENTS="${PROJECT_DIR}/Support/Broccoli.entitlements"
-SIGNING_OPTIONS=(--force --deep --options runtime)
+SIGNING_OPTIONS=(--force --options runtime)
 APP_SIGNING_OPTIONS=(--force --options runtime)
 if [[ "${IDENTITY}" == "-" ]]; then
   ENTITLEMENTS="${PROJECT_DIR}/Support/BroccoliDevelopment.entitlements"
@@ -80,9 +101,44 @@ if [[ "${IDENTITY}" == "-" ]]; then
   # Broccoli builds a stable app-level requirement so the window-management
   # permission survives rebuilds.
   APP_SIGNING_OPTIONS+=(
-    --requirements '=designated => identifier "dev.gauravpandey.broccoli"'
+    --requirements "=designated => identifier \"${ACTUAL_BUNDLE_ID}\""
   )
 fi
+
+if [[ "${BROCCOLI_DISTRIBUTION:-0}" == "1" ]]; then
+  if [[ "${IDENTITY}" == "-" ]]; then
+    print -u2 "Distribution builds require CODE_SIGN_IDENTITY to be a Developer ID Application identity."
+    exit 1
+  fi
+  if [[ "${BROCCOLI_BUNDLE_ID:-dev.gauravpandey.broccoli}" != "dev.gauravpandey.broccoli" ]]; then
+    print -u2 "Distribution builds must use the permanent dev.gauravpandey.broccoli bundle identifier."
+    exit 1
+  fi
+  if [[ -z "${BROCCOLI_SPARKLE_PUBLIC_KEY:-}" || "${BROCCOLI_SPARKLE_PUBLIC_KEY}" == "CONFIGURE_AT_BUILD_TIME" ]]; then
+    print -u2 "Distribution builds require BROCCOLI_SPARKLE_PUBLIC_KEY."
+    exit 1
+  fi
+  if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.disable-library-validation' "${ENTITLEMENTS}" >/dev/null 2>&1; then
+    print -u2 "Production entitlements must not disable library validation."
+    exit 1
+  fi
+fi
+
+# Sparkle contains independently signed helpers. Sign nested code from the inside out;
+# never use --deep because it can conceal a missed or incorrectly entitled component.
+SPARKLE_VERSION_DIR="${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B"
+for NESTED_COMPONENT in \
+  "${SPARKLE_VERSION_DIR}/XPCServices/Downloader.xpc" \
+  "${SPARKLE_VERSION_DIR}/XPCServices/Installer.xpc" \
+  "${SPARKLE_VERSION_DIR}/Autoupdate" \
+  "${SPARKLE_VERSION_DIR}/Updater.app"; do
+  codesign "${SIGNING_OPTIONS[@]}" \
+    --preserve-metadata=entitlements \
+    --sign "${IDENTITY}" "${NESTED_COMPONENT}"
+done
+codesign "${SIGNING_OPTIONS[@]}" \
+  --preserve-metadata=entitlements \
+  --sign "${IDENTITY}" "${FRAMEWORKS_DIR}/Sparkle.framework"
 codesign "${APP_SIGNING_OPTIONS[@]}" \
   --entitlements "${ENTITLEMENTS}" \
   --sign "${IDENTITY}" "${APP_DIR}"
