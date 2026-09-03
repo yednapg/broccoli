@@ -35,10 +35,11 @@ struct ActionDefinition: Sendable {
 }
 
 enum ActionRegistry {
+    static let appearanceToggleID = "appearance.toggleDark"
     static let recoveryActionIDs: Set<String> = ["broccoli.preferences", "broccoli.quit"]
     static let recoveryEntryIDs: Set<String> = Set(recoveryActionIDs.map { "action:\($0)" })
     static let definitions: [ActionDefinition] = [
-        ActionDefinition(id: "appearance.toggleDark", title: "Toggle Dark Mode", aliases: ["appearance", "theme", "light mode"], risk: .safe, permission: .automation, keepsPanelOpen: false),
+        ActionDefinition(id: appearanceToggleID, title: "Switch Light / Dark Mode", aliases: ["appearance", "theme", "light mode", "dark mode"], risk: .safe, permission: .automation, keepsPanelOpen: false),
         ActionDefinition(id: "audio.toggleMute", title: "Mute or Unmute", aliases: ["audio", "sound", "silent"], risk: .safe, permission: .none, keepsPanelOpen: false),
         ActionDefinition(id: "audio.volumeUp", title: "Volume Up", aliases: ["audio", "sound", "louder", "increase volume"], risk: .safe, permission: .none, keepsPanelOpen: true),
         ActionDefinition(id: "audio.volumeDown", title: "Volume Down", aliases: ["audio", "sound", "quieter", "decrease volume"], risk: .safe, permission: .none, keepsPanelOpen: true),
@@ -69,20 +70,42 @@ enum ActionRegistry {
         Set(configurableDefinitions.map(\.id))
     }
 
-    static var searchEntries: [SearchEntry] { definitions.map(\.searchEntry) }
+    static var searchEntries: [SearchEntry] {
+        searchEntries(isDarkMode: false)
+    }
+
+    static func searchEntries(isDarkMode: Bool) -> [SearchEntry] {
+        definitions.map { searchDefinition($0, isDarkMode: isDarkMode).searchEntry }
+    }
 
     static func searchEntries(
         actionsEnabled: Bool = true,
-        enabledActionIDs: Set<String>
+        enabledActionIDs: Set<String>,
+        isDarkMode: Bool = false
     ) -> [SearchEntry] {
         definitions.compactMap { definition in
             guard recoveryActionIDs.contains(definition.id)
                     || (actionsEnabled && enabledActionIDs.contains(definition.id)) else { return nil }
-            return definition.searchEntry
+            return searchDefinition(definition, isDarkMode: isDarkMode).searchEntry
         }
     }
 
     static func definition(id: String) -> ActionDefinition? {
         definitions.first { $0.id == id }
+    }
+
+    private static func searchDefinition(
+        _ definition: ActionDefinition,
+        isDarkMode: Bool
+    ) -> ActionDefinition {
+        guard definition.id == appearanceToggleID else { return definition }
+        return ActionDefinition(
+            id: definition.id,
+            title: isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode",
+            aliases: definition.aliases,
+            risk: definition.risk,
+            permission: definition.permission,
+            keepsPanelOpen: definition.keepsPanelOpen
+        )
     }
 }

@@ -3,8 +3,21 @@ import Foundation
 
 @MainActor
 enum GlobalHotKeyActionDelivery {
-    static func enqueue(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in action() }
+    enum Timing: Sendable {
+        case immediate
+        case afterCallback
+    }
+
+    static func perform(
+        _ timing: Timing,
+        action: @escaping @MainActor () -> Void
+    ) {
+        switch timing {
+        case .immediate:
+            action()
+        case .afterCallback:
+            Task { @MainActor in action() }
+        }
     }
 }
 
@@ -90,6 +103,7 @@ final class GlobalHotKey {
     private struct Binding {
         let reference: EventHotKeyRef
         let configuration: HotKeyConfiguration
+        let deliveryTiming: GlobalHotKeyActionDelivery.Timing
         let action: @MainActor () -> Void
     }
 
@@ -110,7 +124,11 @@ final class GlobalHotKey {
     }
 
     func register(_ configuration: HotKeyConfiguration) throws {
-        try register(configuration, for: "launcher") { [weak self] in
+        try register(
+            configuration,
+            for: "launcher",
+            deliveryTiming: .immediate
+        ) { [weak self] in
             self?.onPressed?()
         }
     }
@@ -120,8 +138,22 @@ final class GlobalHotKey {
         for bindingID: String,
         action: @escaping @MainActor () -> Void
     ) throws {
+        try register(
+            configuration,
+            for: bindingID,
+            deliveryTiming: .afterCallback,
+            action: action
+        )
+    }
+
+    private func register(
+        _ configuration: HotKeyConfiguration,
+        for bindingID: String,
+        deliveryTiming: GlobalHotKeyActionDelivery.Timing,
+        action: @escaping @MainActor () -> Void
+    ) throws {
         // A registered Carbon hot key is useful only when its application-level event handler
-        // exists. Installation failure used to be ignored, allowing the menu bar to claim the
+        // exists. Installation failure used to be ignored, leaving Settings to claim the
         // shortcut was ready even though no callback could ever be delivered. Retry once at the
         // point of registration and surface the real failure without creating a dead binding.
         if eventHandler == nil {
@@ -135,6 +167,7 @@ final class GlobalHotKey {
             bindings[bindingID] = Binding(
                 reference: existing.reference,
                 configuration: configuration,
+                deliveryTiming: deliveryTiming,
                 action: action
             )
             return
@@ -158,6 +191,7 @@ final class GlobalHotKey {
         bindings[bindingID] = Binding(
             reference: reference,
             configuration: configuration,
+            deliveryTiming: deliveryTiming,
             action: action
         )
         bindingIDs[identifier.id] = bindingID
@@ -209,11 +243,15 @@ final class GlobalHotKey {
                           let binding = owner.bindings[bindingID] else {
                         return OSStatus(eventNotHandledErr)
                     }
-                    // Finish consuming the Carbon event before activating Broccoli or
-                    // ordering windows. Re-entering AppKit synchronously from this callback
-                    // can make the previous app resign and reactivate in the same event turn,
-                    // which looks like Command-Space merely switched windows.
-                    GlobalHotKeyActionDelivery.enqueue(binding.action)
+                    // The launcher is a non-activating panel, so ordering it synchronously is
+                    // safe and claims keyboard focus before the next key-down can reach the
+                    // previously active application. Window-management bindings still defer:
+                    // they can activate applications or present modal permission UI and must
+                    // not re-enter AppKit from the Carbon callback.
+                    GlobalHotKeyActionDelivery.perform(
+                        binding.deliveryTiming,
+                        action: binding.action
+                    )
                     return noErr
                 }
             },

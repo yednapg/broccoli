@@ -29,6 +29,32 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(results.first?.score, 800)
     }
 
+    func testNumericOnlyQueryDoesNotMatchDigitsBuriedInCatalogText() {
+        let numericApplication = entry("one-password", "1Password")
+        let networkSetting = SearchEntry(
+            id: "setting:network:8021x",
+            kind: .systemSetting,
+            title: "802.1X",
+            target: .setting(route: nil)
+        )
+        let metadataMatch = SearchEntry(
+            id: "setting:network",
+            kind: .systemSetting,
+            title: "Network",
+            keywords: ["802.1X enterprise"],
+            target: .setting(route: nil)
+        )
+        let snapshot = SearchSnapshot(entries: [networkSetting, metadataMatch, numericApplication])
+
+        let results = engine.search(query: "1", snapshot: snapshot, usage: [:])
+
+        XCTAssertEqual(results.map(\.entry.id), ["one-password"])
+        XCTAssertEqual(
+            engine.search(query: "802", snapshot: snapshot, usage: [:]).first?.entry.id,
+            "setting:network:8021x"
+        )
+    }
+
     func testRankingRules() {
         let entries = [
             entry("exact", "Visual Studio Code"),
@@ -63,13 +89,24 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(results.first?.entry.id, "exact")
     }
 
-    func testEmptyQueryRecents() {
+    func testEmptyQueryIsBlankByDefault() {
+        let recent = entry("recent", "Chromium")
+        let results = engine.search(
+            query: "",
+            snapshot: .init(entries: [recent]),
+            usage: [recent.id: UsageRecord(selectionCount: 2, lastUsed: Date())]
+        )
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testEmptyQueryRecentsWhenEnabled() {
         let first = entry("a", "Alpha")
         let second = entry("b", "Beta")
         let results = engine.search(
             query: "",
             snapshot: .init(entries: [first, second]),
-            usage: [second.id: UsageRecord(selectionCount: 2, lastUsed: Date())]
+            usage: [second.id: UsageRecord(selectionCount: 2, lastUsed: Date())],
+            preferences: SearchPreferences(recentItemsEnabled: true)
         )
         XCTAssertEqual(results.map(\.entry.id), ["b"])
     }
@@ -99,6 +136,30 @@ final class SearchEngineTests: XCTestCase {
             usage: [:]
         )
         XCTAssertEqual(results.map(\.entry.id), ["1", "2"])
+    }
+
+    func testMultiTermQueryRequiresEveryTermButCanMatchDifferentFields() {
+        let keyboard = SearchEntry(
+            id: "keyboard-brightness",
+            kind: .systemSetting,
+            title: "Illuminate keyboard",
+            keywords: ["backlight brightness"],
+            target: .setting(route: nil)
+        )
+        let display = SearchEntry(
+            id: "display-brightness",
+            kind: .systemSetting,
+            title: "Display brightness",
+            target: .setting(route: nil)
+        )
+
+        let results = engine.search(
+            query: "keyboard brightness",
+            snapshot: .init(entries: [display, keyboard]),
+            usage: [:]
+        )
+
+        XCTAssertEqual(results.map(\.entry.id), ["keyboard-brightness"])
     }
 
     private func entry(_ id: String, _ title: String, keywords: [String] = []) -> SearchEntry {

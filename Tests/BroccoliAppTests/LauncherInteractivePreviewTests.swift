@@ -15,7 +15,10 @@ final class LauncherInteractivePreviewTests: XCTestCase {
         XCTAssertEqual(
             LauncherPreviewInteraction.results(matching: "saver", in: fixture)
                 .map(\.entry.id),
-            ["setting:screen-saver", "action:screensaver.start"]
+            [
+                "setting:com.apple.ScreenSaver-Settings.extension",
+                "action:screensaver.start",
+            ]
         )
         XCTAssertEqual(
             LauncherPreviewInteraction.results(matching: "", in: fixture).map(\.entry.id),
@@ -25,7 +28,7 @@ final class LauncherInteractivePreviewTests: XCTestCase {
 
     func testInteractiveSurfaceUsesProductionRowsAndStopsSelectionAtBounds() throws {
         _ = NSApplication.shared
-        var preferences = LauncherAppearancePreferences.defaults(design: .yosemiteClassic)
+        var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         preferences.visibleResultCount = LauncherPreviewFixture.standard.results.count
         let descriptor = LauncherThemeController().descriptor(
             for: preferences,
@@ -57,7 +60,10 @@ final class LauncherInteractivePreviewTests: XCTestCase {
         XCTAssertFalse(content.moveInteractiveSelection(up: false))
         XCTAssertEqual(content.selectedResultID, "action:screensaver.start")
         XCTAssertTrue(content.moveInteractiveSelection(up: true))
-        XCTAssertEqual(content.selectedResultID, "setting:screen-saver")
+        XCTAssertEqual(
+            content.selectedResultID,
+            "setting:com.apple.ScreenSaver-Settings.extension"
+        )
     }
 
     func testInteractiveReturnIsConsumedWithoutAnExecutionInterface() {

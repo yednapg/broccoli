@@ -8,47 +8,6 @@ private final class SendableImage: @unchecked Sendable {
     init(_ image: NSImage) { self.image = image }
 }
 
-/// Resolves macOS application artwork under Aqua and immediately flattens it to a bounded,
-/// non-template bitmap. IconServices images can otherwise choose a dark variant later when an
-/// `NSImageView` draws them inside a dark launcher, even if they were fetched in Light Mode.
-enum LightModeApplicationIcon {
-    nonisolated static func load(
-        atPath path: String,
-        pointSize: CGFloat,
-        backingScale: CGFloat
-    ) -> NSImage? {
-        guard let lightAppearance = NSAppearance(named: .aqua) else { return nil }
-        var workspaceImage: NSImage?
-        lightAppearance.performAsCurrentDrawingAppearance {
-            workspaceImage = NSWorkspace.shared.icon(forFile: path)
-        }
-        guard let workspaceImage else { return nil }
-        return materialize(
-            workspaceImage,
-            pointSize: pointSize,
-            backingScale: backingScale
-        )
-    }
-
-    nonisolated static func materialize(
-        _ workspaceImage: NSImage,
-        pointSize: CGFloat,
-        backingScale: CGFloat
-    ) -> NSImage? {
-        guard let lightAppearance = NSAppearance(named: .aqua) else { return nil }
-        var renderedImage: NSImage?
-        lightAppearance.performAsCurrentDrawingAppearance {
-            renderedImage = SystemSettingsNativeIconResolver.materializeImage(
-                workspaceImage,
-                pointSize: pointSize,
-                backingScale: backingScale
-            )?.image
-        }
-        renderedImage?.isTemplate = false
-        return renderedImage
-    }
-}
-
 @MainActor
 final class IconCache {
     private let cache = NSCache<NSString, NSImage>()
@@ -69,6 +28,7 @@ final class IconCache {
     private var thumbnailLoading: Set<String> = []
     private var prewarming: Set<String> = []
     private let backingScale: CGFloat
+    private let resolvesNativeSettingsIcons: Bool
     private let genericApplication = NSImage(
         systemSymbolName: "app",
         accessibilityDescription: "Application"
@@ -91,6 +51,7 @@ final class IconCache {
     ) {
         self.systemSettingsIconStore = systemSettingsIconStore
         self.backingScale = max(2, backingScale ?? NSScreen.main?.backingScaleFactor ?? 2)
+        resolvesNativeSettingsIcons = startsNativeIconResolution
         cache.totalCostLimit = 16 * 1_024 * 1_024
         systemSettingsIconObserver = NotificationCenter.default.addObserver(
             forName: SystemSettingsNativeIconStore.didLoadNotification,
@@ -106,18 +67,6 @@ final class IconCache {
             }
         }
         prebuildStaticIcons()
-        let requests = SystemSettingsIconRequestMapper.requests(for: SettingsCatalog.searchEntries)
-        for request in requests {
-            if let icon = systemSettingsIconStore.cachedIcon(for: request.iconKey) {
-                installNativeSystemSettingsIcon(icon, for: request.iconKey, notify: false)
-            }
-        }
-        if startsNativeIconResolution {
-            systemSettingsIconStore.ensureResolution(
-                requests: requests,
-                backingScale: self.backingScale
-            )
-        }
     }
 
     deinit {
@@ -171,6 +120,23 @@ final class IconCache {
     }
 
     func prewarm(_ entries: [SearchEntry], limit: Int = 16) {
+        let settings = entries.filter { $0.kind == .systemSetting }
+        if !settings.isEmpty {
+            prebuildSettingFallbacks(settings)
+            let requests = SystemSettingsIconRequestMapper.requests(for: settings)
+            for request in requests {
+                if let icon = systemSettingsIconStore.cachedIcon(for: request.iconKey) {
+                    installNativeSystemSettingsIcon(icon, for: request.iconKey, notify: false)
+                }
+            }
+            if resolvesNativeSettingsIcons {
+                systemSettingsIconStore.ensureResolution(
+                    requests: requests,
+                    backingScale: backingScale
+                )
+            }
+        }
+
         let prioritized = entries
             .filter { $0.kind == .application && $0.isRunning }
             .sorted {
@@ -187,18 +153,6 @@ final class IconCache {
     }
 
     private func prebuildStaticIcons() {
-        for entry in SettingsCatalog.searchEntries {
-            let icon = badgeIcon(
-                symbol: NativeIconCatalog.symbolName(for: entry),
-                semanticFallback: "gearshape",
-                nativeTemplateName: entry.iconKey == "setting:bluetooth"
-                    ? NSImage.bluetoothTemplateName
-                    : nil,
-                accent: settingAccent(entry.iconKey)
-            )
-            staticIcons[entry.iconKey] = icon
-            cache.setObject(icon, forKey: entry.iconKey as NSString, cost: 40 * 40 * 4)
-        }
         for entry in ActionRegistry.searchEntries {
             let icon = Self.actionTemplateIcon(
                 symbolCandidates: NativeIconCatalog.actionSymbols(for: entry),
@@ -210,6 +164,21 @@ final class IconCache {
                 forKey: entry.iconKey as NSString,
                 cost: Self.boundedImageCost(icon)
             )
+        }
+    }
+
+    private func prebuildSettingFallbacks(_ entries: [SearchEntry]) {
+        for entry in entries where staticIcons[entry.iconKey] == nil {
+            let icon = badgeIcon(
+                symbol: NativeIconCatalog.symbolName(for: entry),
+                semanticFallback: "gearshape",
+                nativeTemplateName: entry.title.localizedCaseInsensitiveContains("bluetooth")
+                    ? NSImage.bluetoothTemplateName
+                    : nil,
+                accent: settingAccent(entry.iconKey)
+            )
+            staticIcons[entry.iconKey] = icon
+            cache.setObject(icon, forKey: entry.iconKey as NSString, cost: 40 * 40 * 4)
         }
     }
 
@@ -415,31 +384,16 @@ final class IconCache {
             prewarming.insert(path)
         }
         let queue = interactive ? interactiveQueue : prewarmQueue
-        let backingScale = self.backingScale
         queue.async { [weak self] in
             // System applications such as Safari can be exposed through /Applications as
             // symlinks. Asking NSWorkspace for the link icon adds an alias badge; resolve only
             // for presentation while retaining the original launch/cache identity.
             let iconPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-            guard let icon = LightModeApplicationIcon.load(
-                atPath: iconPath,
-                pointSize: 40,
-                backingScale: backingScale
-            ) else {
-                Task { @MainActor [weak self] in
-                    if interactive { self?.interactiveLoading.remove(path) }
-                    else { self?.prewarming.remove(path) }
-                }
-                return
-            }
-            let box = SendableImage(icon)
+            let box = SendableImage(NSWorkspace.shared.icon(forFile: iconPath))
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.cache.setObject(
-                    box.image,
-                    forKey: path as NSString,
-                    cost: Self.boundedImageCost(box.image)
-                )
+                box.image.size = NSSize(width: 40, height: 40)
+                self.cache.setObject(box.image, forKey: path as NSString, cost: 40 * 40 * 4)
                 if interactive { self.interactiveLoading.remove(path) }
                 else { self.prewarming.remove(path) }
                 self.onIconLoaded?(path)

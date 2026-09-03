@@ -83,7 +83,6 @@ final class LauncherAppearanceTests: XCTestCase {
         let controller = LauncherThemeController()
         let minimal = controller.descriptor(for: .defaults(design: .minimal))
         let glass = controller.descriptor(for: .defaults(design: .liquidGlass))
-        let classic = controller.descriptor(for: .defaults(design: .yosemiteClassic))
 
         XCTAssertEqual(LauncherMinimalMetrics.widthScale, 0.90)
         XCTAssertEqual(minimal.width, 600 * LauncherMinimalMetrics.widthScale)
@@ -131,32 +130,31 @@ final class LauncherAppearanceTests: XCTestCase {
             LauncherLiquidGlassMetrics.expandedCornerRadius,
             accuracy: 0.001
         )
-        XCTAssertEqual(glass.rowHeight, 56)
+        XCTAssertEqual(glass.rowHeight, glass.searchHeight)
+        XCTAssertEqual(glass.resultTopInset, LauncherLiquidGlassMetrics.resultTopInset)
+        XCTAssertEqual(glass.resultBottomInset, LauncherLiquidGlassMetrics.resultBottomInset)
+        XCTAssertEqual(
+            glass.panelHeight(resultCount: 1),
+            glass.searchHeight * 2
+                + LauncherLiquidGlassMetrics.resultTopInset
+                + LauncherLiquidGlassMetrics.resultBottomInset
+        )
+        XCTAssertGreaterThan(
+            glass.searchHeight + glass.resultTopInset,
+            glass.headerSeparatorTopInset + glass.headerSeparatorLayoutHeight
+        )
         XCTAssertEqual(glass.rowSpacing, 0)
         XCTAssertEqual(glass.cornerRadius, 29)
         XCTAssertFalse(glass.hasShadow)
         XCTAssertTrue(glass.showsHeaderSeparator)
         XCTAssertEqual(glass.resultSelectionCornerRadius, 12)
         XCTAssertEqual(glass.resultTableStyle, .fullWidth)
-        XCTAssertEqual(classic.width, 820)
-        XCTAssertEqual(classic.searchFontSize, 26)
-        XCTAssertEqual(classic.searchHorizontalInset, 16)
-        XCTAssertEqual(classic.searchMetrics.symbolSize, 26)
-        XCTAssertEqual(classic.searchMetrics.symbolPointSize, 26)
-        XCTAssertEqual(classic.searchMetrics.symbolTextGap, 16)
-        XCTAssertEqual(classic.searchMetrics.textLeadingCompensation, -10)
-        XCTAssertEqual(classic.rowHeight, 52)
-        XCTAssertEqual(classic.panelHeight(resultCount: 0), classic.searchHeight)
-        XCTAssertEqual(classic.panelHeight(resultCount: 1), classic.searchHeight + classic.rowHeight)
-        XCTAssertEqual(classic.panelHeight(resultCount: 20), classic.searchHeight + 7 * classic.rowHeight)
-        for descriptor in [minimal, glass, classic] {
+        for descriptor in [minimal, glass] {
             XCTAssertEqual(
                 descriptor.searchMetrics.emptyInsertionPointLeadingGap,
                 LauncherSearchMetrics.sharedEmptyInsertionPointLeadingGap
             )
         }
-        XCTAssertEqual(LauncherMotion.panelMorphDuration, 0.18)
-        XCTAssertEqual(LauncherMotion.resultRevealDuration, LauncherMotion.panelMorphDuration)
     }
 
     func testEveryThemeUsesItsRequestedMagnifierWithEqualHorizontalSpacing() {
@@ -299,6 +297,11 @@ final class LauncherAppearanceTests: XCTestCase {
             increasedContrast: false
         )
 
+        if #available(macOS 26, *) {
+            XCTAssertEqual(light.surface, .vibrancy)
+            XCTAssertEqual(dark.surface, .glass)
+        }
+
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaWidth, 900)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSearchHeight, 75)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaExpandedCornerRadius, 34)
@@ -331,11 +334,6 @@ final class LauncherAppearanceTests: XCTestCase {
             XCTAssertEqual(
                 descriptor.searchMetrics.symbolPointSize,
                 LauncherLiquidGlassMetrics.searchSymbolPointSize,
-                accuracy: 0.001
-            )
-            XCTAssertEqual(
-                descriptor.searchMetrics.insertionPointHeight ?? -1,
-                LauncherLiquidGlassMetrics.insertionPointHeight,
                 accuracy: 0.001
             )
             XCTAssertEqual(descriptor.searchMetrics.emptyInsertionPointLeadingGap, 1.5)
@@ -407,18 +405,18 @@ final class LauncherAppearanceTests: XCTestCase {
         assertColor(light.searchIconColor, red: 0, green: 0, blue: 0, alpha: 0.85)
         assertColor(dark.searchTextColor, red: 1, green: 1, blue: 1, alpha: 1)
         assertColor(dark.searchIconColor, red: 1, green: 1, blue: 1, alpha: 0.85)
-        guard let lightGlassTint = light.glassTintColor else {
-            return XCTFail("Light Liquid Glass must provide its white readability tint")
+        XCTAssertNil(light.glassTintColor)
+        guard let darkGlassTint = dark.glassTintColor else {
+            return XCTFail("Dark Liquid Glass must provide its black readability tint")
         }
         assertColor(
-            lightGlassTint,
-            red: 1,
-            green: 1,
-            blue: 1,
-            alpha: LauncherLiquidGlassMetrics.lightGlassTintAlpha
+            darkGlassTint,
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: LauncherLiquidGlassMetrics.darkGlassTintAlpha
         )
-        XCTAssertEqual(LauncherLiquidGlassMetrics.lightGlassTintAlpha, 0.30)
-        XCTAssertNil(dark.glassTintColor)
+        XCTAssertEqual(LauncherLiquidGlassMetrics.darkGlassTintAlpha, 0.18)
         assertColor(light.headerSeparatorColor, red: 0, green: 0, blue: 0, alpha: 0.25)
         assertColor(dark.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.25)
     }
@@ -471,7 +469,6 @@ final class LauncherAppearanceTests: XCTestCase {
             XCTAssertEqual(descriptor.searchMetrics.symbolPointSize, 24)
             XCTAssertEqual(descriptor.searchMetrics.symbolTextGap, 20)
             XCTAssertEqual(descriptor.searchMetrics.textLeadingCompensation, -10)
-            XCTAssertEqual(descriptor.searchMetrics.insertionPointHeight, 24)
             XCTAssertEqual(
                 descriptor.searchMetrics.emptyInsertionPointLeadingGap,
                 LauncherSearchMetrics.sharedEmptyInsertionPointLeadingGap
@@ -506,7 +503,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(LauncherMinimalMetrics.resultIconOpticalSize, 26)
         XCTAssertEqual(LauncherMinimalMetrics.resultNativeIconSize, 35)
         XCTAssertEqual(LauncherMinimalMetrics.resultNativeIconOpticalSize, 35)
-        XCTAssertEqual(LauncherMinimalMetrics.resultActionIconOpticalSize, 22)
+        XCTAssertEqual(LauncherMinimalMetrics.resultActionIconOpticalSize, 16.5)
         XCTAssertEqual(LauncherMinimalMetrics.resultTemplatePointSize, 22)
         XCTAssertEqual(LauncherMinimalMetrics.resultTitleFontSize, 16)
         XCTAssertEqual(LauncherMinimalMetrics.resultSubtitleFontSize, 12)
@@ -676,9 +673,7 @@ final class LauncherAppearanceTests: XCTestCase {
                 increasedContrast: false
             )
             let metrics = descriptor.searchMetrics
-            let editor = LauncherSearchFieldEditor(frame: fieldBounds)
-            editor.insertionPointHeight = metrics.insertionPointHeight
-            editor.emptyInsertionPointLeadingGap = metrics.emptyInsertionPointLeadingGap
+            let editor = NSTextView(frame: fieldBounds)
             editor.string = ""
 
             let cell = LauncherNativeSearchFieldCell(textCell: "")
@@ -966,7 +961,7 @@ final class LauncherAppearanceTests: XCTestCase {
         let window = controller.visibilityIsolationWindow
         let content = try XCTUnwrap(window.contentView)
         let field = try XCTUnwrap(searchField(in: content))
-        let editor = try XCTUnwrap(field.currentEditor() as? LauncherSearchFieldEditor)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
         editor.insertionPointColor = .clear
         editor.string = "hh"
         editor.setSelectedRange(NSRange(location: 2, length: 0))
@@ -1258,7 +1253,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(typedInk.midY, textInk.midY, accuracy: 0.5)
     }
 
-    func testLiveLiquidPanelInstallsTheShortenedCustomCaretEditor() throws {
+    func testLiveLiquidPanelUsesNativeCaretAndTracksArrowKeySelection() throws {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
@@ -1278,29 +1273,27 @@ final class LauncherAppearanceTests: XCTestCase {
 
         let content = try XCTUnwrap(controller.visibilityIsolationWindow.contentView)
         let field = try XCTUnwrap(searchField(in: content))
-        let editor = try XCTUnwrap(field.currentEditor() as? LauncherSearchFieldEditor)
-        XCTAssertEqual(LauncherLiquidGlassMetrics.insertionPointHeight, 28)
-        XCTAssertEqual(
-            editor.insertionPointHeight ?? -1,
-            LauncherLiquidGlassMetrics.insertionPointHeight,
-            accuracy: 0.001
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.string = "10 + 1"
+        editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+        var actualRange = NSRange(location: NSNotFound, length: 0)
+        let before = editor.firstRect(
+            forCharacterRange: editor.selectedRange(),
+            actualRange: &actualRange
         )
-        XCTAssertFalse(editor.shouldDrawInsertionPoint)
-        let indicatorFrame = try XCTUnwrap(editor.launcherInsertionIndicatorFrame)
-        XCTAssertEqual(
-            indicatorFrame.height,
-            LauncherLiquidGlassMetrics.insertionPointHeight,
-            accuracy: 1
+
+        editor.moveLeft(nil)
+        let after = editor.firstRect(
+            forCharacterRange: editor.selectedRange(),
+            actualRange: &actualRange
         )
-        let indicatorFrameInField = field.convert(indicatorFrame, from: editor)
-        XCTAssertEqual(
-            indicatorFrameInField.midX,
-            field.searchTextBounds.minX - field.searchMetrics.emptyInsertionPointLeadingGap,
-            accuracy: 0.75
-        )
+
+        XCTAssertEqual(editor.selectedRange().location, 5)
+        XCTAssertLessThan(after.minX, before.minX)
+        XCTAssertTrue(editor.shouldDrawInsertionPoint)
     }
 
-    func testRewritingMinimalQueryRepaintsTheWholeEditorAtTheFinalCaretPosition() throws {
+    func testRewritingMinimalQueryMovesTheNativeCaretToTheFinalPosition() throws {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
         controller.applyAppearance(.defaults(design: .minimal), force: true)
@@ -1318,30 +1311,25 @@ final class LauncherAppearanceTests: XCTestCase {
 
         let content = try XCTUnwrap(controller.visibilityIsolationWindow.contentView)
         let field = try XCTUnwrap(searchField(in: content))
-        let editor = try XCTUnwrap(field.currentEditor() as? LauncherSearchFieldEditor)
-        let clipView = try XCTUnwrap(editor.superview as? NSClipView)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
         editor.string = "long query"
         editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
-        editor.updateLauncherInsertionIndicator()
-        let longQueryCaret = try XCTUnwrap(editor.launcherInsertionIndicatorFrame)
+        var actualRange = NSRange(location: NSNotFound, length: 0)
+        let longQueryCaret = editor.firstRect(
+            forCharacterRange: editor.selectedRange(),
+            actualRange: &actualRange
+        )
 
         editor.string = "q"
         editor.setSelectedRange(NSRange(location: 1, length: 0))
-        field.needsDisplay = false
-        editor.needsDisplay = false
-        clipView.needsDisplay = false
         field.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
-        let rewrittenCaret = try XCTUnwrap(editor.launcherInsertionIndicatorFrame)
-
-        XCTAssertTrue(field.needsDisplay)
-        XCTAssertTrue(editor.needsDisplay)
-        XCTAssertTrue(clipView.needsDisplay)
-        XCTAssertLessThan(rewrittenCaret.minX, longQueryCaret.minX)
-        XCTAssertEqual(
-            editor.subviews.filter { $0 is NSTextInsertionIndicator }.count,
-            1,
-            "A rewrite must leave only the final caret visible"
+        let rewrittenCaret = editor.firstRect(
+            forCharacterRange: editor.selectedRange(),
+            actualRange: &actualRange
         )
+
+        XCTAssertLessThan(rewrittenCaret.minX, longQueryCaret.minX)
+        XCTAssertTrue(editor.shouldDrawInsertionPoint)
     }
 
     private func brightInkBounds(
@@ -1471,7 +1459,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(before, after, "The magnifier pixels must not change during expansion")
     }
 
-    func testLiquidMaterialStaysStableAcrossExpansionAndMatchesAppearance() throws {
+    func testLiquidMaterialUsesOneRegularVariantAcrossExpansionAndAppearance() throws {
         guard #available(macOS 26, *) else {
             throw XCTSkip("Native Liquid Glass requires macOS 26")
         }
@@ -1485,14 +1473,14 @@ final class LauncherAppearanceTests: XCTestCase {
 
         surface.configure(isDark: false, tintColor: nil)
         surface.layoutSubtreeIfNeeded()
-        XCTAssertEqual(glass.style, .clear)
+        XCTAssertEqual(glass.style, .regular)
 
         surface.frame.size.height = 450
         surface.layoutSubtreeIfNeeded()
         XCTAssertEqual(
             glass.style,
-            .clear,
-            "Showing results must not replace transparent light glass with regular material"
+            .regular,
+            "Showing results must not change the glass material variant"
         )
 
         surface.configure(isDark: true, tintColor: nil)
@@ -1500,7 +1488,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(
             glass.style,
             .regular,
-            "Dark mode must use Spotlight's denser regular-glass material"
+            "Appearance changes must not change the glass material variant"
         )
     }
 
@@ -1568,15 +1556,9 @@ final class LauncherAppearanceTests: XCTestCase {
         }
     }
 
-    func testFreshAndExistingInstallDesignMigration() {
-        let freshDefaults = makeDefaults()
-        let fresh = AppPreferences(defaults: freshDefaults)
-        XCTAssertEqual(fresh.appearance.design, .liquidGlass)
-
-        let existingDefaults = makeDefaults()
-        existingDefaults.set(true, forKey: "onboarding.completed")
-        let existing = AppPreferences(defaults: existingDefaults)
-        XCTAssertEqual(existing.appearance.design, .minimal)
+    func testDefaultLauncherDesignIsLiquidGlass() {
+        let preferences = AppPreferences(defaults: makeDefaults())
+        XCTAssertEqual(preferences.appearance.design, .liquidGlass)
     }
 
     func testAppearanceSanitizationMatchesSettingsVerticalPositionRange() {
@@ -1590,51 +1572,59 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(preferences.verticalPosition, 0.5)
     }
 
-    func testAppDefaultsShowRecentSelectionsForAnEmptyQuery() {
-        let preferences = AppPreferences(defaults: makeDefaults())
-        XCTAssertTrue(preferences.recentItemsEnabled)
-        XCTAssertTrue(preferences.searchPreferences.recentItemsEnabled)
-    }
-
-    func testMenuBarVisibilityDefaultsOnAndPersistsUserChoice() {
+    func testAppDefaultsHideRecentSelectionsForAnEmptyQueryAndPersistOptIn() {
         let defaults = makeDefaults()
         let preferences = AppPreferences(defaults: defaults)
-        XCTAssertTrue(preferences.menuBarIconEnabled)
+        XCTAssertFalse(preferences.recentItemsEnabled)
+        XCTAssertFalse(preferences.searchPreferences.recentItemsEnabled)
 
-        preferences.menuBarIconEnabled = false
+        preferences.recentItemsEnabled = true
 
-        XCTAssertFalse(AppPreferences(defaults: defaults).menuBarIconEnabled)
-    }
-
-    func testOnboardingNeutralizesUnavailableLaunchAtLogin() {
-        let unavailable = LaunchAtLoginAvailability(status: .notFound)
-        XCTAssertFalse(unavailable.isEnabled)
-        XCTAssertFalse(unavailable.isAvailable)
-
-        let notRegistered = LaunchAtLoginAvailability(status: .notRegistered)
-        XCTAssertFalse(notRegistered.isEnabled)
-        XCTAssertTrue(notRegistered.isAvailable)
-
-        let enabled = LaunchAtLoginAvailability(status: .enabled)
-        XCTAssertTrue(enabled.isEnabled)
-        XCTAssertTrue(enabled.isAvailable)
-
-        let requiresApproval = LaunchAtLoginAvailability(status: .requiresApproval)
-        XCTAssertFalse(requiresApproval.isEnabled)
-        XCTAssertTrue(requiresApproval.isAvailable)
+        let optedIn = AppPreferences(defaults: defaults)
+        XCTAssertTrue(optedIn.recentItemsEnabled)
+        XCTAssertTrue(optedIn.searchPreferences.recentItemsEnabled)
     }
 
     func testAppearancePersistsWithoutRestart() {
         let defaults = makeDefaults()
         let preferences = AppPreferences(defaults: defaults)
         var changed = preferences.appearance
-        changed.design = .yosemiteClassic
+        changed.design = .minimal
         changed.mode = .dark
         changed.visibleResultCount = 10
         preferences.appearance = changed
 
         let reloaded = AppPreferences(defaults: defaults)
         XCTAssertEqual(reloaded.appearance, changed)
+    }
+
+    func testRetiredAppearanceDesignFallsBackWithoutResettingOtherChoices() throws {
+        let defaults = makeDefaults()
+        let storedValue: [String: Any] = [
+            "design": "retired-design",
+            "mode": "dark",
+            "visibleResultCount": 10,
+            "screen": "pointer",
+            "verticalPosition": 0.25,
+            "showsSubtitles": false,
+            "showsShortcuts": false,
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: storedValue,
+            format: .binary,
+            options: 0
+        )
+        defaults.set(data, forKey: "appearance.configuration.v1")
+
+        let preferences = AppPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.appearance.design, .liquidGlass)
+        XCTAssertEqual(preferences.appearance.mode, .dark)
+        XCTAssertEqual(preferences.appearance.visibleResultCount, 10)
+        XCTAssertEqual(preferences.appearance.screen, .pointer)
+        XCTAssertEqual(preferences.appearance.verticalPosition, 0.25)
+        XCTAssertFalse(preferences.appearance.showsSubtitles)
+        XCTAssertFalse(preferences.appearance.showsShortcuts)
     }
 
     func testCalculatorPreferenceMigrationPreservesOldEnablement() throws {
@@ -1656,10 +1646,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(PreferencesSection.privacy.title, "Permissions")
         XCTAssertTrue(PreferencesSection.appearance.matches(settingsQuery: "liquid"))
         XCTAssertTrue(PreferencesSection.general.matches(settingsQuery: "hotkey"))
-        let menuBar = SettingsSearchItem.all.first { $0.id == "menu-bar" }
-        XCTAssertEqual(menuBar?.destination, .section(.general))
-        XCTAssertTrue(menuBar?.matches("menu bar") == true)
-        XCTAssertTrue(menuBar?.matches("hide") == true)
+        XCTAssertFalse(SettingsSearchItem.all.contains { $0.id == "menu-bar" })
         XCTAssertTrue(PreferencesSection.privacy.matches(settingsQuery: "automation"))
         XCTAssertFalse(PreferencesSection.about.matches(settingsQuery: "clipboard"))
     }
@@ -1705,6 +1692,12 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(detailItem.maximumThickness, SettingsShellLayout.detailMinimumWidth)
     }
 
+    func testLauncherDesignChooserUsesCompactInsetGeometry() {
+        XCTAssertEqual(LauncherDesign.allCases, [.minimal, .liquidGlass])
+        XCTAssertEqual(LauncherDesignChooserLayout.designs, [.liquidGlass, .minimal])
+        XCTAssertEqual(LauncherDesignChooserLayout.pickerWidth, 230)
+    }
+
     func testSettingsSidebarUsesCherryStyleFilledSymbols() {
         let expectedSymbols: [PreferencesSection: String] = [
             .general: "gearshape.fill",
@@ -1716,7 +1709,6 @@ final class LauncherAppearanceTests: XCTestCase {
             .windows: "macwindow",
             .actions: "bolt.fill",
             .privacy: "hand.raised.fill",
-            .updates: "arrow.triangle.2.circlepath",
             .about: "info.circle.fill",
         ]
 
@@ -2039,6 +2031,7 @@ final class LauncherAppearanceTests: XCTestCase {
         )
 
         XCTAssertNil(info["LSUIElement"])
+        XCTAssertEqual(info["CFBundleIconName"] as? String, "Broccoli")
     }
 
     func testApplicationPresentationModeTracksSettingsWithoutChangingDuringTermination() {
@@ -2059,30 +2052,41 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(lifecycle.presentationMode, .settings)
     }
 
-    func testApplicationIconResourceAlwaysUsesLightArtwork() {
-        XCTAssertEqual(ApplicationIconResource.name, "Broccoli-AppIcon-Light-1024")
+    func testApplicationIconResourceTracksTheResolvedSystemAppearance() throws {
+        let light = try XCTUnwrap(NSAppearance(named: .aqua))
+        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+
+        XCTAssertEqual(
+            ApplicationIconResource.name(for: light),
+            "Broccoli-AppIcon-Light-1024"
+        )
+        XCTAssertEqual(
+            ApplicationIconResource.name(for: dark),
+            "Broccoli-AppIcon-Dark-1024"
+        )
     }
 
-    func testApplicationIconControllerReappliesResolvedImageWithoutLoadingFallback() {
-        let lightImage = NSImage(size: NSSize(width: 32, height: 32))
+    func testApplicationIconControllerReappliesResolvedImageWithoutLoadingFallback() throws {
+        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        let darkImage = NSImage(size: NSSize(width: 32, height: 32))
         var loadedResourceNames: [String] = []
         var appliedImages: [NSImage] = []
         let controller = ApplicationIconController(
             imageLoader: { resourceName in
                 loadedResourceNames.append(resourceName)
-                return lightImage
+                return darkImage
             },
             imageSetter: { appliedImages.append($0) }
         )
 
-        controller.update()
+        controller.update(for: dark)
         controller.reapplyCurrentImage()
 
-        XCTAssertEqual(loadedResourceNames, ["Broccoli-AppIcon-Light-1024"])
-        XCTAssertEqual(controller.resourceName, "Broccoli-AppIcon-Light-1024")
+        XCTAssertEqual(loadedResourceNames, ["Broccoli-AppIcon-Dark-1024"])
+        XCTAssertEqual(controller.resourceName, "Broccoli-AppIcon-Dark-1024")
         XCTAssertEqual(appliedImages.count, 2)
-        XCTAssertTrue(appliedImages.allSatisfy { $0 === lightImage })
-        XCTAssertFalse(lightImage.isTemplate)
+        XCTAssertTrue(appliedImages.allSatisfy { $0 === darkImage })
+        XCTAssertFalse(darkImage.isTemplate)
     }
 
     func testApplicationIconControllerDoesNotReapplyBeforeAnImageResolves() {
@@ -2124,7 +2128,6 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(lhs.resultTopInset, rhs.resultTopInset, "\(design)", file: file, line: line)
         XCTAssertEqual(lhs.resultBottomInset, rhs.resultBottomInset, "\(design)", file: file, line: line)
         XCTAssertEqual(lhs.rowSpacing, rhs.rowSpacing, "\(design)", file: file, line: line)
-        XCTAssertEqual(lhs.previewWidth, rhs.previewWidth, "\(design)", file: file, line: line)
     }
 
     private func assertColor(

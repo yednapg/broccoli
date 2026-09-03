@@ -112,7 +112,7 @@ private struct LauncherInteractivePreviewRepresentable: NSViewRepresentable {
 
 /// Maps the launcher's native coordinate space into the readable-width Settings detail pane.
 /// Giving the child its production-sized bounds preserves actual row/font/corner geometry and
-/// keeps AppKit event conversion working when the 820-point Classic design is scaled to fit.
+/// keeps AppKit event conversion working when a production-sized design is scaled to fit.
 @MainActor
 final class LauncherInteractivePreviewHostView: NSView {
     private let iconProvider = LauncherPreviewIconProvider()

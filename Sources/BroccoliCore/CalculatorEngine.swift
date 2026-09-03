@@ -10,6 +10,13 @@ public struct CalculatorResult: Equatable, Sendable {
     }
 }
 
+public enum CalculatorEvaluation: Equatable, Sendable {
+    case value(CalculatorResult)
+    case incomplete
+    case invalid
+    case notExpression
+}
+
 public struct CalculatorEngine: Sendable {
     private struct UnitDefinition: Sendable {
         let dimension: String
@@ -158,15 +165,8 @@ public struct CalculatorEngine: Sendable {
 
     public init() {}
 
-    /// True only after input has clearly entered calculator territory. This lets the
-    /// launcher give incomplete expressions a useful state without misclassifying names.
     public func looksLikeIncompleteExpression(_ rawQuery: String) -> Bool {
-        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return false }
-        if query.hasPrefix("=") { return true }
-        guard query.contains(where: { $0.isNumber }) else { return false }
-        let operators = CharacterSet(charactersIn: "+-*/^%()×÷")
-        return query.unicodeScalars.contains(where: operators.contains)
+        classify(rawQuery) == .incomplete
     }
 
     public func evaluate(
@@ -175,12 +175,27 @@ public struct CalculatorEngine: Sendable {
         maximumSignificantDigits: Int = 12,
         usesGroupingSeparator: Bool = false
     ) -> CalculatorResult? {
-        var query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return nil }
-        let explicitlyRequested = query.hasPrefix("=")
-        if explicitlyRequested {
-            query.removeFirst()
-            query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard case .value(let result) = classify(
+            rawQuery,
+            locale: locale,
+            maximumSignificantDigits: maximumSignificantDigits,
+            usesGroupingSeparator: usesGroupingSeparator
+        ) else { return nil }
+        return result
+    }
+
+    public func classify(
+        _ rawQuery: String,
+        locale: Locale = .current,
+        maximumSignificantDigits: Int = 12,
+        usesGroupingSeparator: Bool = false
+    ) -> CalculatorEvaluation {
+        let raw = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return .notExpression }
+        guard let normalized = normalizeEquals(in: raw) else { return .invalid }
+        let query = normalized.expression
+        guard !query.isEmpty else {
+            return normalized.explicitlyRequested ? .incomplete : .notExpression
         }
 
         if let conversion = conversionParts(in: query),
@@ -201,21 +216,70 @@ public struct CalculatorEngine: Sendable {
                 maximumSignificantDigits: maximumSignificantDigits,
                 usesGroupingSeparator: usesGroupingSeparator
             )
-            return CalculatorResult(
+            return .value(CalculatorResult(
                 displayText: "\(amountText) \(source.symbol) = \(convertedText) \(target.symbol)",
                 copyText: convertedText
-            )
+            ))
         }
 
-        guard explicitlyRequested || isConfidentExpression(query),
-              let value = evaluateExpression(query) else { return nil }
+        let isExpression = normalized.explicitlyRequested || isConfidentExpression(query)
+        guard isExpression else { return .notExpression }
+        guard let value = evaluateExpression(query) else {
+            return isIncompleteExpression(query) ? .incomplete : .invalid
+        }
         let formatted = format(
             value,
             locale: locale,
             maximumSignificantDigits: maximumSignificantDigits,
             usesGroupingSeparator: usesGroupingSeparator
         )
-        return CalculatorResult(displayText: formatted, copyText: formatted)
+        return .value(CalculatorResult(displayText: formatted, copyText: formatted))
+    }
+
+    private func normalizeEquals(
+        in rawQuery: String
+    ) -> (expression: String, explicitlyRequested: Bool)? {
+        let equalsIndices = rawQuery.indices.filter { rawQuery[$0] == "=" }
+        guard equalsIndices.count <= 1 else { return nil }
+        guard let equalsIndex = equalsIndices.first else {
+            return (rawQuery, false)
+        }
+
+        let before = rawQuery[..<equalsIndex]
+        let after = rawQuery[rawQuery.index(after: equalsIndex)...]
+        let beforeTrimmed = before.trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterTrimmed = after.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isBoundary = beforeTrimmed.isEmpty || afterTrimmed.isEmpty
+        let operators = CharacterSet(charactersIn: "+-−*/×÷^%")
+        let isBesideOperator = beforeTrimmed.unicodeScalars.last.map(operators.contains) == true
+            || afterTrimmed.unicodeScalars.first.map(operators.contains) == true
+        guard isBoundary || isBesideOperator else { return nil }
+
+        let expression = String(before + after)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (expression, true)
+    }
+
+    private func isIncompleteExpression(_ query: String) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        if let last = trimmed.unicodeScalars.last,
+           CharacterSet(charactersIn: "+-−*/×÷^").contains(last) {
+            return true
+        }
+
+        var balance = 0
+        for character in trimmed {
+            if character == "(" { balance += 1 }
+            if character == ")" {
+                balance -= 1
+                if balance < 0 { return false }
+            }
+        }
+        if balance > 0 { return true }
+
+        let lower = trimmed.lowercased()
+        return lower.hasSuffix(" in") || lower.hasSuffix(" to")
     }
 
     private func evaluateExpression(_ expression: String) -> Double? {

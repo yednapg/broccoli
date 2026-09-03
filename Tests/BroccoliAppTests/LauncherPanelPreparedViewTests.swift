@@ -47,6 +47,12 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         XCTAssertEqual(controller.searchAccessibilityLabel, "Search Broccoli")
         XCTAssertEqual(controller.resultsAccessibilityLabel, "Search results")
         XCTAssertFalse(controller.visibilityIsolationWindow.hidesOnDeactivate)
+        XCTAssertTrue(
+            controller.visibilityIsolationWindow.styleMask.contains(.nonactivatingPanel)
+        )
+        XCTAssertFalse(
+            (controller.visibilityIsolationWindow as? NSPanel)?.becomesKeyOnlyIfNeeded ?? true
+        )
     }
 
     func testPlaceholderSwiftUISceneCannotBecomeVisible() {
@@ -109,27 +115,24 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 0))
     }
 
-    func testLauncherToggleDismissesOnlyAnActiveKeyPresentation() {
+    func testLauncherToggleDismissesOnlyAVisibleKeyPresentation() {
         XCTAssertEqual(
             LauncherToggleDecision.resolve(
                 panelIsVisible: true,
-                panelIsKey: true,
-                applicationIsActive: true
+                panelIsKey: true
             ),
             .dismiss
         )
 
         for state in [
-            (false, false, false),
-            (true, false, true),
-            (true, true, false),
-            (true, false, false),
+            (false, false),
+            (false, true),
+            (true, false),
         ] {
             XCTAssertEqual(
                 LauncherToggleDecision.resolve(
                     panelIsVisible: state.0,
-                    panelIsKey: state.1,
-                    applicationIsActive: state.2
+                    panelIsKey: state.1
                 ),
                 .present,
                 "A hidden or stale panel must be presented, never treated as a toggle-off"
@@ -137,9 +140,16 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         }
     }
 
-    func testGlobalHotKeyDefersWindowWorkUntilAfterTheCarbonCallback() async {
+    func testLauncherHotKeyCanClaimFocusInsideTheCarbonCallbackTurn() {
         var delivered = false
-        GlobalHotKeyActionDelivery.enqueue { delivered = true }
+        GlobalHotKeyActionDelivery.perform(.immediate) { delivered = true }
+
+        XCTAssertTrue(delivered)
+    }
+
+    func testWindowHotKeyDefersWorkUntilAfterTheCarbonCallback() async {
+        var delivered = false
+        GlobalHotKeyActionDelivery.perform(.afterCallback) { delivered = true }
 
         XCTAssertFalse(delivered)
         await Task.yield()
