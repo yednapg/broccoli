@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct AboutSettingsPane: View {
+    @Bindable var updateCoordinator: UpdateCoordinator
     let onExportDiagnostics: () -> Void
 
     var body: some View {
@@ -23,6 +24,66 @@ struct AboutSettingsPane: View {
             SpotlightSettingsCard("Information") {
                 SpotlightSettingsRow(title: "Privacy") {
                     SettingsStatusAccessory(title: "Local Only", color: .green, showsIndicator: true)
+                }
+            }
+            SpotlightSettingsCard("Updates") {
+                SpotlightSettingsRow(
+                    title: "Release Channel",
+                    subtitle: updateCoordinator.channel == .stable
+                        ? "Production releases only"
+                        : "Stable and prerelease builds"
+                ) {
+                    Picker("", selection: $updateCoordinator.channel) {
+                        ForEach(UpdateChannel.allCases) { channel in
+                            Text(channel.title).tag(channel)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 120)
+                }
+                SpotlightSettingsRow(
+                    title: "Automatic Checks",
+                    subtitle: updateCoordinator.channel == .stable
+                        ? "Checks at most every 24 hours"
+                        : "Checks at most every 6 hours"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { updateCoordinator.automaticallyChecksForUpdates },
+                        set: { updateCoordinator.automaticallyChecksForUpdates = $0 }
+                    ))
+                    .labelsHidden()
+                    .disabled(!updateCoordinator.isConfigured)
+                }
+                SpotlightSettingsRow(
+                    title: "Automatic Important Downloads",
+                    subtitle: "Downloads important or critical updates only when Broccoli can update without an unexpected authorization prompt"
+                ) {
+                    Toggle("", isOn: $updateCoordinator.automaticallyDownloadsImportantUpdates)
+                        .labelsHidden()
+                }
+                SpotlightSettingsRow(
+                    title: "Last Check",
+                    subtitle: lastCheckDescription
+                ) {
+                    SettingsStatusAccessory(
+                        title: updateCoordinator.hasQuietBadge ? "Update Available" : updateCoordinator.phase.rawValue.capitalized,
+                        color: updateCoordinator.hasQuietBadge ? .orange : statusColor,
+                        showsIndicator: true
+                    )
+                }
+                SpotlightSettingsRow(
+                    title: "Update Status",
+                    subtitle: updateCoordinator.statusMessage
+                ) {
+                    Button(updateCoordinator.hasQuietBadge ? "View Update" : "Check for Updates") {
+                        if updateCoordinator.hasQuietBadge {
+                            updateCoordinator.presentAvailableUpdate()
+                        } else {
+                            updateCoordinator.checkForUpdates()
+                        }
+                    }
+                    .disabled(!updateCoordinator.isConfigured && !updateCoordinator.hasQuietBadge)
+                    .spotlightSettingsProminentGlassButtonStyle()
                 }
             }
             SpotlightSettingsCard("Support") {
@@ -50,6 +111,20 @@ struct AboutSettingsPane: View {
 
     private var appBuild: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Local"
+    }
+
+    private var lastCheckDescription: String {
+        guard let date = updateCoordinator.lastCheckDate else { return "Never on this Mac" }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var statusColor: Color {
+        switch updateCoordinator.phase {
+        case .failed: .red
+        case .available, .ready: .orange
+        case .completed, .current: .green
+        default: .secondary
+        }
     }
 
 }

@@ -316,6 +316,7 @@ final class SettingsShellModel {
 final class BroccoliSettingsContext {
     let shell: SettingsShellModel
     let preferences: AppPreferences
+    let updateCoordinator: UpdateCoordinator
     let initialShortcutError: String?
     let onShortcutChanged: (HotKeyConfiguration) -> String?
     let initialWindowShortcutError: String?
@@ -329,6 +330,7 @@ final class BroccoliSettingsContext {
 
     init(
         preferences: AppPreferences,
+        updateCoordinator: UpdateCoordinator,
         initialShortcutError: String?,
         onShortcutChanged: @escaping (HotKeyConfiguration) -> String?,
         initialWindowShortcutError: String?,
@@ -349,6 +351,7 @@ final class BroccoliSettingsContext {
 
         self.shell = shell
         self.preferences = preferences
+        self.updateCoordinator = updateCoordinator
         self.initialShortcutError = initialShortcutError
         self.onShortcutChanged = onShortcutChanged
         self.initialWindowShortcutError = initialWindowShortcutError

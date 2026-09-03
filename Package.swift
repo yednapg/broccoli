@@ -9,6 +9,12 @@ let package = Package(
         .executable(name: "Broccoli", targets: ["BroccoliApp"]),
         .executable(name: "BroccoliBenchmark", targets: ["BroccoliBenchmark"]),
     ],
+    dependencies: [
+        .package(
+            url: "https://github.com/sparkle-project/Sparkle",
+            exact: "2.9.6"
+        ),
+    ],
     targets: [
         .target(
             name: "BroccoliCore",
@@ -16,12 +22,30 @@ let package = Package(
         ),
         .executableTarget(
             name: "BroccoliApp",
-            dependencies: ["BroccoliCore"],
-            linkerSettings: [.linkedFramework("IOKit")]
+            dependencies: [
+                "BroccoliCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+                .unsafeFlags([
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "@executable_path/../Frameworks",
+                ]),
+            ]
         ),
         .executableTarget(name: "BroccoliBenchmark", dependencies: ["BroccoliCore"]),
         .testTarget(name: "BroccoliCoreTests", dependencies: ["BroccoliCore"]),
-        .testTarget(name: "BroccoliAppTests", dependencies: ["BroccoliApp", "BroccoliCore"]),
+        .testTarget(
+            name: "BroccoliAppTests",
+            dependencies: ["BroccoliApp", "BroccoliCore"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "@loader_path/../../..",
+                ]),
+            ]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

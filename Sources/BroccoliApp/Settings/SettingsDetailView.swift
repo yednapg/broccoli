@@ -76,6 +76,7 @@ struct SettingsDetailView: View {
             )
         case .about:
             AboutSettingsPane(
+                updateCoordinator: context.updateCoordinator,
                 onExportDiagnostics: context.onExportDiagnostics
             )
         }

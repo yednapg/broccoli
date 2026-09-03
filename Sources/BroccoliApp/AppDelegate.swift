@@ -79,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var settingsContext: BroccoliSettingsContext?
 
     private var preferences: AppPreferences!
+    private var updateCoordinator: UpdateCoordinator!
     private var hotKey: GlobalHotKey!
     private let windowManager = WindowManager()
     private var panel: LauncherPanelController!
@@ -107,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationDidFinishLaunching(_ notification: Notification) {
         applyPresentationMode()
         preferences = AppPreferences()
+        updateCoordinator = UpdateCoordinator()
         updateApplicationIcon()
         rememberExternalApplication(NSWorkspace.shared.frontmostApplication)
 
@@ -159,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         settingsContext = BroccoliSettingsContext(
             preferences: preferences,
+            updateCoordinator: updateCoordinator,
             initialShortcutError: shortcutRegistrationError,
             onShortcutChanged: { [weak self] configuration in
                 self?.registerShortcut(configuration)
@@ -186,8 +189,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         catalogService.start()
         systemSettingsCatalogService.start()
         configureClipboardIfNeeded()
+        updateCoordinator.start()
 
         let launchArguments = Set(ProcessInfo.processInfo.arguments.dropFirst())
+        if launchArguments.contains("--update-rehearsal-auto-accept") {
+            DispatchQueue.main.async { [weak self] in self?.updateCoordinator.checkForUpdates() }
+        }
         if launchArguments.contains("--show-launcher") {
             DispatchQueue.main.async { [weak self] in self?.coordinator.togglePanel() }
         } else if launchArguments.contains("--show-settings") {
@@ -205,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         panel?.restoreSearchFocusIfVisible()
+        updateCoordinator?.applicationDidBecomeActive()
     }
 
     func configureSettingsOpener(_ action: @escaping () -> Void) {

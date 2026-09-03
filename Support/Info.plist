@@ -32,5 +32,19 @@
     <string>Broccoli uses System Events only for the Dark Mode and power actions you explicitly run.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Gaurav Pandey.</string>
+    <key>SUFeedURL</key>
+    <string>https://yednapg.github.io/broccoli/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>CONFIGURE_AT_BUILD_TIME</string>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUEnableSystemProfiling</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
 </dict>
 </plist>

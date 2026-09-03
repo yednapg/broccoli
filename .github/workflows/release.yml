@@ -1,0 +1,157 @@
+name: Release Broccoli
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing signed tag to release
+        required: true
+        type: string
+      version:
+        description: Numeric CFBundleShortVersionString (for example 0.0.2)
+        required: true
+        type: string
+      build:
+        description: Globally increasing CFBundleVersion
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options: [stable, beta]
+      priority:
+        description: Update priority
+        required: true
+        type: choice
+        options: [routine, important, critical]
+      notes_path:
+        description: Repository-relative Markdown release notes
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: broccoli-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Sign, notarize, and publish
+    environment: production
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - name: Enforce release gates
+        shell: zsh {0}
+        env:
+          APPLE_DEVELOPER_READY: ${{ vars.APPLE_DEVELOPER_READY }}
+          SPARKLE_BACKUPS_VERIFIED: ${{ vars.SPARKLE_BACKUPS_VERIFIED }}
+          NOTARIZATION_REHEARSAL_PASSED: ${{ vars.NOTARIZATION_REHEARSAL_PASSED }}
+          MACOS26_MATRIX_PASSED: ${{ vars.MACOS26_MATRIX_PASSED }}
+          MACOS27_MATRIX_PASSED: ${{ vars.MACOS27_MATRIX_PASSED }}
+        run: |
+          for gate in APPLE_DEVELOPER_READY SPARKLE_BACKUPS_VERIFIED NOTARIZATION_REHEARSAL_PASSED MACOS26_MATRIX_PASSED MACOS27_MATRIX_PASSED; do
+            test "${(P)gate}" = "true" || { echo "Release gate ${gate} is not satisfied."; exit 1; }
+          done
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify requested signed tag
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          expected="v${VERSION}"
+          if [[ "${CHANNEL}" == "beta" ]]; then expected="v${VERSION}-beta.${BROCCOLI_BETA_NUMBER:-1}"; fi
+          test "${EXPECTED_TAG}" = "${expected}"
+          git tag -v "${EXPECTED_TAG}"
+          test "$(git rev-list -n 1 "${EXPECTED_TAG}")" = "$(git rev-parse HEAD)"
+
+      - name: Check out Pages publication branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .release-work/pages
+          fetch-depth: 0
+
+      - name: Check out personal Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: yednapg/homebrew-tap
+          path: .release-work/tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Import Developer ID identity
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/broccoli-release.keychain-db"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "${CERTIFICATE_P12_BASE64}" | /usr/bin/base64 -D > "${certificate}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain}"
+          security import "${certificate}" -k "${keychain}" -P "${CERTIFICATE_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${keychain}"
+          security list-keychains -d user -s "${keychain}"
+
+      - name: Configure private notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials broccoli-ci-notary --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" --password "${APP_SPECIFIC_PASSWORD}"
+
+      - name: Prepare Sparkle key without logging it
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s' "${SPARKLE_PRIVATE_KEY}" > "$RUNNER_TEMP/broccoli-sparkle.key"
+
+      - name: Test and benchmark
+        run: |
+          source scripts/select-xcode.sh
+          swift test
+          zsh scripts/run-benchmark.sh
+
+      - name: Build and publish in safe order
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE_SIGN_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
+          BROCCOLI_SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_EDDSA_PUBLIC_KEY }}
+          BROCCOLI_SPARKLE_PRIVATE_KEY_FILE: ${{ runner.temp }}/broccoli-sparkle.key
+          BROCCOLI_NOTARY_PROFILE: broccoli-ci-notary
+          BROCCOLI_ALLOW_PUBLISH: YES
+          BROCCOLI_PAGES_CHECKOUT: ${{ github.workspace }}/.release-work/pages
+          BROCCOLI_TAP_CHECKOUT: ${{ github.workspace }}/.release-work/tap
+          BROCCOLI_BETA_NUMBER: 1
+        run: |
+          git config --global user.name "Broccoli Release Bot"
+          git config --global user.email "actions@users.noreply.github.com"
+          mkdir -p release-output
+          zsh scripts/release.sh \
+            --mode publish \
+            --version "${{ inputs.version }}" \
+            --build "${{ inputs.build }}" \
+            --channel "${{ inputs.channel }}" \
+            --priority "${{ inputs.priority }}" \
+            --notes "${{ inputs.notes_path }}" \
+            --output release-output
+
+      - name: Retain non-secret release manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ inputs.tag }}
+          path: release-output/release-manifest.json
+          if-no-files-found: ignore
