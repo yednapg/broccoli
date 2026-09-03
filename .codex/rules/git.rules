@@ -1,0 +1,17 @@
+prefix_rule(
+    pattern = ["git", ["add", "branch", "checkout", "cherry-pick", "commit", "merge", "push", "rebase", "reset", "restore", "revert", "switch", "tag"]],
+    decision = "prompt",
+    justification = "Every Git mutation in Broccoli requires Gaurav's manual approval.",
+    match = [
+        "git add AGENTS.md",
+        "git commit -m update-guidance",
+        "git push origin main",
+        "git switch -c codex/example",
+        "git reset --hard HEAD~1",
+    ],
+    not_match = [
+        "git status --short",
+        "git diff --check",
+        "git log -1 --oneline",
+    ],
+)
