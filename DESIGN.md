@@ -22,11 +22,13 @@ The search field should stay optically aligned when the user starts typing. Resu
 
 Typing should focus search. Arrow keys should move through results. Return should do the obvious thing. Escape should back out or close the launcher predictably. Do not add permanent buttons or labels for actions that are already clear from the keyboard or selected result.
 
+Commit result rows, glass geometry, and the window size as one nonanimated AppKit update before drawing. The launcher must not inherit animations from unrelated view updates. All result kinds, including “No results,” use the theme's standard row height and result-container insets. Liquid Glass search and result rows share the same height. Center status symbols and text within that shared row; do not introduce status-specific heights or adjust them independently. Replacing one result with “No results” must not resize the window. The appearance-toggle action describes the opposite of the current system appearance, independently of a launcher appearance override; update its wording even when search work began before the system changed.
+
 ### Liquid Glass
 
-Liquid Glass is the more expressive launcher style on systems that support it, but the glass should never become the point of the design. Keep the compact shape pill-like and the expanded shape softly rounded. Selection should be a quiet, neutral inset wash, not a loud blue table row.
+Liquid Glass is the more expressive launcher style on systems that support it, but the glass should never become the point of the design. The compact search capsule and expanded launcher use the same corner radius, derived from half the shared search-row height. Expansion changes the surface's height, not its corner curvature or material configuration. Selection uses the macOS accent color in both appearances, with semantic selected text and the existing inset geometry.
 
-Dark appearance may use a subtle neutral tint when the desktop makes the glass too bright. Light appearance should stay clean and borderless, without a dark fake backplate. Reduce Transparency and Increase Contrast need an intentional opaque treatment.
+Use native regular `NSGlassEffectView` without an application tint in both appearances. Configure that treatment once on the persistent surface; appearance is inherited from its panel or preview. Native glass owns its edge, backdrop blur, and adaptation to Reduce Transparency, Increase Contrast, and Reduce Motion. Apple also adapts the material's apparent thickness and shading to its size and background; a shared configuration does not mean identical pixels at every size. Do not compensate with per-state tints, opacity, or blur layers. The borderless window must fit the glass surface exactly: do not inset the glass inside a larger transparent window, because the native window shadow then has a second boundary. Clip the outer window content to the same shared corner geometry as the glass, updating bounds without animation so rectangular corner pixels cannot extend beyond it. Enable the floating panel's native window shadow and invalidate its shape after the capsule expands or collapses. Do not overlay a custom stroke on the native glass edge. Use the same glass surface and selection in production and Settings previews. Do not substitute a separate Light material or a custom opaque Liquid Glass surface. Detached previews cannot reproduce the native window shadow or desktop blur.
 
 ### Minimal
 
@@ -103,3 +105,11 @@ Apple's guidance is the reference when the project does not already have a clear
 - [Materials](https://developer.apple.com/design/human-interface-guidelines/materials)
 - [Typography](https://developer.apple.com/design/human-interface-guidelines/typography)
 - [Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility/)
+
+### Dock artwork
+
+The adaptive `Support/Broccoli.icon` bundle asset owns the Dock icon in Light and Dark
+appearances, whether the app is running or stopped. Do not override it with a flattened
+`applicationIconImage`. The existing source PNGs include a 64-point export margin; the
+Icon Composer layer transform removes that margin so the artwork fills the system mask
+instead of sitting inside a second light/dark frame. Preserve the original brand PNGs.

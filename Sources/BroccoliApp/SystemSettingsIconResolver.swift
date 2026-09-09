@@ -290,7 +290,7 @@ enum SystemSettingsNativeIconResolver {
 
     static func resolve(
         requests: [SystemSettingsIconRequest],
-        backingScale: CGFloat
+        context: IconRenderContext
     ) async -> SystemSettingsNativeIconResolution {
         let identifiers = Set(requests.map(\.bundleIdentifier))
         let extensionURLs = await SystemSettingsExtensionIndex.shared.bundleURLs(
@@ -330,14 +330,12 @@ enum SystemSettingsNativeIconResolver {
                 if case .contentType(let identifier) = source {
                     icon = materializeIcon(
                         forContentTypeIdentifier: identifier,
-                        pointSize: 40,
-                        backingScale: backingScale
+                        context: context
                     )
                 } else if let sourceURL {
                     icon = materializeIcon(
                         at: sourceURL,
-                        pointSize: 40,
-                        backingScale: backingScale
+                        context: context
                     )
                 } else {
                     icon = nil
@@ -351,6 +349,24 @@ enum SystemSettingsNativeIconResolver {
                 extensionIndexSucceeded: extensionIndexSucceeded
             )
         }.value
+    }
+
+    nonisolated static func materializeIcon(at url: URL, context: IconRenderContext) -> MaterializedSystemSettingsIcon? {
+        var result: MaterializedSystemSettingsIcon?
+        context.drawingAppearance.performAsCurrentDrawingAppearance {
+            result = materializeIcon(at: url, pointSize: context.pointSize, backingScale: context.backingScale)
+        }
+        return result
+    }
+
+    nonisolated static func materializeIcon(forContentTypeIdentifier identifier: String,
+                                           context: IconRenderContext) -> MaterializedSystemSettingsIcon? {
+        var result: MaterializedSystemSettingsIcon?
+        context.drawingAppearance.performAsCurrentDrawingAppearance {
+            result = materializeIcon(forContentTypeIdentifier: identifier,
+                pointSize: context.pointSize, backingScale: context.backingScale)
+        }
+        return result
     }
 
     nonisolated static func materializeIcon(
@@ -434,62 +450,79 @@ enum SystemSettingsNativeIconResolver {
     }
 }
 
-/// Process-wide, bounded native pane-icon cache. Resolution is started once after an
-/// `IconCache` is constructed, never by `image(for:)`, so cache misses during typing can only
-/// return the prebuilt SF-symbol fallback.
+/// Shared native artwork is cached per appearance, size and display scale. Failures remain
+/// retryable, while identical in-flight requests are deduplicated across launcher and previews.
 @MainActor
 final class SystemSettingsNativeIconStore {
     typealias ResolutionOperation = @Sendable (
-        [SystemSettingsIconRequest],
-        CGFloat
+        [SystemSettingsIconRequest], IconRenderContext
     ) async -> SystemSettingsNativeIconResolution
+
+    struct Completion: Sendable {
+        let iconKey: String
+        let context: IconRenderContext
+        let storeIdentifier: ObjectIdentifier
+    }
 
     static let shared = SystemSettingsNativeIconStore()
     static let didLoadNotification = Notification.Name(
         "dev.gauravpandey.broccoli.system-settings-native-icon-loaded"
     )
-
-    private let cache = NSCache<NSString, MaterializedSystemSettingsIcon>()
+    private let cache: NativeIconBitmapCache
     private let resolutionOperation: ResolutionOperation
-    private var isResolving = false
-    private var completedSuccessfulResolution = false
+    private var inFlight: Set<IconCacheKey> = []
+    private var previousKeys: [String: IconCacheKey] = [:]
     private(set) var resolutionAttemptCount = 0
+    var inFlightRequestCount: Int { inFlight.count }
+    var cachedBitmapCost: Int { cache.cost }
 
-    init(
-        cacheCostLimit: Int = 16 * 1_024 * 1_024,
-        resolutionOperation: @escaping ResolutionOperation = SystemSettingsNativeIconResolver.resolve
-    ) {
-        cache.totalCostLimit = max(1, cacheCostLimit)
+    init(cacheCostLimit: Int = 16 * 1_024 * 1_024,
+         resolutionOperation: @escaping ResolutionOperation = SystemSettingsNativeIconResolver.resolve) {
+        cache = NativeIconBitmapCache(costLimit: cacheCostLimit)
         self.resolutionOperation = resolutionOperation
     }
 
-    func cachedIcon(for iconKey: String) -> MaterializedSystemSettingsIcon? {
-        cache.object(forKey: iconKey as NSString)
+    func cachedIcon(for iconKey: String, context: IconRenderContext? = nil) -> MaterializedSystemSettingsIcon? {
+        let context = context ?? LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40)
+        return cache.image(for: context.cacheKey(for: iconKey))
     }
 
-    func ensureResolution(
-        requests: [SystemSettingsIconRequest],
-        backingScale: CGFloat
-    ) {
-        guard !requests.isEmpty,
-              !isResolving,
-              !completedSuccessfulResolution else { return }
-        isResolving = true
+    func previousIcon(for iconKey: String) -> MaterializedSystemSettingsIcon? {
+        guard let key = previousKeys[iconKey] else { return nil }
+        return cache.image(for: key)
+    }
+
+    func ensureResolution(requests: [SystemSettingsIconRequest], backingScale: CGFloat) {
+        ensureResolution(requests: requests,
+            context: LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40, backingScale: backingScale))
+    }
+
+    func ensureResolution(requests: [SystemSettingsIconRequest], context: IconRenderContext,
+                          refresh: Bool = false) {
+        var seen = Set<IconCacheKey>()
+        let missing = requests.filter {
+            let key = context.cacheKey(for: $0.iconKey)
+            return seen.insert(key).inserted && !inFlight.contains(key)
+                && (refresh || cache.image(for: key) == nil)
+        }
+        guard !missing.isEmpty else { return }
+        let keys = missing.map { context.cacheKey(for: $0.iconKey) }
+        inFlight.formUnion(keys)
         resolutionAttemptCount += 1
         let operation = resolutionOperation
-
         Task { [weak self] in
-            let result = await operation(requests, backingScale)
+            let result = await operation(missing, context)
             guard let self else { return }
-            for (iconKey, icon) in result.iconsByKey {
-                cache.setObject(icon, forKey: iconKey as NSString, cost: icon.cost)
-                NotificationCenter.default.post(
-                    name: Self.didLoadNotification,
-                    object: iconKey
-                )
+            inFlight.subtract(keys)
+            for request in missing {
+                guard let icon = result.iconsByKey[request.iconKey] else { continue }
+                let key = context.cacheKey(for: request.iconKey)
+                guard cache.insert(icon, for: key) else { continue }
+                if previousKeys.count >= 512 { previousKeys.removeAll(keepingCapacity: true) }
+                previousKeys[request.iconKey] = key
+                NotificationCenter.default.post(name: Self.didLoadNotification,
+                    object: Completion(iconKey: request.iconKey, context: context, storeIdentifier: ObjectIdentifier(self)))
             }
-            isResolving = false
-            completedSuccessfulResolution = result.extensionIndexSucceeded
         }
     }
 }

@@ -202,10 +202,11 @@ final class LauncherWindowVisibilitySession {
 
 @MainActor
 final class LauncherCoordinator {
-    private static var systemIsDarkMode: Bool {
-        NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    private var systemIsDarkMode: Bool {
+        environmentProvider().resolvedAppearance == .dark
     }
 
+    private let environmentProvider: @MainActor () -> LauncherAppearanceEnvironment
     private let panel: LauncherPanelController
     private let preferences: AppPreferences
     private let usageStore: UsageStore
@@ -226,6 +227,7 @@ final class LauncherCoordinator {
         category: "Performance"
     )
     private var snapshot = SearchSnapshot.empty
+    private var snapshotIsDarkMode = false
     private var applications: [CachedApplication] = []
     private var systemSettings: [SearchEntry] = []
     private var usage: [String: UsageRecord] = [:]
@@ -256,8 +258,10 @@ final class LauncherCoordinator {
         usageStore: UsageStore,
         diagnosticsStore: DiagnosticsStore,
         windowManager: WindowManager,
-        clipboardMonitor: ClipboardMonitor? = nil
+        clipboardMonitor: ClipboardMonitor? = nil,
+        environmentProvider: @escaping @MainActor () -> LauncherAppearanceEnvironment = { .current }
     ) {
+        self.environmentProvider = environmentProvider
         self.panel = panel
         self.preferences = preferences
         self.usageStore = usageStore
@@ -282,11 +286,12 @@ final class LauncherCoordinator {
         }
         panel.onSelectionChanged = { [weak self] in self?.cancelConfirmation() }
         panel.applyAppearance(preferences.appearance)
+        snapshotIsDarkMode = systemIsDarkMode
         snapshot = SearchSnapshot(entries:
             ActionRegistry.searchEntries(
                     actionsEnabled: preferences.actionsEnabled,
                     enabledActionIDs: preferences.enabledActionIDs,
-                    isDarkMode: Self.systemIsDarkMode
+                    isDarkMode: snapshotIsDarkMode
                 )
                 + [Self.clipboardCommand]
         )
@@ -384,7 +389,11 @@ final class LauncherCoordinator {
         // System/contrast/transparency state can change while the persisted preference value
         // remains identical, so this is the one path that deliberately forces a restyle.
         panel.applyAppearance(preferences.appearance, force: true)
+        // Styling and indexed action wording have separate lifecycles. Accessibility-only
+        // updates need no catalog rebuild; a Light/Dark change must refresh both paths.
+        guard snapshotIsDarkMode != systemIsDarkMode else { return }
         scheduleSnapshotRebuild(prewarmIcons: false)
+        if panel.isVisible { search(panel.query) }
     }
 
     func setClipboardMonitor(_ monitor: ClipboardMonitor?) {
@@ -419,7 +428,8 @@ final class LauncherCoordinator {
         let applicationsEnabled = preferences.applicationsEnabled
         let settingsEnabled = preferences.settingsEnabled
         let actionsEnabled = preferences.actionsEnabled
-        let isDarkMode = Self.systemIsDarkMode
+        let isDarkMode = systemIsDarkMode
+        snapshotIsDarkMode = isDarkMode
         let clipboardCommand = Self.clipboardCommand
         snapshotBuildTask?.cancel()
         snapshotBuildTask = Task.detached(priority: .utility) { [weak self] in
@@ -522,7 +532,10 @@ final class LauncherCoordinator {
                 self.signposter.endInterval("QueryToResults", state)
                 guard !cancellationToken.isCancelled,
                       generation == self.queryGeneration else { return }
-                self.panel.apply(results, preservingSelection: true)
+                self.panel.apply(
+                    ActionRegistry.resolvingSystemAppearance(in: results, isDarkMode: self.systemIsDarkMode),
+                    preservingSelection: true
+                )
                 self.recordDuration(from: start, metric: .queryToResults)
             }
         }

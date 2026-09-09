@@ -274,10 +274,6 @@ private struct SettingsSidebarList: View {
             }
         }
         .listStyle(.sidebar)
-        // Source-list selection otherwise starts inactive grey because the Settings scene is
-        // born during Broccoli's accessory-to-regular activation transition. The selected
-        // section is persistent navigation state and should always use the user's accent.
-        .environment(\.controlActiveState, .active)
         .scrollContentBackground(.hidden)
         .accessibilityLabel("Settings Sections")
     }

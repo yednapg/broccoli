@@ -126,8 +126,8 @@ final class LauncherAppearanceTests: XCTestCase {
         )
         XCTAssertEqual(LauncherLiquidGlassSurfaceView.collapsedHeight, 58)
         XCTAssertEqual(
-            LauncherLiquidGlassSurfaceView.expandedCornerRadius,
-            LauncherLiquidGlassMetrics.expandedCornerRadius,
+            LauncherLiquidGlassSurfaceView.cornerRadius,
+            LauncherLiquidGlassMetrics.cornerRadius,
             accuracy: 0.001
         )
         XCTAssertEqual(glass.rowHeight, glass.searchHeight)
@@ -145,7 +145,7 @@ final class LauncherAppearanceTests: XCTestCase {
         )
         XCTAssertEqual(glass.rowSpacing, 0)
         XCTAssertEqual(glass.cornerRadius, 29)
-        XCTAssertFalse(glass.hasShadow)
+        XCTAssertTrue(glass.hasShadow)
         XCTAssertTrue(glass.showsHeaderSeparator)
         XCTAssertEqual(glass.resultSelectionCornerRadius, 12)
         XCTAssertEqual(glass.resultTableStyle, .fullWidth)
@@ -298,13 +298,12 @@ final class LauncherAppearanceTests: XCTestCase {
         )
 
         if #available(macOS 26, *) {
-            XCTAssertEqual(light.surface, .vibrancy)
+            XCTAssertEqual(light.surface, .glass)
             XCTAssertEqual(dark.surface, .glass)
         }
 
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaWidth, 900)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSearchHeight, 75)
-        XCTAssertEqual(LauncherLiquidGlassMetrics.figmaExpandedCornerRadius, 34)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSearchTextLeading, 75)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSeparatorTopInset, 73)
 
@@ -351,7 +350,7 @@ final class LauncherAppearanceTests: XCTestCase {
             XCTAssertEqual(descriptor.headerSeparatorThickness, 1)
             XCTAssertEqual(
                 descriptor.headerSeparatorAngleDegrees,
-                0.2882782,
+                0,
                 accuracy: 0.000001
             )
         }
@@ -391,34 +390,18 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(light.searchMetrics.symbolDrawingScale, 1)
         XCTAssertEqual(light.searchMetrics.symbolDrawingVerticalScale, 1)
         XCTAssertEqual(
-            light.surfaceCornerRadius(panelHeight: light.searchHeight),
-            LauncherLiquidGlassMetrics.compactCornerRadius,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            light.surfaceCornerRadius(panelHeight: light.panelHeight(resultCount: 3)),
-            LauncherLiquidGlassMetrics.expandedCornerRadius,
+            light.cornerRadius,
+            LauncherLiquidGlassMetrics.searchHeight / 2,
             accuracy: 0.001
         )
 
-        assertColor(light.searchTextColor, red: 0, green: 0, blue: 0, alpha: 1)
-        assertColor(light.searchIconColor, red: 0, green: 0, blue: 0, alpha: 0.85)
-        assertColor(dark.searchTextColor, red: 1, green: 1, blue: 1, alpha: 1)
-        assertColor(dark.searchIconColor, red: 1, green: 1, blue: 1, alpha: 0.85)
-        XCTAssertNil(light.glassTintColor)
-        guard let darkGlassTint = dark.glassTintColor else {
-            return XCTFail("Dark Liquid Glass must provide its black readability tint")
+        for descriptor in [light, dark] {
+            XCTAssertEqual(descriptor.searchTextColor, .labelColor)
+            XCTAssertEqual(descriptor.searchIconColor, .secondaryLabelColor)
+            XCTAssertEqual(descriptor.searchPlaceholderColor, .placeholderTextColor)
+            XCTAssertEqual(descriptor.headerSeparatorColor, .separatorColor)
+            XCTAssertEqual(descriptor.headerSeparatorAngleDegrees, 0)
         }
-        assertColor(
-            darkGlassTint,
-            red: 0,
-            green: 0,
-            blue: 0,
-            alpha: LauncherLiquidGlassMetrics.darkGlassTintAlpha
-        )
-        XCTAssertEqual(LauncherLiquidGlassMetrics.darkGlassTintAlpha, 0.18)
-        assertColor(light.headerSeparatorColor, red: 0, green: 0, blue: 0, alpha: 0.25)
-        assertColor(dark.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.25)
     }
 
     func testMinimalFigmaContractAcrossLightDarkAndReducedTransparency() {
@@ -651,9 +634,9 @@ final class LauncherAppearanceTests: XCTestCase {
         let searchImage = try XCTUnwrap(
             (field.cell as? NSSearchFieldCell)?.searchButtonCell?.image
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             searchImage.isTemplate,
-            "The magnifier must not re-vibrantize when Liquid Glass expands"
+            "AppKit must control the magnifier’s semantic rendering"
         )
         XCTAssertEqual(
             (field.cell as? NSSearchFieldCell)?.searchButtonCell?.highlightsBy,
@@ -1418,7 +1401,7 @@ final class LauncherAppearanceTests: XCTestCase {
         )
     }
 
-    func testLiquidSearchMagnifierPixelsRemainFrozenAcrossExpansion() throws {
+    func testLiquidSearchMagnifierTemplateRemainsStableAcrossExpansion() throws {
         _ = NSApplication.shared
         let surface = LauncherLiquidGlassSurfaceView(
             frame: NSRect(x: 0, y: 0, width: 640, height: 58),
@@ -1455,7 +1438,7 @@ final class LauncherAppearanceTests: XCTestCase {
         let after = try XCTUnwrap(
             afterBitmap.representation(using: .png, properties: [:])
         )
-        XCTAssertFalse(afterImage.isTemplate)
+        XCTAssertTrue(afterImage.isTemplate)
         XCTAssertEqual(before, after, "The magnifier pixels must not change during expansion")
     }
 
@@ -1471,7 +1454,7 @@ final class LauncherAppearanceTests: XCTestCase {
             surface.subviews.compactMap { $0 as? NSGlassEffectView }.first
         )
 
-        surface.configure(isDark: false, tintColor: nil)
+        surface.appearance = NSAppearance(named: .aqua)
         surface.layoutSubtreeIfNeeded()
         XCTAssertEqual(glass.style, .regular)
 
@@ -1483,7 +1466,7 @@ final class LauncherAppearanceTests: XCTestCase {
             "Showing results must not change the glass material variant"
         )
 
-        surface.configure(isDark: true, tintColor: nil)
+        surface.appearance = NSAppearance(named: .darkAqua)
         surface.layoutSubtreeIfNeeded()
         XCTAssertEqual(
             glass.style,
@@ -1515,22 +1498,25 @@ final class LauncherAppearanceTests: XCTestCase {
         }
     }
 
-    func testLiquidCompositingOutsetPreservesTheVisualSurfaceFrame() {
-        let visualFrame = NSRect(x: 280, y: 640, width: 640, height: 58)
-        let outset = LauncherLiquidGlassMetrics.liveCompositingOutset
-        let outerFrame = LauncherPanelGeometry.addingCompositingOutset(
-            outset,
-            to: visualFrame
-        )
-
-        XCTAssertEqual(outerFrame.midX, visualFrame.midX, accuracy: 0.001)
-        XCTAssertEqual(outerFrame.midY, visualFrame.midY, accuracy: 0.001)
-        XCTAssertEqual(outerFrame.width, visualFrame.width + outset * 2, accuracy: 0.001)
-        XCTAssertEqual(outerFrame.height, visualFrame.height + outset * 2, accuracy: 0.001)
-        XCTAssertEqual(
-            LauncherPanelGeometry.removingCompositingOutset(outset, from: outerFrame),
-            visualFrame
-        )
+    func testLiquidPresentationPositionsTheGlassAndWindowAtTheSameScreenFrame() throws {
+        _ = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.main)
+        let controller = LauncherPanelController()
+        let preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
+        controller.applyAppearance(preferences)
+        controller.show(on: screen)
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let root = try XCTUnwrap(window.contentView)
+        let surface = try XCTUnwrap(root.subviews.compactMap { $0 as? LauncherLiquidGlassSurfaceView }.first)
+        let visibleScreenFrame = window.convertToScreen(surface.convert(surface.bounds, to: nil))
+        XCTAssertEqual(visibleScreenFrame, window.frame)
+        XCTAssertEqual(visibleScreenFrame.width, LauncherLiquidGlassMetrics.width)
+        XCTAssertEqual(visibleScreenFrame.height, LauncherLiquidGlassMetrics.searchHeight)
+        XCTAssertEqual(visibleScreenFrame.midX, screen.visibleFrame.midX, accuracy: 0.5)
+        XCTAssertEqual(visibleScreenFrame.maxY,
+                       screen.visibleFrame.maxY - max(36, screen.visibleFrame.height * preferences.verticalPosition),
+                       accuracy: 0.5)
     }
 
     func testReduceTransparencyChangesMaterialWithoutChangingGeometry() {
@@ -1551,8 +1537,13 @@ final class LauncherAppearanceTests: XCTestCase {
             )
 
             assertSameGeometry(standard, reduced, design: design)
-            XCTAssertEqual(reduced.surface, .opaque)
-            XCTAssertNotEqual(standard.surface, reduced.surface)
+            if design == .minimal {
+                XCTAssertEqual(reduced.surface, .opaque)
+                XCTAssertNotEqual(standard.surface, reduced.surface)
+            } else {
+                XCTAssertEqual(reduced.surface, .glass)
+                XCTAssertEqual(standard.surface, reduced.surface)
+            }
         }
     }
 
@@ -2066,40 +2057,14 @@ final class LauncherAppearanceTests: XCTestCase {
         )
     }
 
-    func testApplicationIconControllerReappliesResolvedImageWithoutLoadingFallback() throws {
-        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
-        let darkImage = NSImage(size: NSSize(width: 32, height: 32))
-        var loadedResourceNames: [String] = []
-        var appliedImages: [NSImage] = []
-        let controller = ApplicationIconController(
-            imageLoader: { resourceName in
-                loadedResourceNames.append(resourceName)
-                return darkImage
-            },
-            imageSetter: { appliedImages.append($0) }
-        )
-
-        controller.update(for: dark)
-        controller.reapplyCurrentImage()
-
-        XCTAssertEqual(loadedResourceNames, ["Broccoli-AppIcon-Dark-1024"])
-        XCTAssertEqual(controller.resourceName, "Broccoli-AppIcon-Dark-1024")
+    func testApplicationIconControllerRestoresAdaptiveBundleArtwork() {
+        var appliedImages: [NSImage?] = []
+        let controller = ApplicationIconController(imageSetter: { appliedImages.append($0) })
+        controller.restoreBundleIcon()
+        controller.restoreBundleIcon()
         XCTAssertEqual(appliedImages.count, 2)
-        XCTAssertTrue(appliedImages.allSatisfy { $0 === darkImage })
-        XCTAssertFalse(darkImage.isTemplate)
-    }
-
-    func testApplicationIconControllerDoesNotReapplyBeforeAnImageResolves() {
-        var appliedImageCount = 0
-        let controller = ApplicationIconController(
-            imageLoader: { _ in nil },
-            imageSetter: { _ in appliedImageCount += 1 }
-        )
-
-        controller.reapplyCurrentImage()
-
-        XCTAssertNil(controller.resourceName)
-        XCTAssertEqual(appliedImageCount, 0)
+        XCTAssertTrue(appliedImages.allSatisfy { $0 == nil },
+            "Dock artwork must come from the adaptive bundle, without a flattened PNG override")
     }
 
     private func makeDefaults() -> UserDefaults {

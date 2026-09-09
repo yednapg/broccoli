@@ -3,50 +3,15 @@ import Combine
 import BroccoliCore
 import Foundation
 
-enum LauncherPreviewResolvedAppearance: String, Equatable, Hashable, Sendable {
-    case light
-    case dark
-}
-
-/// The resolved system state which changes how a launcher surface is rendered.
-///
-/// Keeping this state in the cache key prevents a glass screenshot from being reused after
-/// Reduce Transparency or Increase Contrast changes. The renderer intentionally does not add
-/// result-count or feature preferences to the key: its screenshot fixture is fixed so every
-/// design is compared using the same content and geometry.
-struct LauncherPreviewEnvironment: Equatable, Hashable, Sendable {
-    let reducesTransparency: Bool
-    let increasesContrast: Bool
-    let resolvedAppearance: LauncherPreviewResolvedAppearance
-
-    init(
-        reducesTransparency: Bool,
-        increasesContrast: Bool,
-        resolvedAppearance: LauncherPreviewResolvedAppearance = .light
-    ) {
-        self.reducesTransparency = reducesTransparency
-        self.increasesContrast = increasesContrast
-        self.resolvedAppearance = resolvedAppearance
-    }
-
-    @MainActor
-    static var current: Self {
-        Self(
-            reducesTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
-            increasesContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
-            resolvedAppearance: NSApp.effectiveAppearance.bestMatch(
-                from: [.darkAqua, .aqua]
-            ) == .darkAqua ? .dark : .light
-        )
-    }
-}
-
 struct LauncherPreviewCacheKey: Equatable, Hashable, Sendable {
     let design: LauncherDesign
     let appearance: LauncherAppearanceMode
     let reducesTransparency: Bool
     let increasesContrast: Bool
+    let reducesMotion: Bool
+    let backingScale: CGFloat
     let resolvedSystemAppearance: LauncherPreviewResolvedAppearance?
+    let iconContext: IconRenderContext
 
     init(
         design: LauncherDesign,
@@ -54,9 +19,13 @@ struct LauncherPreviewCacheKey: Equatable, Hashable, Sendable {
         environment: LauncherPreviewEnvironment
     ) {
         self.design = design
+        iconContext = environment.iconContext(mode: appearance,
+            pointSize: design == .liquidGlass ? LauncherLiquidGlassMetrics.resultIconSize : LauncherMinimalMetrics.resultNativeIconSize)
         self.appearance = appearance
         reducesTransparency = environment.reducesTransparency
         increasesContrast = environment.increasesContrast
+        reducesMotion = environment.reducesMotion
+        backingScale = environment.backingScale
         resolvedSystemAppearance = appearance == .system ? environment.resolvedAppearance : nil
     }
 
@@ -65,6 +34,8 @@ struct LauncherPreviewCacheKey: Equatable, Hashable, Sendable {
             && lhs.appearance.rawValue == rhs.appearance.rawValue
             && lhs.reducesTransparency == rhs.reducesTransparency
             && lhs.increasesContrast == rhs.increasesContrast
+            && lhs.reducesMotion == rhs.reducesMotion
+            && lhs.backingScale == rhs.backingScale
             && lhs.resolvedSystemAppearance == rhs.resolvedSystemAppearance
     }
 
@@ -73,6 +44,8 @@ struct LauncherPreviewCacheKey: Equatable, Hashable, Sendable {
         hasher.combine(appearance.rawValue)
         hasher.combine(reducesTransparency)
         hasher.combine(increasesContrast)
+        hasher.combine(reducesMotion)
+        hasher.combine(backingScale)
         hasher.combine(resolvedSystemAppearance)
     }
 }
@@ -85,6 +58,7 @@ struct LauncherPreviewRenderIdentity: Equatable, Hashable, Sendable {
 enum LauncherPreviewEnvironmentChange {
     case systemAppearance
     case accessibility
+    case display
 }
 
 /// Layout measurements captured from the actual preview view hierarchy after AppKit has
@@ -202,12 +176,16 @@ final class LauncherPreviewRenderer: ObservableObject {
     private var sampledEnvironment: LauncherPreviewEnvironment?
     private var workspaceObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
+    private var effectiveAppearanceObservation: NSKeyValueObservation?
+    private var displayObservers: [NSObjectProtocol] = []
+    private var activationObserver: NSObjectProtocol?
     private(set) var isSettingsSessionActive = false
     @Published private(set) var environmentRevision: UInt64 = 0
     private(set) var lastRenderMetrics: LauncherPreviewRenderMetrics?
     private(set) var lastRenderedSurface: LauncherThemeDescriptor.Surface?
 
     init(
+        iconProvider: LauncherPreviewIconProvider = LauncherPreviewIconProvider(),
         fixture: LauncherPreviewFixture = .standard,
         themeController: LauncherThemeController = LauncherThemeController(),
         cacheCostLimit: Int = 16 * 1_024 * 1_024,
@@ -217,10 +195,9 @@ final class LauncherPreviewRenderer: ObservableObject {
         self.themeController = themeController
         self.cacheCostLimit = max(1, cacheCostLimit)
         self.environmentProvider = environmentProvider
-        let iconProvider = LauncherPreviewIconProvider()
         self.iconProvider = iconProvider
-        iconProvider.onIconLoaded = { [weak self] iconKey in
-            self?.nativePaneIconDidLoad(iconKey)
+        iconProvider.onNativeIconLoaded = { [weak self] iconKey, context in
+            self?.nativePaneIconDidLoad(iconKey, context: context)
         }
     }
 
@@ -230,6 +207,7 @@ final class LauncherPreviewRenderer: ObservableObject {
         sampledEnvironment = environmentProvider()
         isSettingsSessionActive = true
         startEnvironmentObservation()
+        iconProvider.refreshPreparedIcons()
     }
 
     func endSettingsSession() {
@@ -265,16 +243,15 @@ final class LauncherPreviewRenderer: ObservableObject {
         if let image = cachedImage(for: initialKey) { return image }
 
         let generation = sessionGeneration
-        let renderRevision = environmentRevision
         await Task.yield()
         guard isSettingsSessionActive,
               generation == sessionGeneration,
-              renderRevision == environmentRevision,
               !Task.isCancelled else { return nil }
 
         // Read the accessibility environment exactly once for both the cache key and theme
         // descriptor. If Reduce Transparency changes between those two operations, a glass
         // image must never be filed under an opaque-image key (or vice versa).
+        let renderRevision = environmentRevision
         let environment = environmentProvider()
         let key = LauncherPreviewCacheKey(
             design: preferences.design,
@@ -286,9 +263,7 @@ final class LauncherPreviewRenderer: ObservableObject {
         let canonicalPreferences = Self.canonicalPreferences(from: preferences)
         let descriptor = themeController.descriptor(
             for: canonicalPreferences,
-            reducedTransparency: environment.reducesTransparency,
-            increasedContrast: environment.increasesContrast,
-            resolvedSystemDark: environment.resolvedAppearance == .dark
+            environment: environment
         )
         let content = LauncherPreviewContentView(
             descriptor: descriptor,
@@ -351,9 +326,7 @@ final class LauncherPreviewRenderer: ObservableObject {
         previewPreferences.visibleResultCount = fixture.results.count
         let descriptor = themeController.descriptor(
             for: previewPreferences,
-            reducedTransparency: environment.reducesTransparency,
-            increasedContrast: environment.increasesContrast,
-            resolvedSystemDark: environment.resolvedAppearance == .dark
+            environment: environment
         )
         return LauncherInteractivePreviewConfiguration(
             identity: LauncherPreviewRenderIdentity(
@@ -378,7 +351,7 @@ final class LauncherPreviewRenderer: ObservableObject {
         let keysToInvalidate: [LauncherPreviewCacheKey] = switch reason {
         case .systemAppearance:
             cache.keys.filter { $0.appearance == .system }
-        case .accessibility:
+        case .accessibility, .display:
             Array(cache.keys)
         }
         for key in keysToInvalidate { invalidate(key) }
@@ -388,10 +361,10 @@ final class LauncherPreviewRenderer: ObservableObject {
     var cachedImageCount: Int { cache.count }
     var cachedImageCost: Int { cacheCost }
 
-    func nativePaneIconDidLoad(_ iconKey: String) {
+    func nativePaneIconDidLoad(_ iconKey: String, context: IconRenderContext? = nil) {
         guard isSettingsSessionActive,
               fixture.results.contains(where: { $0.entry.iconKey == iconKey }) else { return }
-        for key in Array(cache.keys) { invalidate(key) }
+        for key in Array(cache.keys) where context == nil || key.iconContext == context { invalidate(key) }
         // Published revision restarts ThemeCard tasks, while the revision guard above prevents
         // a capture already in flight from committing a fallback-icon screenshot afterward.
         environmentRevision &+= 1
@@ -399,6 +372,21 @@ final class LauncherPreviewRenderer: ObservableObject {
 
     private func startEnvironmentObservation() {
         guard workspaceObserver == nil, appearanceObserver == nil else { return }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.iconProvider.refreshPreparedIcons() }
+        }
+        effectiveAppearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.refreshEnvironment(.systemAppearance) }
+        }
+        for name in [NSApplication.didChangeScreenParametersNotification, NSWindow.didChangeBackingPropertiesNotification] {
+            displayObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshEnvironment(.display) }
+            })
+        }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil,
@@ -421,6 +409,11 @@ final class LauncherPreviewRenderer: ObservableObject {
     }
 
     private func stopEnvironmentObservation() {
+        effectiveAppearanceObservation = nil
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = nil
+        for observer in displayObservers { NotificationCenter.default.removeObserver(observer) }
+        displayObservers.removeAll()
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
             self.workspaceObserver = nil
@@ -468,11 +461,11 @@ final class LauncherPreviewRenderer: ObservableObject {
         // offscreen window immediately after `cacheDisplay` can leave AppKit with a dangling
         // appearance coordinator. An active effect view can render safely in this detached,
         // layer-backed tree, which also guarantees the capture never flashes onscreen.
-        view.appearance = descriptor.appearance ?? NSApp.effectiveAppearance
+        view.appearance = descriptor.drawingAppearance
         view.prepareForCapture()
         view.displayIfNeeded()
 
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let scale = descriptor.environment.backingScale
         let pixelsWide = max(1, Int(ceil(size.width * scale)))
         let pixelsHigh = max(1, Int(ceil(size.height * scale)))
         let bitmap = NSBitmapImageRep(
@@ -505,31 +498,36 @@ final class LauncherPreviewRenderer: ObservableObject {
 
 @MainActor
 final class LauncherPreviewIconProvider {
-    private let productionIconCache = IconCache()
-    private var applicationIcons: [String: NSImage] = [:]
-    private let genericApplication = NSImage(
-        systemSymbolName: "app",
-        accessibilityDescription: "Application"
-    ) ?? NSImage(size: NSSize(width: 40, height: 40))
+    private let productionIconCache: IconCache
+    private var preparedEntries: [IconRenderContext: [SearchEntry]] = [:]
 
+    init(iconCache: IconCache = IconCache()) { productionIconCache = iconCache }
+
+    var onNativeIconLoaded: ((String, IconRenderContext) -> Void)? {
+        didSet { productionIconCache.onNativeIconLoaded = { [weak self] key, context in
+            self?.onNativeIconLoaded?(key, context)
+        } }
+    }
     var onIconLoaded: ((String) -> Void)? {
-        didSet {
-            productionIconCache.onIconLoaded = { [weak self] iconKey in
-                self?.onIconLoaded?(iconKey)
-            }
-        }
+        didSet { productionIconCache.onIconLoaded = { [weak self] in self?.onIconLoaded?($0) } }
     }
 
-    func image(for entry: SearchEntry) -> NSImage {
-        guard case .application(let path, _) = entry.target else {
-            return productionIconCache.image(for: entry)
+    func image(for entry: SearchEntry, context: IconRenderContext? = nil) -> NSImage {
+        productionIconCache.image(for: entry, context: context)
+    }
+
+    func prepare(_ entries: [SearchEntry], context: IconRenderContext) {
+        let firstRequest = preparedEntries[context] == nil
+        if preparedEntries.count >= 16 { preparedEntries.removeAll(keepingCapacity: true) }
+        preparedEntries[context] = entries
+        productionIconCache.prewarm(entries, context: context)
+        if firstRequest { productionIconCache.refreshNativeIcons(entries, context: context) }
+    }
+
+    func refreshPreparedIcons() {
+        for (context, entries) in preparedEntries {
+            productionIconCache.refreshNativeIcons(entries, context: context)
         }
-        if let cached = applicationIcons[path] { return cached }
-        guard FileManager.default.fileExists(atPath: path) else { return genericApplication }
-        let image = NSWorkspace.shared.icon(forFile: path)
-        image.size = NSSize(width: 40, height: 40)
-        applicationIcons[path] = image
-        return image
     }
 }
 
@@ -543,7 +541,7 @@ final class LauncherPreviewContentView: NSView,
     NSTableViewDelegate,
     NSTextFieldDelegate
 {
-    private let descriptor: LauncherThemeDescriptor
+    private var descriptor: LauncherThemeDescriptor
     private let fixture: LauncherPreviewFixture
     private let iconProvider: LauncherPreviewIconProvider
     private let isInteractive: Bool
@@ -568,6 +566,7 @@ final class LauncherPreviewContentView: NSView,
         isInteractive = interactive
         searchField = LauncherNativeSearchField()
         displayedResults = fixture.results
+        selectedRow = LauncherSelection.preferredRow(preservingEntryID: nil, in: fixture.results) ?? -1
         preparedRows = fixture.results.map { _ in ResultRowView() }
         let size = NSSize(
             width: descriptor.width,
@@ -575,10 +574,53 @@ final class LauncherPreviewContentView: NSView,
         )
         super.init(frame: NSRect(origin: .zero, size: size))
         autoresizingMask = []
+        appearance = descriptor.drawingAppearance
+        iconProvider.prepare(fixture.results.map(\.entry), context: iconContext)
         buildSurface()
     }
 
     required init?(coder: NSCoder) { nil }
+
+    func updateAppearance(_ next: LauncherThemeDescriptor) {
+        descriptor = next
+        appearance = next.drawingAppearance
+        searchField.textColor = next.searchTextColor
+        if let editor = searchField.currentEditor() as? NSTextView {
+            editor.textColor = next.searchTextColor
+            editor.insertionPointColor = .textColor
+        }
+        if let surface = subviews.first {
+            (surface as? LauncherMinimalMaterialSurfaceView)?.updateAppearance(
+                isDark: next.isDark, opaqueBackground: next.surface == .opaque ? next.backgroundColor : nil)
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                if next.surface == .opaque { surface.layer?.backgroundColor = next.backgroundColor.cgColor }
+            }
+        }
+        headerSeparator.color = next.headerSeparatorColor
+        iconProvider.prepare(fixture.results.map(\.entry), context: iconContext)
+        refreshIcons()
+        needsDisplay = true
+    }
+
+    func refreshIcons() {
+        for row in displayedResults.indices {
+            _ = tableView(tableView, viewFor: tableView.tableColumns.first, row: row)
+        }
+    }
+
+    var surfaceKind: LauncherThemeDescriptor.Surface { descriptor.surface }
+
+    private var iconContext: IconRenderContext {
+        let context = descriptor.iconContext
+        return IconRenderContext(appearance: context.appearance, increasesContrast: context.increasesContrast,
+            pointSize: context.pointSize, backingScale: window?.backingScaleFactor ?? context.backingScale)
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        iconProvider.prepare(fixture.results.map(\.entry), context: iconContext)
+        refreshIcons()
+    }
 
     func prepareForCapture() {
         needsUpdateConstraints = true
@@ -625,10 +667,10 @@ final class LauncherPreviewContentView: NSView,
     @discardableResult
     func moveInteractiveSelection(up: Bool) -> Bool {
         guard isInteractive,
-              let next = LauncherPreviewInteraction.nextRow(
-                current: selectedRow,
+              let next = LauncherSelection.nextRow(
+                currentRow: selectedRow,
                 movingUp: up,
-                resultCount: displayedResults.count
+                results: displayedResults
               ) else { return false }
         selectedRow = next
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
@@ -638,6 +680,10 @@ final class LauncherPreviewContentView: NSView,
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { displayedResults.count }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        displayedResults.indices.contains(row) && displayedResults[row].entry.kind != .status
+    }
 
     func tableView(
         _ tableView: NSTableView,
@@ -651,7 +697,7 @@ final class LauncherPreviewContentView: NSView,
         let result = displayedResults[row]
         view.configure(
             result: result,
-            icon: iconProvider.image(for: result.entry),
+            icon: iconProvider.image(for: result.entry, context: iconContext),
             confirmation: false,
             row: row,
             selected: row == selectedRow,
@@ -676,10 +722,6 @@ final class LauncherPreviewContentView: NSView,
         case .glass:
             if #available(macOS 26, *) {
                 liquidGlassSurface.frame = bounds
-                liquidGlassSurface.configure(
-                    isDark: descriptor.isDark,
-                    tintColor: descriptor.glassTintColor
-                )
                 liquidGlassSurface.layoutSubtreeIfNeeded()
                 liquidGlassSurface.setContentView(content)
                 surface = liquidGlassSurface
@@ -689,28 +731,15 @@ final class LauncherPreviewContentView: NSView,
                 surface = fallback
                 surfaceManagesContent = false
             }
-        case .ultraThick:
+        case .ultraThick, .opaque:
             let material = LauncherMinimalMaterialSurfaceView(
                 frame: bounds,
-                isDark: descriptor.isDark
+                isDark: descriptor.isDark,
+                opaqueBackground: descriptor.surface == .opaque ? descriptor.backgroundColor : nil
             )
             material.setContentView(content)
             surface = material
             surfaceManagesContent = true
-        case .vibrancy:
-            let effect = NSVisualEffectView()
-            // This renderer is deliberately detached from a window, so it has no background
-            // window for `.behindWindow` to sample. Use the same native material with local
-            // compositing; the explicit production-height constraint below owns geometry.
-            effect.blendingMode = .withinWindow
-            effect.state = .active
-            effect.material = .underWindowBackground
-            surface = effect
-            surfaceManagesContent = false
-        case .opaque:
-            let backdrop = NSView()
-            surface = backdrop
-            surfaceManagesContent = false
         }
 
         surface.frame = bounds
@@ -721,9 +750,7 @@ final class LauncherPreviewContentView: NSView,
             surface.layer?.backgroundColor = descriptor.surface == .opaque
                 ? descriptor.backgroundColor.cgColor
                 : nil
-            surface.layer?.cornerRadius = descriptor.surfaceCornerRadius(
-                panelHeight: bounds.height
-            )
+            surface.layer?.cornerRadius = descriptor.cornerRadius
             surface.layer?.cornerCurve = descriptor.design == .minimal ? .circular : .continuous
             surface.layer?.borderWidth = 0
             surface.layer?.borderColor = nil
@@ -826,6 +853,7 @@ final class LauncherPreviewContentView: NSView,
         scrollView.isHidden = !hasResults
         content.addSubview(scrollView)
         let resultsChrome: NSView = scrollView
+        let resultInsets = descriptor.resultVerticalInsets(resultCount: displayedResults.count)
         constraints += [
             resultsChrome.leadingAnchor.constraint(
                 equalTo: content.leadingAnchor,
@@ -833,11 +861,11 @@ final class LauncherPreviewContentView: NSView,
             ),
             resultsChrome.topAnchor.constraint(
                 equalTo: content.topAnchor,
-                constant: descriptor.searchHeight + (hasResults ? descriptor.resultTopInset : 0)
+                constant: descriptor.searchHeight + resultInsets.top
             ),
             resultsChrome.bottomAnchor.constraint(
                 equalTo: content.bottomAnchor,
-                constant: hasResults ? -descriptor.resultBottomInset : 0
+                constant: -resultInsets.bottom
             ),
         ]
 
@@ -876,7 +904,7 @@ final class LauncherPreviewContentView: NSView,
 
         NSLayoutConstraint.activate(constraints)
         tableView.reloadData()
-        if !displayedResults.isEmpty {
+        if selectedRow >= 0 {
             tableView.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
         }
         layoutSubtreeIfNeeded()
@@ -941,7 +969,7 @@ final class LauncherPreviewContentView: NSView,
         )
         let hasResults = !displayedResults.isEmpty
         scrollView.isHidden = !hasResults
-        selectedRow = displayedResults.isEmpty ? -1 : 0
+        selectedRow = LauncherSelection.preferredRow(preservingEntryID: nil, in: displayedResults) ?? -1
         updateHeaderSeparatorVisibility()
         tableView.reloadData()
         if selectedRow >= 0 {
