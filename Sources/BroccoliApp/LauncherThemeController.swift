@@ -1,4 +1,5 @@
 @preconcurrency import AppKit
+import BroccoliCore
 
 /// Minimal keeps its authored controls and typography while using a narrower desktop shell.
 /// Width is the only scaled dimension; the live panel and Settings preview share these metrics
@@ -60,7 +61,6 @@ enum LauncherMinimalMetrics {
 enum LauncherLiquidGlassMetrics {
     static let figmaWidth: CGFloat = 900
     static let figmaSearchHeight: CGFloat = 75
-    static let figmaExpandedCornerRadius: CGFloat = 34
     static let figmaSearchFontSize: CGFloat = 36
     static let figmaSearchHorizontalInset: CGFloat = 25
     static let figmaSearchVerticalInset: CGFloat = 16
@@ -70,13 +70,13 @@ enum LauncherLiquidGlassMetrics {
     static let figmaSeparatorTopInset: CGFloat = 73
     static let figmaSeparatorHorizontalInset: CGFloat = 25
     static let figmaSeparatorThickness: CGFloat = 1
-    static let figmaSeparatorAngleDegrees: CGFloat = 0.2882782
+    static let figmaSeparatorAngleDegrees: CGFloat = 0
 
     static let width: CGFloat = 640
     static let searchHeight: CGFloat = 58
     static let scale = searchHeight / figmaSearchHeight
-    static let compactCornerRadius = searchHeight / 2
-    static let expandedCornerRadius = figmaExpandedCornerRadius * scale
+    // Preserve the search capsule's curvature when rows expand the same glass surface.
+    static let cornerRadius = searchHeight / 2
     static let searchFontSize: CGFloat = 26
     static let searchHorizontalInset: CGFloat = 20
     static let searchVerticalInset = figmaSearchVerticalInset * scale
@@ -100,16 +100,9 @@ enum LauncherLiquidGlassMetrics {
     // Matching top and bottom insets preserves the panel's rhythm at every result count.
     static let resultTopInset: CGFloat = 8
     static let resultBottomInset: CGFloat = 8
-    // Regular Dark glass already supplies the adaptive separation needed for legibility. This
-    // restrained neutral tint anchors its brightness so vivid wallpaper cannot make it flare,
-    // without turning the surface into an opaque card.
-    static let darkGlassTintAlpha: CGFloat = 0.18
     // Enlarge the invisible native field equally above and below the authored inset. This
     // provides font-rendering headroom without changing either centered midY.
     static let searchControlVerticalOutset: CGFloat = 8
-    // Native glass paints its curved highlight and backdrop separation beyond its nominal
-    // bounds. The live borderless window needs transparent breathing room for those pixels.
-    static let liveCompositingOutset: CGFloat = 14
     // AppKit's shared field editor adds 5.5 points of leading ink only after text entry.
     // Counteract it for nonempty queries so the compact placeholder never jumps on expansion.
     static let fieldEditorTextLeadingCorrection: CGFloat = 5.5
@@ -125,10 +118,10 @@ struct LauncherThemeDescriptor {
     enum Surface: Equatable {
         case opaque
         case ultraThick
-        case vibrancy
         case glass
     }
 
+    let environment: LauncherAppearanceEnvironment
     let design: LauncherDesign
     let isDark: Bool
     let width: CGFloat
@@ -145,13 +138,23 @@ struct LauncherThemeDescriptor {
     let surface: Surface
     let appearance: NSAppearance?
     let backgroundColor: NSColor
-    let glassTintColor: NSColor?
     let selectionColor: NSColor
+    let selectedTextColor: NSColor
+    let selectedShortcutTextColor: NSColor
     let hasShadow: Bool
     let showsSubtitles: Bool
     let showsShortcuts: Bool
     let verticalPosition: CGFloat
     let visibleResultCount: Int
+
+    var iconContext: IconRenderContext {
+        environment.iconContext(mode: isDark ? .dark : .light,
+            pointSize: design == .liquidGlass ? LauncherLiquidGlassMetrics.resultIconSize : LauncherMinimalMetrics.resultNativeIconSize)
+    }
+
+    var drawingAppearance: NSAppearance { iconContext.drawingAppearance }
+
+    var searchPlaceholderColor: NSColor { .placeholderTextColor }
 
     var searchMetrics: LauncherSearchMetrics {
         switch design {
@@ -178,13 +181,14 @@ struct LauncherThemeDescriptor {
                 ? NSColor.white.withAlphaComponent(0.82)
                 : NSColor.black
         case .liquidGlass:
-            return isDark ? .white : .black
+            return .labelColor
         }
     }
 
     var searchIconColor: NSColor {
         switch design {
-        case .minimal, .liquidGlass:
+        case .liquidGlass: return .secondaryLabelColor
+        case .minimal:
             return isDark
                 ? NSColor.white.withAlphaComponent(0.85)
                 : NSColor.black.withAlphaComponent(0.85)
@@ -192,6 +196,7 @@ struct LauncherThemeDescriptor {
     }
 
     var headerSeparatorColor: NSColor {
+        if design == .liquidGlass { return .separatorColor }
         return isDark
             ? NSColor.white.withAlphaComponent(0.25)
             : NSColor.black.withAlphaComponent(0.25)
@@ -252,31 +257,25 @@ struct LauncherThemeDescriptor {
         }
     }
 
-    func surfaceCornerRadius(panelHeight: CGFloat) -> CGFloat {
-        guard design == .liquidGlass, panelHeight > searchHeight + 0.5 else {
-            return cornerRadius
-        }
-        return LauncherLiquidGlassMetrics.expandedCornerRadius
-    }
-
     func displayedResultCount(for resultCount: Int) -> Int {
         min(max(0, resultCount), visibleResultCount)
     }
 
+    func resultVerticalInsets(resultCount: Int) -> (top: CGFloat, bottom: CGFloat) {
+        guard displayedResultCount(for: resultCount) > 0 else { return (0, 0) }
+        return (resultTopInset, resultBottomInset)
+    }
+
     func panelHeight(resultCount: Int) -> CGFloat {
         // Every theme grows by exactly the rows it displays so query changes do not leave an
-        // empty viewport or make the whole launcher appear to jump.
-        let displayedRows = displayedResultCount(for: resultCount)
+        // empty viewport or make the whole launcher appear to jump. Status messages occupy
+        // the same row as ordinary results; geometry depends on count, never result kind.
         // NSTableView reserves its vertical intercell spacing after every row, including the
         // last one. Keep the visual bottom inset outside the scroll viewport so the viewport
         // itself is always exactly the height of its document.
-        let spacing = CGFloat(displayedRows) * rowSpacing
-        let hasResults = displayedRows > 0
-        return searchHeight
-            + (hasResults ? resultTopInset : 0)
-            + CGFloat(displayedRows) * rowHeight
-            + spacing
-            + (hasResults ? resultBottomInset : 0)
+        let insets = resultVerticalInsets(resultCount: resultCount)
+        return searchHeight + insets.top
+            + resultsDocumentHeight(resultCount: resultCount) + insets.bottom
     }
 
     func resultsDocumentHeight(resultCount: Int) -> CGFloat {
@@ -300,31 +299,26 @@ struct LauncherThemeDescriptor {
 @MainActor
 final class LauncherThemeController {
     func descriptor(for preferences: LauncherAppearancePreferences) -> LauncherThemeDescriptor {
-        descriptor(
-            for: preferences,
-            reducedTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
-            increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        )
+        descriptor(for: preferences, environment: .current)
     }
 
-    /// The explicit accessibility inputs keep the layout contract testable without changing
-    /// the user's system settings. Accessibility can change material and color treatment, but
-    /// never any geometry.
-    func descriptor(
-        for preferences: LauncherAppearancePreferences,
-        reducedTransparency: Bool,
-        increasedContrast contrast: Bool,
-        resolvedSystemDark: Bool? = nil
-    ) -> LauncherThemeDescriptor {
-        let appearance: NSAppearance? = switch preferences.mode {
-        case .system: nil
-        case .light: NSAppearance(named: .aqua)
-        case .dark: NSAppearance(named: .darkAqua)
-        }
-        let dark = preferences.mode == .dark
-            || (preferences.mode == .system
-                && (resolvedSystemDark
-                    ?? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)))
+    func descriptor(for preferences: LauncherAppearancePreferences,
+                    reducedTransparency: Bool, increasedContrast: Bool,
+                    resolvedSystemDark: Bool? = nil) -> LauncherThemeDescriptor {
+        let current = LauncherAppearanceEnvironment.current
+        return descriptor(for: preferences, environment: .init(
+            reducesTransparency: reducedTransparency, increasesContrast: increasedContrast,
+            resolvedAppearance: resolvedSystemDark.map { $0 ? .dark : .light } ?? current.resolvedAppearance,
+            reducesMotion: current.reducesMotion, backingScale: current.backingScale))
+    }
+
+    func descriptor(for preferences: LauncherAppearancePreferences,
+                    environment: LauncherAppearanceEnvironment) -> LauncherThemeDescriptor {
+        let context = environment.iconContext(mode: preferences.mode, pointSize: 40)
+        let appearance: NSAppearance? = preferences.mode == .system ? nil : context.drawingAppearance
+        let dark = context.appearance == .dark
+        let reducedTransparency = environment.reducesTransparency
+        let contrast = environment.increasesContrast
 
         switch preferences.design {
         case .minimal:
@@ -332,6 +326,7 @@ final class LauncherThemeController {
                 ? .opaque
                 : .ultraThick
             return LauncherThemeDescriptor(
+                environment: environment,
                 design: .minimal,
                 isDark: dark,
                 width: LauncherMinimalMetrics.width,
@@ -350,8 +345,9 @@ final class LauncherThemeController {
                 backgroundColor: dark
                     ? .black
                     : NSColor(calibratedWhite: 0.93, alpha: 1),
-                glassTintColor: nil,
                 selectionColor: .controlAccentColor,
+                selectedTextColor: .alternateSelectedControlTextColor,
+                selectedShortcutTextColor: .alternateSelectedControlTextColor,
                 hasShadow: false,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,
@@ -359,22 +355,12 @@ final class LauncherThemeController {
                 visibleResultCount: preferences.visibleResultCount
             )
         case .liquidGlass:
-            let liquidSurface: LauncherThemeDescriptor.Surface
-            if reducedTransparency || contrast {
-                liquidSurface = .opaque
-            } else if #available(macOS 26, *), dark {
-                liquidSurface = .glass
-            } else {
-                // Native regular glass paints a pronounced dark perimeter against bright
-                // desktops. Use the borderless system material in Light appearance; Dark
-                // appearance keeps native glass, where its edge is visually absorbed.
-                liquidSurface = .vibrancy
-            }
             return LauncherThemeDescriptor(
+                environment: environment,
                 design: .liquidGlass,
                 isDark: dark,
                 width: LauncherLiquidGlassMetrics.width,
-                cornerRadius: LauncherLiquidGlassMetrics.compactCornerRadius,
+                cornerRadius: LauncherLiquidGlassMetrics.cornerRadius,
                 searchHeight: LauncherLiquidGlassMetrics.searchHeight,
                 // Search and results remain equal-height bands. Insets live outside the table
                 // viewport so they create breathing room without stretching any result row.
@@ -386,23 +372,15 @@ final class LauncherThemeController {
                 resultTopInset: LauncherLiquidGlassMetrics.resultTopInset,
                 resultBottomInset: LauncherLiquidGlassMetrics.resultBottomInset,
                 rowSpacing: 0,
-                surface: liquidSurface,
+                surface: .glass,
                 appearance: appearance,
                 backgroundColor: dark ? NSColor(calibratedWhite: 0.035, alpha: 0.99) : NSColor(calibratedWhite: 0.99, alpha: 0.99),
-                // Bound wallpaper-driven brightness on the Dark native-glass surface. The
-                // borderless Light material does not need an additional tint layer.
-                glassTintColor: liquidSurface == .glass
-                    ? NSColor.black.withAlphaComponent(
-                        LauncherLiquidGlassMetrics.darkGlassTintAlpha
-                    )
-                    : nil,
-                // The selected result is an inset adaptive glass wash, not a saturated blue
-                // table selection. Semantic label color keeps it neutral in both appearances.
-                selectionColor: NSColor.labelColor.withAlphaComponent(contrast ? 0.24 : 0.11),
-                // NSPanel shadows are rectangular for a borderless window and show up as a
-                // dark backplate. Dark native glass supplies its own edge; Light deliberately
-                // stays borderless.
-                hasShadow: false,
+                selectionColor: .controlAccentColor,
+                selectedTextColor: .alternateSelectedControlTextColor,
+                selectedShortcutTextColor: .alternateSelectedControlTextColor,
+                // Glass supplies the backdrop; the floating panel also needs a native window
+                // shadow to remain distinguishable over bright application backgrounds.
+                hasShadow: true,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,
                 verticalPosition: CGFloat(preferences.verticalPosition),

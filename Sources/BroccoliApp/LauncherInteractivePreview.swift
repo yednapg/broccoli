@@ -117,12 +117,13 @@ private struct LauncherInteractivePreviewRepresentable: NSViewRepresentable {
 final class LauncherInteractivePreviewHostView: NSView {
     private let iconProvider = LauncherPreviewIconProvider()
     private let scaleView = NSView()
-    private var content: LauncherPreviewContentView?
+    private(set) var content: LauncherPreviewContentView?
     private var identity: LauncherPreviewRenderIdentity?
     private var preferences: LauncherAppearancePreferences?
     private var interactive: Bool?
     private var fillsWidth: Bool?
     private var nativeSize: NSSize = .zero
+    private var activationObserver: NSObjectProtocol?
 
     var hostedContentFrame: NSRect? { content == nil ? nil : scaleView.frame }
     var hostedNativeSize: NSSize { nativeSize }
@@ -136,6 +137,7 @@ final class LauncherInteractivePreviewHostView: NSView {
         scaleView.translatesAutoresizingMaskIntoConstraints = true
         scaleView.autoresizingMask = []
         addSubview(scaleView)
+        iconProvider.onIconLoaded = { [weak self] _ in self?.content?.refreshIcons() }
         update(
             configuration: configuration,
             interactive: interactive,
@@ -154,10 +156,18 @@ final class LauncherInteractivePreviewHostView: NSView {
                 || preferences != configuration.preferences
                 || self.interactive != interactive
                 || self.fillsWidth != fillsWidth else { return }
+        let canUpdateInPlace = preferences?.hasSameLayout(as: configuration.preferences) == true
+            && self.interactive == interactive
+            && (content?.surfaceKind == configuration.descriptor.surface || configuration.preferences.design == .minimal)
         identity = configuration.identity
         preferences = configuration.preferences
         self.interactive = interactive
         self.fillsWidth = fillsWidth
+        if canUpdateInPlace {
+            content?.updateAppearance(configuration.descriptor)
+            needsLayout = true
+            return
+        }
         content?.removeFromSuperview()
 
         let content = LauncherPreviewContentView(
@@ -173,6 +183,23 @@ final class LauncherInteractivePreviewHostView: NSView {
         scaleView.addSubview(content)
         self.content = content
         needsLayout = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = nil
+        guard let window else { return }
+        iconProvider.refreshPreparedIcons()
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.iconProvider.refreshPreparedIcons() }
+        }
+    }
+
+    deinit {
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
     }
 
     override func layout() {

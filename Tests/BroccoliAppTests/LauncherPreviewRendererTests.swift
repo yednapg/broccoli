@@ -4,6 +4,71 @@ import XCTest
 
 @MainActor
 final class LauncherPreviewRendererTests: XCTestCase {
+    func testCompactAndExpandedPreviewsShareCornerAndMaterialConfiguration() throws {
+        _ = NSApplication.shared
+        for mode in [LauncherAppearanceMode.light, .dark] {
+            var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
+            preferences.mode = mode
+            let theme = LauncherThemeController().descriptor(for: preferences)
+            var compactRadius: CGFloat?
+            for count in [0, 1, 3] {
+                let preview = LauncherPreviewContentView(descriptor: theme,
+                    fixture: .init(query: "screen", results: Array(LauncherPreviewFixture.standard.results.prefix(count))),
+                    iconProvider: quietIconProvider(), interactive: true)
+                preview.prepareForCapture()
+                let surface = try XCTUnwrap(preview.subviews.first as? LauncherLiquidGlassSurfaceView)
+                let glass = try XCTUnwrap(surface.subviews.first as? NSGlassEffectView)
+                if count == 0 { compactRadius = glass.cornerRadius }
+                XCTAssertEqual(glass.cornerRadius, try XCTUnwrap(compactRadius))
+                XCTAssertEqual(glass.style, .regular)
+                XCTAssertNil(glass.tintColor)
+                XCTAssertEqual(glass.alphaValue, 1)
+                XCTAssertEqual(glass.frame.size, preview.frame.size)
+                XCTAssertEqual(glass.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]),
+                               mode == .dark ? .darkAqua : .aqua)
+            }
+        }
+    }
+
+    func testNoResultsPreviewAndLauncherMatchAnOrdinaryResultRow() throws {
+        _ = NSApplication.shared
+        let results = LauncherMainSearchResultComposer.compose(
+            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
+        for mode in [LauncherAppearanceMode.light, .dark] {
+            var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
+            preferences.mode = mode
+            let theme = LauncherThemeController().descriptor(for: preferences)
+            let preview = LauncherPreviewContentView(descriptor: theme,
+                fixture: .init(query: "unmatched", results: results),
+                iconProvider: quietIconProvider(), interactive: true)
+            preview.prepareForCapture()
+            let normal = LauncherPreviewContentView(descriptor: theme,
+                fixture: .init(query: "screen", results: Array(LauncherPreviewFixture.standard.results.prefix(1))),
+                iconProvider: quietIconProvider(), interactive: true)
+            normal.prepareForCapture()
+            let controller = LauncherPanelController()
+            controller.applyAppearance(preferences)
+            controller.setMode(.main, initialQuery: "unmatched")
+            controller.apply(results)
+            XCTAssertEqual(preview.frame, normal.frame)
+            XCTAssertEqual(preview.tableDocumentFrame, normal.tableDocumentFrame)
+            XCTAssertEqual(preview.frame.height, controller.currentPanelHeight)
+            XCTAssertEqual(preview.renderMetrics.resultsViewportHeight, theme.rowHeight)
+            XCTAssertEqual(preview.renderMetrics.resultsDocumentHeight, theme.rowHeight)
+            XCTAssertNil(preview.selectedResultID)
+            XCTAssertFalse(preview.moveInteractiveSelection(up: false))
+        }
+    }
+
+    private func quietIconProvider() -> LauncherPreviewIconProvider {
+        // Cache-lifecycle tests control icon arrivals explicitly; filesystem timing must not
+        // randomly invalidate the snapshots under test.
+        LauncherPreviewIconProvider(iconCache: IconCache(
+            systemSettingsIconStore: SystemSettingsNativeIconStore { _, _ in
+                .init(iconsByKey: [:], extensionIndexSucceeded: false)
+            }, startsNativeIconResolution: false, applicationIconOperation: { _, _ in nil }))
+    }
+
     func testFixtureUsesRealSearchModelsAcrossProductionResultKinds() {
         let fixture = LauncherPreviewFixture.standard
 
@@ -96,7 +161,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
     func testRendererOnlyCapturesDuringSettingsSessionAndClearsOnClose() async {
         _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer()
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider())
         let preferences = LauncherAppearancePreferences.defaults(design: .minimal)
 
         let imageBeforeOpening = await renderer.image(for: preferences)
@@ -118,7 +183,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
     func testRenderedScreenshotUsesProductionDescriptorDimensionsAndRetinaPixels() async throws {
         _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer()
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider())
         renderer.beginSettingsSession()
         defer { renderer.endSettingsSession() }
 
@@ -165,7 +230,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
             ),
             interactive: true
         )
-        surface.configure(isDark: false, tintColor: nil)
+        surface.appearance = NSAppearance(named: .aqua)
         let content = NSView()
         surface.setContentView(content)
         surface.layoutSubtreeIfNeeded()
@@ -193,16 +258,16 @@ final class LauncherPreviewRendererTests: XCTestCase {
             }
             XCTAssertTrue(glass.contentView === content.superview)
 
-            surface.configure(isDark: true, tintColor: nil)
+            surface.appearance = NSAppearance(named: .darkAqua)
             surface.layoutSubtreeIfNeeded()
             XCTAssertEqual(glass.style, .regular)
 
-            surface.configure(isDark: false, tintColor: nil)
+            surface.appearance = NSAppearance(named: .aqua)
             surface.frame.size.height = 184
             surface.layoutSubtreeIfNeeded()
             XCTAssertEqual(glass.frame, surface.bounds)
             XCTAssertEqual(glass.style, .regular)
-            XCTAssertEqual(glass.cornerRadius, LauncherLiquidGlassSurfaceView.expandedCornerRadius)
+            XCTAssertEqual(glass.cornerRadius, LauncherLiquidGlassSurfaceView.cornerRadius)
         } else {
             let fallback = try XCTUnwrap(
                 surface.subviews.compactMap { $0 as? NSVisualEffectView }.first
@@ -214,7 +279,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
     func testRenderedResultsViewportMatchesProductionDocumentHeight() async throws {
         _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer()
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider())
         renderer.beginSettingsSession()
         defer { renderer.endSettingsSession() }
 
@@ -247,7 +312,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
                 increasesContrast: false
             )
         var environmentReadCount = 0
-        let renderer = LauncherPreviewRenderer(environmentProvider: {
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider(), environmentProvider: {
             environmentReadCount += 1
             // The first read performs the fast cache check. Simulate accessibility changing
             // while the async renderer yields, before it commits a new cached image.
@@ -266,15 +331,8 @@ final class LauncherPreviewRendererTests: XCTestCase {
         ).surface
 
         XCTAssertEqual(renderer.lastRenderedSurface, expectedSurface)
-        XCTAssertNotEqual(
-            expectedSurface,
-            LauncherThemeController().descriptor(
-                for: preferences,
-                reducedTransparency: actual.reducesTransparency,
-                increasedContrast: actual.increasesContrast
-            ).surface,
-            "The fixture must exercise a real accessibility-state transition"
-        )
+        XCTAssertEqual(expectedSurface, .glass,
+            "Native glass owns accessibility adaptation without replacing the surface")
     }
 
     func testLiveEnvironmentRefreshInvalidatesOnlyAffectedCachedPreviews() async throws {
@@ -284,7 +342,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
             increasesContrast: false,
             resolvedAppearance: .light
         ))
-        let renderer = LauncherPreviewRenderer(environmentProvider: { environment.value })
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider(), environmentProvider: { environment.value })
         renderer.beginSettingsSession()
         defer { renderer.endSettingsSession() }
 
@@ -324,7 +382,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
     func testTargetedInvalidationLeavesOtherDesignCached() async throws {
         _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer()
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider())
         renderer.beginSettingsSession()
         defer { renderer.endSettingsSession() }
 
@@ -347,7 +405,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
     func testNativeFixtureIconArrivalInvalidatesCapturedPreviews() async throws {
         _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer()
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider())
         renderer.beginSettingsSession()
         defer { renderer.endSettingsSession() }
 
@@ -371,7 +429,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
     func testCacheIsCostBounded() async {
         _ = NSApplication.shared
-        let renderer = LauncherPreviewRenderer(cacheCostLimit: 1)
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider(), cacheCostLimit: 1)
         renderer.beginSettingsSession()
         defer { renderer.endSettingsSession() }
 

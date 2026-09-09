@@ -94,6 +94,20 @@ enum ActionRegistry {
         definitions.first { $0.id == id }
     }
 
+    /// Search snapshots can outlive a system appearance change. Resolve stateful wording
+    /// when publishing results too, so an older search cannot put the opposite label back.
+    static func resolvingSystemAppearance(
+        in results: [RankedResult], isDarkMode: @autoclosure () -> Bool
+    ) -> [RankedResult] {
+        guard let index = results.firstIndex(where: { $0.entry.target == .action(id: appearanceToggleID) }),
+              let definition = definition(id: appearanceToggleID) else { return results }
+        let current = searchDefinition(definition, isDarkMode: isDarkMode())
+        guard results[index].entry.title != current.title else { return results }
+        var updated = results
+        updated[index] = RankedResult(entry: current.searchEntry, score: results[index].score)
+        return updated
+    }
+
     private static func searchDefinition(
         _ definition: ActionDefinition,
         isDarkMode: Bool

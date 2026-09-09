@@ -261,7 +261,7 @@ final class IconCacheTests: XCTestCase {
         let requests = SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
         let resolution = await SystemSettingsNativeIconResolver.resolve(
             requests: requests,
-            backingScale: 2
+            context: .init(appearance: .light, backingScale: 2)
         )
 
         XCTAssertTrue(resolution.extensionIndexSucceeded)

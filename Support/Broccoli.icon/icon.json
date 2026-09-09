@@ -19,10 +19,10 @@
           ],
           "name" : "Broccoli",
           "position" : {
-            "scale" : 1.0,
+            "scale" : 1.1428571428571428,
             "translation-in-points" : [
-              0,
-              0
+              -1,
+              8
             ]
           }
         }

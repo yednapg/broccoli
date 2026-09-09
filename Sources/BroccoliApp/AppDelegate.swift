@@ -37,41 +37,16 @@ enum ApplicationIconResource {
 
 @MainActor
 final class ApplicationIconController {
-    typealias ImageLoader = (String) -> NSImage?
-    typealias ImageSetter = (NSImage) -> Void
-
-    private let imageLoader: ImageLoader
+    typealias ImageSetter = (NSImage?) -> Void
     private let imageSetter: ImageSetter
-    private(set) var resourceName: String?
-    private var image: NSImage?
 
-    init(
-        imageLoader: @escaping ImageLoader = { resourceName in
-            guard let iconURL = Bundle.main.url(forResource: resourceName, withExtension: "png")
-            else { return nil }
-            return NSImage(contentsOf: iconURL)
-        },
-        imageSetter: @escaping ImageSetter = { image in
-            NSApp.applicationIconImage = image
-        }
-    ) {
-        self.imageLoader = imageLoader
+    init(imageSetter: @escaping ImageSetter = { NSApp.applicationIconImage = $0 }) {
         self.imageSetter = imageSetter
     }
 
-    func update(for appearance: NSAppearance) {
-        let resourceName = ApplicationIconResource.name(for: appearance)
-        guard let image = imageLoader(resourceName) else { return }
-        image.isTemplate = false
-        self.resourceName = resourceName
-        self.image = image
-        imageSetter(image)
-    }
-
-    func reapplyCurrentImage() {
-        guard let image else { return }
-        imageSetter(image)
-    }
+    /// The compiled Icon Composer asset owns Dock appearance in every process state.
+    /// A flattened PNG override bypasses that asset and can acquire a second system plate.
+    func restoreBundleIcon() { imageSetter(nil) }
 }
 
 @MainActor
@@ -85,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var coordinator: LauncherCoordinator!
     private var catalogService: ApplicationCatalogService!
     private var systemSettingsCatalogService: SystemSettingsCatalogService!
+    private var effectiveAppearanceObservation: NSKeyValueObservation?
     private weak var settingsWindow: NSWindow?
     private var settingsWindowCloseObserver: NSObjectProtocol?
     private var openSettingsAction: (() -> Void)?
@@ -205,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         panel?.restoreSearchFocusIfVisible()
+        panel?.refreshDisplayedNativeIcons()
     }
 
     func configureSettingsOpener(_ action: @escaping () -> Void) {
@@ -257,9 +234,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             NotificationCenter.default.removeObserver(settingsWindowCloseObserver)
         }
         settingsWindow = window
-        // NSApp can briefly retain Aqua while an accessory app is becoming regular. The
-        // attached window already owns the correct system appearance, so use it to choose the
-        // Dock/About icon as soon as Settings enters the window hierarchy.
+        // The scene can attach after the activation request. Commit key-window ownership
+        // here, then let SwiftUI reflect active and inactive selection normally.
+        if lifecycleState.presentationMode == .settings {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
+        // Keep the Dock on its adaptive bundle asset after the presentation transition.
         updateApplicationIcon()
         settingsContext?.previewRenderer.beginSettingsSession()
         settingsWindowCloseObserver = NotificationCenter.default.addObserver(
@@ -284,9 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // macOS settings window and owns a Dock icon for as long as that window is open.
             NSApp.setActivationPolicy(.regular)
         }
-        // Changing activation policy rebuilds the Dock tile and can momentarily restore the
-        // bundle icon. Reapply the already-resolved appearance-specific image afterward.
-        applicationIconController.reapplyCurrentImage()
+        applicationIconController.restoreBundleIcon()
     }
 
     private func observePreferences() {
@@ -373,6 +352,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func observeDisplayPreferences() {
+        effectiveAppearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.coordinator.refreshAppearanceForSystemChange()
+                self?.updateApplicationIcon()
+            }
+        }
         workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil,
@@ -396,8 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func updateApplicationIcon() {
-        let appearance = settingsWindow?.effectiveAppearance ?? NSApp.effectiveAppearance
-        applicationIconController.update(for: appearance)
+        applicationIconController.restoreBundleIcon()
     }
 
     @discardableResult

@@ -13,7 +13,7 @@ final class LauncherMinimalMaterialSurfaceView: NSView {
     private let contentHost = NSView()
     private weak var hostedContent: NSView?
 
-    init(frame frameRect: NSRect = .zero, isDark: Bool) {
+    init(frame frameRect: NSRect = .zero, isDark: Bool, opaqueBackground: NSColor? = nil) {
         super.init(frame: frameRect)
 
         wantsLayer = true
@@ -45,6 +45,7 @@ final class LauncherMinimalMaterialSurfaceView: NSView {
         contentHost.frame = bounds
         contentHost.autoresizingMask = [.width, .height]
         addSubview(contentHost)
+        updateAppearance(isDark: isDark, opaqueBackground: opaqueBackground)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -55,6 +56,20 @@ final class LauncherMinimalMaterialSurfaceView: NSView {
         tintView.frame = bounds
         contentHost.frame = bounds
         hostedContent?.frame = contentHost.bounds
+    }
+
+    func updateAppearance(isDark: Bool, opaqueBackground: NSColor? = nil) {
+        materialView.isHidden = opaqueBackground != nil
+        layer?.backgroundColor = nil
+        if let opaqueBackground {
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                tintView.layer?.backgroundColor = opaqueBackground.cgColor
+            }
+            return
+        }
+        tintView.layer?.backgroundColor = isDark
+            ? NSColor.black.withAlphaComponent(Self.darkTintOpacity).cgColor
+            : NSColor.white.withAlphaComponent(Self.lightTintOpacity).cgColor
     }
 
     func setContentView(_ view: NSView) {

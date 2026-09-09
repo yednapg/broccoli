@@ -136,9 +136,10 @@ final class LauncherInlineSuggestionTests: XCTestCase {
         XCTAssertNil(controller.inlineSuggestionText)
         XCTAssertEqual(controller.listedResultIDs, ["status:no-results"])
         XCTAssertTrue(controller.isResultViewportVisible)
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             controller.currentPanelHeight,
-            LauncherLiquidGlassMetrics.searchHeight
+            LauncherThemeController().descriptor(for: preferences).panelHeight(resultCount: 1),
+            "The message occupies the same space as any single result"
         )
         XCTAssertTrue(controller.control(
             NSTextField(),

@@ -100,7 +100,7 @@ struct AppearanceSettingsPane: View {
                         preferences: preferences.appearance,
                         renderer: previewRenderer
                     )
-                    Text("Click the search field to edit the preview. Use ↑ and ↓ to move selection; Return is intentionally disabled.")
+                    Text("Uses production launcher components. Click to edit and use ↑ and ↓ to move selection; Return is disabled. Desktop backgrounds can change how glass looks.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -5,6 +5,93 @@ import XCTest
 
 @MainActor
 final class LauncherPanelPreparedViewTests: XCTestCase {
+    func testOpeningDoesNotInheritAnEnclosingAnimation() {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        let window = controller.visibilityIsolationWindow
+        let probe = ResizeContextProbe()
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                probe.resizeAnimationStates.append(NSAnimationContext.current.allowsImplicitAnimation)
+            }
+        }
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+            controller.dismiss(notify: false)
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 1
+            context.allowsImplicitAnimation = true
+            controller.show(on: NSScreen.main)
+            XCTAssertTrue(context.allowsImplicitAnimation)
+        }
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertFalse(probe.resizeAnimationStates.isEmpty)
+        XCTAssertTrue(probe.resizeAnimationStates.allSatisfy { !$0 })
+    }
+
+    func testResultResizeDoesNotInheritAnEnclosingAnimation() throws {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.setMode(.main, initialQuery: "fixture")
+        let root = try XCTUnwrap(controller.visibilityIsolationWindow.contentView)
+        let probe = ResizeContextProbe(frame: root.bounds)
+        probe.autoresizingMask = [.width, .height]
+        root.addSubview(probe)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 1
+            context.allowsImplicitAnimation = true
+            controller.apply(LauncherPreviewFixture.standard.results)
+            XCTAssertTrue(context.allowsImplicitAnimation, "The launcher must preserve its caller's context")
+        }
+        XCTAssertFalse(probe.resizeAnimationStates.isEmpty)
+        XCTAssertTrue(probe.resizeAnimationStates.allSatisfy { !$0 },
+                      "A native glass resize must not inherit an unrelated view animation")
+    }
+
+    func testVisibleResultTransitionsKeepTheirSizeAfterAppKitUpdates() async throws {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
+        let noResults = LauncherMainSearchResultComposer.compose(
+            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
+        let fixtures = LauncherPreviewFixture.standard.results
+        for mode in [LauncherAppearanceMode.light, .dark] {
+            preferences.mode = mode
+            controller.applyAppearance(preferences)
+            let theme = LauncherThemeController().descriptor(for: preferences)
+            controller.show(on: NSScreen.main)
+            let window = controller.visibilityIsolationWindow
+            let top = window.frame.maxY
+            controller.setMode(.main, initialQuery: "fixture")
+            for _ in 0..<4 {
+                for results in [fixtures, noResults, [], Array(fixtures.prefix(1))] {
+                    controller.apply(results)
+                    let expectedHeight = theme.panelHeight(resultCount: results.count)
+                    XCTAssertEqual(window.frame.height, expectedHeight)
+                    // Give AppKit a later turn to expose deferred fitting-size changes.
+                    try await Task.sleep(for: .milliseconds(10))
+                    window.contentView?.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(window.frame.height, expectedHeight)
+                    XCTAssertEqual(window.frame.maxY, top, accuracy: 0.5)
+                    let root = try XCTUnwrap(window.contentView)
+                    let surface = try XCTUnwrap(root.subviews.first as? LauncherLiquidGlassSurfaceView)
+                    XCTAssertEqual(surface.frame, root.bounds)
+                    XCTAssertEqual(root.frame.size, window.frame.size)
+                    XCTAssertTrue(root.layer?.masksToBounds == true)
+                    XCTAssertEqual(root.layer?.cornerRadius, theme.cornerRadius)
+                    XCTAssertTrue(root.layer?.animationKeys()?.isEmpty ?? true,
+                                  "The window clip must not lag behind the resized glass")
+                }
+            }
+            controller.dismiss(notify: false)
+        }
+    }
+
     func testMaximumResultRowsArePrebuiltAndStableAcrossReloads() throws {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
@@ -250,5 +337,17 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         controller.apply(Array(fixtures.prefix(1)))
         XCTAssertTrue(controller.isResultViewportVisible)
         XCTAssertEqual(controller.currentPanelHeight, oneResultHeight)
+    }
+}
+
+@MainActor
+private final class ResizeContextProbe: NSView {
+    var resizeAnimationStates: [Bool] = []
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size {
+            resizeAnimationStates.append(NSAnimationContext.current.allowsImplicitAnimation)
+        }
+        super.setFrameSize(newSize)
     }
 }

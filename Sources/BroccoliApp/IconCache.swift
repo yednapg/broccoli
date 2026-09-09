@@ -10,9 +10,13 @@ private final class SendableImage: @unchecked Sendable {
 
 @MainActor
 final class IconCache {
+    typealias ApplicationIconOperation = @Sendable (URL, IconRenderContext) -> MaterializedSystemSettingsIcon?
+    private let applicationIconOperation: ApplicationIconOperation
     private let cache = NSCache<NSString, NSImage>()
     private var staticIcons: [String: NSImage] = [:]
-    private var installedNativeSystemSettingsIconKeys: Set<String> = []
+    private var previousNativeKeys: [String: IconCacheKey] = [:]
+    private var pendingRefresh: Task<Void, Never>?
+    private var refreshEntries: [IconRenderContext: [String: SearchEntry]] = [:]
     private let systemSettingsIconStore: SystemSettingsNativeIconStore
     private var systemSettingsIconObserver: NSObjectProtocol?
     private let interactiveQueue = DispatchQueue(
@@ -24,10 +28,11 @@ final class IconCache {
         label: "dev.gauravpandey.broccoli.icons.prewarm",
         qos: .utility
     )
-    private var interactiveLoading: Set<String> = []
-    private var thumbnailLoading: Set<String> = []
-    private var prewarming: Set<String> = []
-    private let backingScale: CGFloat
+    private var interactiveLoading: Set<IconCacheKey> = []
+    private var thumbnailLoading: Set<IconCacheKey> = []
+    private var prewarming: Set<IconCacheKey> = []
+    private let defaultContext: IconRenderContext
+    private let nativeCache = NativeIconBitmapCache(costLimit: 16 * 1_024 * 1_024)
     private let resolvesNativeSettingsIcons: Bool
     private let genericApplication = NSImage(
         systemSymbolName: "app",
@@ -43,14 +48,17 @@ final class IconCache {
     ) ?? NSImage(size: NSSize(width: 40, height: 40))
 
     var onIconLoaded: ((String) -> Void)?
+    var onNativeIconLoaded: ((String, IconRenderContext) -> Void)?
 
     init(
         systemSettingsIconStore: SystemSettingsNativeIconStore = .shared,
         backingScale: CGFloat? = nil,
-        startsNativeIconResolution: Bool = true
+        startsNativeIconResolution: Bool = true,
+        applicationIconOperation: @escaping ApplicationIconOperation = SystemSettingsNativeIconResolver.materializeIcon
     ) {
+        self.applicationIconOperation = applicationIconOperation
         self.systemSettingsIconStore = systemSettingsIconStore
-        self.backingScale = max(2, backingScale ?? NSScreen.main?.backingScaleFactor ?? 2)
+        defaultContext = LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40, backingScale: backingScale)
         resolvesNativeSettingsIcons = startsNativeIconResolution
         cache.totalCostLimit = 16 * 1_024 * 1_024
         systemSettingsIconObserver = NotificationCenter.default.addObserver(
@@ -58,15 +66,15 @@ final class IconCache {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            let iconKey = notification.object as? String
+            let completion = notification.object as? SystemSettingsNativeIconStore.Completion
             MainActor.assumeIsolated {
-                guard let self,
-                      let iconKey,
-                      let icon = systemSettingsIconStore.cachedIcon(for: iconKey) else { return }
-                self.installNativeSystemSettingsIcon(icon, for: iconKey, notify: true)
+                guard let self, let completion,
+                      completion.storeIdentifier == ObjectIdentifier(systemSettingsIconStore) else { return }
+                self.onIconLoaded?(completion.iconKey)
+                self.onNativeIconLoaded?(completion.iconKey, completion.context)
             }
         }
-        prebuildStaticIcons()
+        staticIcons = Self.actionIcons
     }
 
     deinit {
@@ -75,97 +83,97 @@ final class IconCache {
         }
     }
 
-    func image(for entry: SearchEntry) -> NSImage {
-        // This lookup is cache-only and performs no resolution, filesystem, or workspace work.
-        // It also lets a cache created after process-wide resolution consume the shared bitmap
-        // without relying on having observed the original notification.
-        if entry.kind == .systemSetting,
-           let icon = systemSettingsIconStore.cachedIcon(for: entry.iconKey) {
-            if !installedNativeSystemSettingsIconKeys.contains(entry.iconKey) {
-                installNativeSystemSettingsIcon(icon, for: entry.iconKey, notify: false)
-            }
-            return icon.image
+    func image(for entry: SearchEntry, context: IconRenderContext? = nil) -> NSImage {
+        // Static template actions are appearance-independent and remain a minimal hot path.
+        if entry.kind == .action { return staticIcons[entry.iconKey] ?? genericApplication }
+        let context = context ?? defaultContext
+        if entry.kind == .systemSetting {
+            return systemSettingsIconStore.cachedIcon(for: entry.iconKey, context: context)?.image
+                ?? systemSettingsIconStore.previousIcon(for: entry.iconKey)?.image
+                ?? staticIcons[entry.iconKey] ?? genericApplication
         }
-        if let cached = cache.object(forKey: entry.iconKey as NSString) { return cached }
+        let key = context.cacheKey(for: entry.iconKey)
+        if entry.kind == .file, let cached = cache.object(forKey: key.thumbnailKey) { return cached }
+        if let cached = nativeCache.image(for: key) { return cached.image }
         switch entry.kind {
         case .application:
-            loadApplicationIcon(path: entry.iconKey, interactive: true)
-            return genericApplication
+            loadApplicationIcon(path: entry.iconKey, context: context, interactive: true)
+            return previousNativeKeys[entry.iconKey].flatMap { nativeCache.image(for: $0)?.image }
+                ?? genericApplication
         case .file:
             let isDirectory: Bool
-            if case .file(_, let targetIsDirectory) = entry.target {
-                isDirectory = targetIsDirectory
-            } else {
-                isDirectory = false
-            }
-            loadFileIcon(path: entry.iconKey, isDirectory: isDirectory)
+            if case .file(_, let directory) = entry.target { isDirectory = directory }
+            else { isDirectory = false }
+            loadFileIcon(path: entry.iconKey, isDirectory: isDirectory, context: context)
             return isDirectory ? genericFolder : genericFile
         case .calculator:
             return NSImage(systemSymbolName: "function", accessibilityDescription: "Calculator") ?? genericApplication
         case .clipboard:
             return NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard") ?? genericApplication
         case .status:
-            if entry.iconKey == "status:no-results" {
-                return NSImage(
-                    systemSymbolName: "questionmark",
-                    accessibilityDescription: "No results"
-                ) ?? genericApplication
-            }
-            return NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Status") ?? genericApplication
+            return NSImage(systemSymbolName: entry.iconKey == "status:no-results" ? "questionmark" : "magnifyingglass",
+                accessibilityDescription: entry.iconKey == "status:no-results" ? "No results" : "Status") ?? genericApplication
         case .systemSetting, .action:
-            guard let icon = staticIcons[entry.iconKey] else { return genericApplication }
-            cache.setObject(icon, forKey: entry.iconKey as NSString, cost: 40 * 40 * 4)
-            return icon
+            return staticIcons[entry.iconKey] ?? genericApplication
         }
     }
 
-    func prewarm(_ entries: [SearchEntry], limit: Int = 16) {
+    func prewarm(_ entries: [SearchEntry], limit: Int = 16, context: IconRenderContext? = nil) {
+        let context = context ?? defaultContext
         let settings = entries.filter { $0.kind == .systemSetting }
         if !settings.isEmpty {
             prebuildSettingFallbacks(settings)
-            let requests = SystemSettingsIconRequestMapper.requests(for: settings)
-            for request in requests {
-                if let icon = systemSettingsIconStore.cachedIcon(for: request.iconKey) {
-                    installNativeSystemSettingsIcon(icon, for: request.iconKey, notify: false)
-                }
-            }
             if resolvesNativeSettingsIcons {
                 systemSettingsIconStore.ensureResolution(
-                    requests: requests,
-                    backingScale: backingScale
-                )
+                    requests: SystemSettingsIconRequestMapper.requests(for: settings), context: context)
             }
         }
-
-        let prioritized = entries
-            .filter { $0.kind == .application && $0.isRunning }
-            .sorted {
-                if $0.isRunning != $1.isRunning { return $0.isRunning }
-                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-            }
-        var scheduled = 0
-        for entry in prioritized {
-            guard scheduled < limit else { break }
-            guard cache.object(forKey: entry.iconKey as NSString) == nil else { continue }
-            loadApplicationIcon(path: entry.iconKey, interactive: false)
-            scheduled += 1
+        let prioritized = entries.filter { $0.kind == .application }
+            .sorted { $0.isRunning && !$1.isRunning }
+        for entry in prioritized.prefix(limit) {
+            guard nativeCache.image(for: context.cacheKey(for: entry.iconKey)) == nil else { continue }
+            loadApplicationIcon(path: entry.iconKey, context: context, interactive: false)
         }
     }
 
-    private func prebuildStaticIcons() {
+    /// Coalesce presentation/activation bursts. Keep cached artwork visible while native
+    /// sources are sampled again, without polling or consulting private appearance settings.
+    func refreshNativeIcons(_ entries: [SearchEntry], context: IconRenderContext) {
+        for entry in entries where entry.kind == .application || entry.kind == .systemSetting {
+            refreshEntries[context, default: [:]][entry.iconKey] = entry
+        }
+        guard pendingRefresh == nil, !refreshEntries.isEmpty else { return }
+        pendingRefresh = Task { [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            let batches = refreshEntries
+            refreshEntries.removeAll(keepingCapacity: true)
+            pendingRefresh = nil
+            for (context, entriesByKey) in batches {
+                let entries = Array(entriesByKey.values)
+                if resolvesNativeSettingsIcons {
+                    systemSettingsIconStore.ensureResolution(
+                        requests: SystemSettingsIconRequestMapper.requests(for: entries),
+                        context: context, refresh: true)
+                }
+                for entry in entries where entry.kind == .application {
+                    loadApplicationIcon(path: entry.iconKey, context: context, interactive: false)
+                }
+            }
+        }
+    }
+
+    // Action templates have no appearance-dependent pixels. Share these immutable canvases
+    // across the live launcher and previews instead of rasterizing them for every IconCache.
+    private static let actionIcons: [String: NSImage] = {
+        var icons: [String: NSImage] = [:]
         for entry in ActionRegistry.searchEntries {
-            let icon = Self.actionTemplateIcon(
+            icons[entry.iconKey] = actionTemplateIcon(
                 symbolCandidates: NativeIconCatalog.actionSymbols(for: entry),
-                accessibilityDescription: entry.title
-            )
-            staticIcons[entry.iconKey] = icon
-            cache.setObject(
-                icon,
-                forKey: entry.iconKey as NSString,
-                cost: Self.boundedImageCost(icon)
-            )
+                accessibilityDescription: entry.title)
         }
-    }
+        return icons
+    }()
 
     private func prebuildSettingFallbacks(_ entries: [SearchEntry]) {
         for entry in entries where staticIcons[entry.iconKey] == nil {
@@ -180,17 +188,6 @@ final class IconCache {
             staticIcons[entry.iconKey] = icon
             cache.setObject(icon, forKey: entry.iconKey as NSString, cost: 40 * 40 * 4)
         }
-    }
-
-    private func installNativeSystemSettingsIcon(
-        _ icon: MaterializedSystemSettingsIcon,
-        for iconKey: String,
-        notify: Bool
-    ) {
-        installedNativeSystemSettingsIconKeys.insert(iconKey)
-        staticIcons[iconKey] = icon.image
-        cache.setObject(icon.image, forKey: iconKey as NSString, cost: icon.cost)
-        if notify { onIconLoaded?(iconKey) }
     }
 
     private func badgeIcon(
@@ -324,7 +321,7 @@ final class IconCache {
         let representationCost = image.representations.reduce(0) { current, representation in
             let width = max(0, representation.pixelsWide)
             let height = max(0, representation.pixelsHigh)
-            return max(current, width * height * 4)
+            return current + width * height * 4
         }
         return max(representationCost, Int(image.size.width * image.size.height * 4))
     }
@@ -374,80 +371,67 @@ final class IconCache {
         }
     }
 
-    private func loadApplicationIcon(path: String, interactive: Bool) {
-        guard !path.isEmpty else { return }
-        if interactive {
-            guard !interactiveLoading.contains(path) else { return }
-            interactiveLoading.insert(path)
-        } else {
-            guard !prewarming.contains(path) else { return }
-            prewarming.insert(path)
-        }
+    private func loadApplicationIcon(path: String, context: IconRenderContext, interactive: Bool) {
+        let key = context.cacheKey(for: path)
+        guard !path.isEmpty, !interactiveLoading.contains(key), !prewarming.contains(key) else { return }
+        if interactive { interactiveLoading.insert(key) } else { prewarming.insert(key) }
         let queue = interactive ? interactiveQueue : prewarmQueue
+        let operation = applicationIconOperation
         queue.async { [weak self] in
-            // System applications such as Safari can be exposed through /Applications as
-            // symlinks. Asking NSWorkspace for the link icon adds an alias badge; resolve only
-            // for presentation while retaining the original launch/cache identity.
-            let iconPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-            let box = SendableImage(NSWorkspace.shared.icon(forFile: iconPath))
+            let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+            let icon = operation(url, context)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                box.image.size = NSSize(width: 40, height: 40)
-                self.cache.setObject(box.image, forKey: path as NSString, cost: 40 * 40 * 4)
-                if interactive { self.interactiveLoading.remove(path) }
-                else { self.prewarming.remove(path) }
-                self.onIconLoaded?(path)
+                interactiveLoading.remove(key)
+                prewarming.remove(key)
+                guard let icon else { return }
+                guard nativeCache.insert(icon, for: key) else { return }
+                if previousNativeKeys.count >= 512 { previousNativeKeys.removeAll(keepingCapacity: true) }
+                previousNativeKeys[path] = key
+                onIconLoaded?(path)
+                onNativeIconLoaded?(path, context)
             }
         }
     }
 
-    private func loadFileIcon(path: String, isDirectory: Bool) {
-        guard !path.isEmpty,
-              !interactiveLoading.contains(path),
-              !thumbnailLoading.contains(path) else { return }
-        interactiveLoading.insert(path)
-        let thumbnailScale = NSScreen.main?.backingScaleFactor ?? 2
+    private func loadFileIcon(path: String, isDirectory: Bool, context: IconRenderContext) {
+        let key = context.cacheKey(for: path)
+        guard !path.isEmpty, !interactiveLoading.contains(key), !thumbnailLoading.contains(key) else { return }
+        interactiveLoading.insert(key)
         interactiveQueue.async { [weak self] in
-            // NSWorkspace supplies the same native document/folder artwork Finder uses. It is
-            // intentionally obtained off-main so a cache miss can never add synchronous icon
-            // work to the typing path.
-            let box = SendableImage(NSWorkspace.shared.icon(forFile: path))
+            let icon = SystemSettingsNativeIconResolver.materializeIcon(at: URL(fileURLWithPath: path), context: context)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                box.image.size = NSSize(width: 40, height: 40)
-                self.cache.setObject(box.image, forKey: path as NSString, cost: 40 * 40 * 4)
-                self.interactiveLoading.remove(path)
-                self.onIconLoaded?(path)
-
-                // Finder's native folder icon is the final representation. Regular files can
-                // subsequently receive a richer Quick Look thumbnail without delaying this
-                // immediate fallback or the initial row update.
-                if !isDirectory {
-                    self.loadFileThumbnail(path: path, scale: thumbnailScale)
+                interactiveLoading.remove(key)
+                if let icon {
+                    nativeCache.insert(icon, for: key)
+                    onIconLoaded?(path)
                 }
+                if !isDirectory { loadFileThumbnail(path: path, context: context) }
             }
         }
     }
 
-    private func loadFileThumbnail(path: String, scale: CGFloat) {
-        guard !path.isEmpty, !thumbnailLoading.contains(path) else { return }
-        thumbnailLoading.insert(path)
+    private func loadFileThumbnail(path: String, context: IconRenderContext) {
+        let key = context.cacheKey(for: path)
+        guard !path.isEmpty, !thumbnailLoading.contains(key) else { return }
+        thumbnailLoading.insert(key)
         let request = QLThumbnailGenerator.Request(
             fileAt: URL(fileURLWithPath: path),
             size: NSSize(width: 128, height: 128),
-            scale: scale,
+            scale: context.backingScale,
             representationTypes: .all
         )
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { [weak self] representation, _ in
             guard let representation else {
-                Task { @MainActor [weak self] in self?.thumbnailLoading.remove(path) }
+                Task { @MainActor [weak self] in self?.thumbnailLoading.remove(key) }
                 return
             }
             let box = SendableImage(representation.nsImage)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.cache.setObject(box.image, forKey: path as NSString, cost: 128 * 128 * 4)
-                self.thumbnailLoading.remove(path)
+                self.cache.setObject(box.image, forKey: key.thumbnailKey, cost: Self.boundedImageCost(box.image))
+                self.thumbnailLoading.remove(key)
                 self.onIconLoaded?(path)
             }
         }
