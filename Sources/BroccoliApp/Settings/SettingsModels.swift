@@ -148,10 +148,13 @@ enum SettingsShellLayout {
     static let sidebarWidth: CGFloat = 209
     static let contentWidth: CGFloat = 980
     static let splitDividerWidth: CGFloat = 0
-    static let searchFieldHeight: CGFloat = 34
+    static let searchFieldHeight: CGFloat = 36
+    static let searchFieldControlSize: NSControl.ControlSize = .extraLarge
+    static let sidebarLabelFontSize: CGFloat = 14
+    static let searchFieldFontSize = sidebarLabelFontSize
     static let searchHorizontalInset: CGFloat = 16
     static let searchTopInset: CGFloat = 8
-    static let sidebarRowContentHeight: CGFloat = 26
+    static let sidebarRowContentHeight: CGFloat = 28
     static let sidebarIconCanvasSize: CGFloat = 18
     static let sidebarIconTrailingPadding: CGFloat = 3
     static let detailMinimumWidth = contentWidth - sidebarWidth - splitDividerWidth

@@ -82,6 +82,72 @@ private struct SettingsNativeSearchSidebarView: View {
                 placement: .sidebar,
                 prompt: Text("Search settings")
             )
+            .background(SettingsNativeSearchFieldConfigurator())
+    }
+}
+
+private struct SettingsNativeSearchFieldConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsNativeSearchFieldConfigurationView {
+        SettingsNativeSearchFieldConfigurationView()
+    }
+
+    func updateNSView(
+        _ nsView: SettingsNativeSearchFieldConfigurationView,
+        context: Context
+    ) {
+        nsView.configureSearchFieldIfAvailable()
+    }
+}
+
+@MainActor
+private final class SettingsNativeSearchFieldConfigurationView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configureSearchFieldIfAvailable()
+        DispatchQueue.main.async { [weak self] in
+            self?.configureSearchFieldIfAvailable()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        configureSearchFieldIfAvailable()
+    }
+
+    func configureSearchFieldIfAvailable() {
+        guard let contentView = window?.contentView,
+              let searchField = SettingsNativeSearchFieldAppearance.searchField(in: contentView) else {
+            return
+        }
+        SettingsNativeSearchFieldAppearance.apply(to: searchField)
+    }
+}
+
+@MainActor
+enum SettingsNativeSearchFieldAppearance {
+    static func apply(to searchField: NSSearchField) {
+        guard searchField.controlSize != SettingsShellLayout.searchFieldControlSize
+                || searchField.font?.pointSize != SettingsShellLayout.searchFieldFontSize else {
+            return
+        }
+        searchField.controlSize = SettingsShellLayout.searchFieldControlSize
+        searchField.font = .systemFont(ofSize: SettingsShellLayout.searchFieldFontSize)
+        searchField.invalidateIntrinsicContentSize()
+        searchField.superview?.invalidateIntrinsicContentSize()
+        searchField.superview?.needsLayout = true
+    }
+
+    static func searchField(in view: NSView) -> NSSearchField? {
+        if let searchField = view as? NSSearchField,
+           searchField.placeholderString == "Search settings" {
+            return searchField
+        }
+        for subview in view.subviews {
+            if let searchField = searchField(in: subview) {
+                return searchField
+            }
+        }
+        return nil
     }
 }
 
@@ -268,7 +334,7 @@ private struct SettingsSidebarList: View {
                         )
                         .padding(.trailing, SettingsShellLayout.sidebarIconTrailingPadding)
                 }
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: SettingsShellLayout.sidebarLabelFontSize, weight: .medium))
                     .frame(height: SettingsShellLayout.sidebarRowContentHeight)
                     .tag(section)
             }
@@ -301,8 +367,8 @@ private struct SettingsSidebarSearchField: NSViewRepresentable {
     func makeNSView(context: Context) -> SettingsSearchFieldContainerView {
         let container = SettingsSearchFieldContainerView()
         let searchField = container.searchField
-        searchField.controlSize = .large
-        searchField.font = .systemFont(ofSize: 15)
+        searchField.controlSize = SettingsShellLayout.searchFieldControlSize
+        searchField.font = .systemFont(ofSize: SettingsShellLayout.searchFieldFontSize)
         searchField.placeholderString = "Search"
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
