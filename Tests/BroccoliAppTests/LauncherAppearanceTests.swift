@@ -1662,10 +1662,16 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(SettingsShellLayout.contentWidth, 980)
         XCTAssertEqual(SettingsShellLayout.splitDividerWidth, 0)
         XCTAssertEqual(SettingsShellLayout.detailMinimumWidth, 771)
-        XCTAssertEqual(SettingsShellLayout.searchFieldHeight, 34)
+        XCTAssertEqual(SettingsShellLayout.searchFieldHeight, 36)
+        XCTAssertEqual(SettingsShellLayout.searchFieldControlSize, .extraLarge)
+        XCTAssertEqual(SettingsShellLayout.sidebarLabelFontSize, 14)
+        XCTAssertEqual(
+            SettingsShellLayout.searchFieldFontSize,
+            SettingsShellLayout.sidebarLabelFontSize
+        )
         XCTAssertEqual(SettingsShellLayout.searchHorizontalInset, 16)
         XCTAssertEqual(SettingsShellLayout.searchTopInset, 8)
-        XCTAssertEqual(SettingsShellLayout.sidebarRowContentHeight, 26)
+        XCTAssertEqual(SettingsShellLayout.sidebarRowContentHeight, 28)
         XCTAssertEqual(SettingsShellLayout.sidebarIconCanvasSize, 18)
         XCTAssertEqual(SettingsShellLayout.sidebarIconTrailingPadding, 3)
         XCTAssertEqual(
@@ -1713,7 +1719,10 @@ final class LauncherAppearanceTests: XCTestCase {
     }
 
     func testSettingsSidebarTitlesFitOnOneLine() {
-        let font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        let font = NSFont.systemFont(
+            ofSize: SettingsShellLayout.sidebarLabelFontSize,
+            weight: .medium
+        )
         let widestTitle = PreferencesSection.allCases
             .map { ($0.title as NSString).size(withAttributes: [.font: font]).width }
             .max() ?? 0
@@ -1724,16 +1733,26 @@ final class LauncherAppearanceTests: XCTestCase {
     }
 
     func testSettingsSearchFieldCentersNativeControlInsideGlassSurface() {
-        let surfaceBounds = NSRect(x: 0, y: 0, width: 184, height: 34)
+        let surfaceBounds = NSRect(x: 0, y: 0, width: 184, height: 36)
         let frame = SettingsSearchFieldGeometry.nativeControlFrame(
             in: surfaceBounds,
-            intrinsicHeight: 19
+            intrinsicHeight: 20
         )
 
         XCTAssertEqual(frame.width, surfaceBounds.width)
-        XCTAssertEqual(frame.height, 19)
+        XCTAssertEqual(frame.height, 20)
         XCTAssertEqual(frame.midY, surfaceBounds.midY, accuracy: 0.001)
-        XCTAssertEqual(frame.minY, 7.5, accuracy: 0.001)
+        XCTAssertEqual(frame.minY, 8, accuracy: 0.001)
+    }
+
+    func testSettingsNativeSearchFieldUsesSelectorHeightAndProportionalText() {
+        let field = NSSearchField()
+
+        SettingsNativeSearchFieldAppearance.apply(to: field)
+
+        XCTAssertEqual(field.controlSize, .extraLarge)
+        XCTAssertEqual(field.intrinsicContentSize.height, SettingsShellLayout.searchFieldHeight)
+        XCTAssertEqual(field.font?.pointSize, SettingsShellLayout.searchFieldFontSize)
     }
 
     func testLauncherVisibilitySessionTemporarilySuppressesOnlyOtherVisibleWindows() {
