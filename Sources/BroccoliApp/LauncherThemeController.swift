@@ -113,6 +113,15 @@ enum LauncherLiquidGlassMetrics {
     static let separatorAngleDegrees = figmaSeparatorAngleDegrees
 }
 
+/// Motion values for transitions between launcher presentation states. The durations are
+/// shared by every design and mode; Reduce Motion replaces them with the instant commit.
+enum LauncherMotionMetrics {
+    static let expansionAnimationDuration: TimeInterval = 0.18
+    /// The window-server resize animation has no completion callback; this is how long the
+    /// controller waits before settling post-motion state (viewport visibility, shadow).
+    static let nativeResizeSettlement: TimeInterval = 0.3
+}
+
 @MainActor
 struct LauncherThemeDescriptor {
     enum Surface: Equatable {
@@ -154,7 +163,16 @@ struct LauncherThemeDescriptor {
 
     var drawingAppearance: NSAppearance { iconContext.drawingAppearance }
 
-    var searchPlaceholderColor: NSColor { .placeholderTextColor }
+    var searchPlaceholderColor: NSColor {
+        switch design {
+        case .liquidGlass:
+            // Device ink, not a catalog color. Semantic labels still pick up wallpaper chroma
+            // through HUD even when vibrancy is off. This is the same black/white as the glyph.
+            return searchIconColor
+        case .minimal:
+            return .placeholderTextColor
+        }
+    }
 
     var searchMetrics: LauncherSearchMetrics {
         switch design {
@@ -181,13 +199,16 @@ struct LauncherThemeDescriptor {
                 ? NSColor.white.withAlphaComponent(0.82)
                 : NSColor.black
         case .liquidGlass:
-            return .labelColor
+            return searchIconColor
         }
     }
 
     var searchIconColor: NSColor {
         switch design {
-        case .liquidGlass: return .secondaryLabelColor
+        case .liquidGlass:
+            return isDark
+                ? NSColor(calibratedWhite: 1, alpha: 0.72)
+                : NSColor(calibratedWhite: 0, alpha: 1)
         case .minimal:
             return isDark
                 ? NSColor.white.withAlphaComponent(0.85)
@@ -196,7 +217,9 @@ struct LauncherThemeDescriptor {
     }
 
     var headerSeparatorColor: NSColor {
-        if design == .liquidGlass { return .separatorColor }
+        if design == .liquidGlass {
+            return searchIconColor.withAlphaComponent(0.25)
+        }
         return isDark
             ? NSColor.white.withAlphaComponent(0.25)
             : NSColor.black.withAlphaComponent(0.25)

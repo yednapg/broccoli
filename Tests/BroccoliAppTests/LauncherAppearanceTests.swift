@@ -144,7 +144,7 @@ final class LauncherAppearanceTests: XCTestCase {
             glass.headerSeparatorTopInset + glass.headerSeparatorLayoutHeight
         )
         XCTAssertEqual(glass.rowSpacing, 0)
-        XCTAssertEqual(glass.cornerRadius, 29)
+        XCTAssertEqual(glass.cornerRadius, LauncherLiquidGlassMetrics.searchHeight / 2)
         XCTAssertTrue(glass.hasShadow)
         XCTAssertTrue(glass.showsHeaderSeparator)
         XCTAssertEqual(glass.resultSelectionCornerRadius, 12)
@@ -391,15 +391,23 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(light.searchMetrics.symbolDrawingVerticalScale, 1)
         XCTAssertEqual(
             light.cornerRadius,
-            LauncherLiquidGlassMetrics.searchHeight / 2,
+            LauncherLiquidGlassMetrics.cornerRadius,
             accuracy: 0.001
         )
 
         for descriptor in [light, dark] {
-            XCTAssertEqual(descriptor.searchTextColor, .labelColor)
-            XCTAssertEqual(descriptor.searchIconColor, .secondaryLabelColor)
-            XCTAssertEqual(descriptor.searchPlaceholderColor, .placeholderTextColor)
-            XCTAssertEqual(descriptor.headerSeparatorColor, .separatorColor)
+            XCTAssertEqual(descriptor.searchTextColor, descriptor.searchIconColor)
+            if descriptor.isDark {
+                assertColor(descriptor.searchIconColor, red: 1, green: 1, blue: 1, alpha: 0.72)
+            } else {
+                assertColor(descriptor.searchIconColor, red: 0, green: 0, blue: 0, alpha: 1)
+            }
+            XCTAssertEqual(descriptor.searchPlaceholderColor, descriptor.searchIconColor)
+            if descriptor.isDark {
+                assertColor(descriptor.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.25)
+            } else {
+                assertColor(descriptor.headerSeparatorColor, red: 0, green: 0, blue: 0, alpha: 0.25)
+            }
             XCTAssertEqual(descriptor.headerSeparatorAngleDegrees, 0)
         }
     }
@@ -634,9 +642,9 @@ final class LauncherAppearanceTests: XCTestCase {
         let searchImage = try XCTUnwrap(
             (field.cell as? NSSearchFieldCell)?.searchButtonCell?.image
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             searchImage.isTemplate,
-            "AppKit must control the magnifier’s semantic rendering"
+            "The magnifier is baked in the same device ink as the placeholder"
         )
         XCTAssertEqual(
             (field.cell as? NSSearchFieldCell)?.searchButtonCell?.highlightsBy,
@@ -1438,40 +1446,111 @@ final class LauncherAppearanceTests: XCTestCase {
         let after = try XCTUnwrap(
             afterBitmap.representation(using: .png, properties: [:])
         )
-        XCTAssertTrue(afterImage.isTemplate)
+        XCTAssertFalse(afterImage.isTemplate)
         XCTAssertEqual(before, after, "The magnifier pixels must not change during expansion")
     }
 
-    func testLiquidMaterialUsesOneRegularVariantAcrossExpansionAndAppearance() throws {
-        guard #available(macOS 26, *) else {
-            throw XCTSkip("Native Liquid Glass requires macOS 26")
-        }
+    func testLiquidMaterialUsesOneVariantAcrossExpansionAndAppearance() throws {
         let surface = LauncherLiquidGlassSurfaceView(
             frame: NSRect(x: 0, y: 0, width: 640, height: 58),
             interactive: false
         )
-        let glass = try XCTUnwrap(
-            surface.subviews.compactMap { $0 as? NSGlassEffectView }.first
+        let material = try XCTUnwrap(
+            surface.subviews.compactMap { $0 as? NSVisualEffectView }.first
         )
 
         surface.appearance = NSAppearance(named: .aqua)
         surface.layoutSubtreeIfNeeded()
-        XCTAssertEqual(glass.style, .regular)
+        XCTAssertEqual(material.material, .hudWindow)
 
         surface.frame.size.height = 450
         surface.layoutSubtreeIfNeeded()
         XCTAssertEqual(
-            glass.style,
-            .regular,
-            "Showing results must not change the glass material variant"
+            material.material,
+            .hudWindow,
+            "Showing results must not change the surface material"
         )
 
         surface.appearance = NSAppearance(named: .darkAqua)
         surface.layoutSubtreeIfNeeded()
         XCTAssertEqual(
-            glass.style,
-            .regular,
-            "Appearance changes must not change the glass material variant"
+            material.material,
+            .hudWindow,
+            "Appearance changes must not change the surface material"
+        )
+        XCTAssertFalse(material.wantsLayer)
+        XCTAssertNotNil(material.maskImage)
+    }
+
+    func testLiquidHeaderSeparatorUsesSearchInkWithoutVibrancy() {
+        let ink = NSColor(calibratedWhite: 0, alpha: 0.25)
+        let separator = LauncherHeaderSeparatorView()
+        separator.color = ink
+        XCTAssertFalse(separator.allowsVibrancy)
+        XCTAssertFalse(separator.isOpaque)
+        XCTAssertFalse(separator.wantsLayer)
+        XCTAssertEqual(separator.color, ink)
+    }
+
+    func testLiquidPlaceholderViewDoesNotUseVibrancy() {
+        let ink = NSColor(calibratedWhite: 0, alpha: 1)
+        let field = LauncherNativeSearchField(frame: NSRect(x: 0, y: 0, width: 640, height: 58))
+        LauncherNativeSearchFieldStyle.apply(
+            to: field,
+            metrics: .figmaLiquidGlass,
+            iconColor: ink,
+            placeholderColor: ink
+        )
+        field.setCenteredPlaceholder(LauncherNativeSearchFieldStyle.placeholder(
+            "Search Broccoli",
+            metrics: .figmaLiquidGlass,
+            color: ink
+        ))
+        let placeholder = field.subviews.compactMap { $0 as? NSTextView }.first
+        XCTAssertEqual(placeholder?.allowsVibrancy, false)
+        XCTAssertEqual(placeholder?.textColor, ink)
+        XCTAssertEqual(
+            field.centeredPlaceholderAttributedString?.attribute(
+                .foregroundColor, at: 0, effectiveRange: nil
+            ) as? NSColor,
+            ink
+        )
+    }
+
+    func testLiquidCancelControlKeepsTheXKnockout() throws {
+        let ink = NSColor(calibratedWhite: 0, alpha: 1)
+        let field = LauncherNativeSearchField(frame: NSRect(x: 0, y: 0, width: 640, height: 58))
+        LauncherNativeSearchFieldStyle.apply(
+            to: field,
+            metrics: .figmaLiquidGlass,
+            iconColor: ink,
+            placeholderColor: ink
+        )
+        let cancel = try XCTUnwrap(
+            (field.cell as? NSSearchFieldCell)?.cancelButtonCell?.image
+        )
+        XCTAssertFalse(cancel.isTemplate)
+        let bitmap = try XCTUnwrap(
+            NSBitmapImageRep(data: try XCTUnwrap(cancel.tiffRepresentation))
+        )
+        let center = try XCTUnwrap(
+            bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)
+        )
+        let ring = try XCTUnwrap(
+            bitmap.colorAt(
+                x: bitmap.pixelsWide / 2 + max(2, bitmap.pixelsWide / 4),
+                y: bitmap.pixelsHigh / 2
+            )
+        )
+        XCTAssertLessThan(
+            center.alphaComponent,
+            0.25,
+            "The X must stay knocked out so the control cannot read as a solid disc"
+        )
+        XCTAssertGreaterThan(
+            ring.alphaComponent,
+            0.5,
+            "The circle must keep the same search ink as the query"
         )
     }
 
