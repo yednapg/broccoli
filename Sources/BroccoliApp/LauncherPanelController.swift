@@ -216,6 +216,7 @@ final class LauncherHeaderSeparatorView: NSView {
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
+    override var allowsVibrancy: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -370,7 +371,7 @@ final class LauncherNativeSearchFieldCell: NSSearchFieldCell {
 private final class LauncherSearchPlaceholderView: NSTextView {
     var attributedString: NSAttributedString {
         get { textStorage?.copy() as? NSAttributedString ?? NSAttributedString() }
-        set { textStorage?.setAttributedString(newValue) }
+        set { applyAttributedString(newValue) }
     }
 
     override init(frame frameRect: NSRect) {
@@ -396,11 +397,32 @@ private final class LauncherSearchPlaceholderView: NSTextView {
         importsGraphics = false
         isHorizontallyResizable = false
         isVerticallyResizable = false
+        usesAdaptiveColorMappingForDarkAppearance = false
         textContainerInset = .zero
         textContainer?.lineFragmentPadding = 0
         textContainer?.widthTracksTextView = true
         textContainer?.heightTracksTextView = true
     }
+
+    /// `isRichText = false` paints `textColor`, not attributed foreground. The magnifier is
+    /// already a baked device-ink bitmap; this view must use that same color as its only ink.
+    private func applyAttributedString(_ string: NSAttributedString) {
+        textStorage?.setAttributedString(string)
+        guard string.length > 0 else {
+            textColor = .clear
+            return
+        }
+        if let font = string.attribute(.font, at: 0, effectiveRange: nil) as? NSFont {
+            self.font = font
+        }
+        if let color = string.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor {
+            textColor = color
+            typingAttributes[.foregroundColor] = color
+        }
+        needsDisplay = true
+    }
+
+    override var allowsVibrancy: Bool { false }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
@@ -626,21 +648,25 @@ enum LauncherNativeSearchFieldStyle {
         )
     }
 
-    /// Preserve the optical canvas while letting AppKit render the native template.
+    /// Preserve the optical canvas while baking device ink. Hierarchical symbols such as
+    /// `xmark.circle.fill` keep their knockout only when drawn as a template; a single
+    /// palette color fills the X and the cancel control reads as a solid disc.
     private static func nativeSymbol(
         named name: String,
         pointSize: CGFloat,
         weight: NSFont.Weight,
         size: CGFloat,
         drawingScale: CGFloat = 1,
-        drawingVerticalScale: CGFloat = 1
+        drawingVerticalScale: CGFloat = 1,
+        tint: NSColor? = nil
     ) -> NSImage? {
-        guard let symbol = NSImage(
+        guard let base = NSImage(
             systemSymbolName: name,
             accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: pointSize, weight: weight)) else {
-            return nil
-        }
+        ) else { return nil }
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        guard let symbol = base.withSymbolConfiguration(configuration) else { return nil }
+        symbol.isTemplate = true
         let outputSize = NSSize(width: size, height: size)
         let image = NSImage(size: outputSize, flipped: false) { rect in
             // Never let an optical scale request extend the SF Symbol beyond its button canvas.
@@ -655,6 +681,7 @@ enum LauncherNativeSearchFieldStyle {
                 width: drawingSize.width,
                 height: drawingSize.height
             )
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
             symbol.draw(
                 in: drawingRect,
                 from: .zero,
@@ -663,9 +690,16 @@ enum LauncherNativeSearchFieldStyle {
                 respectFlipped: true,
                 hints: nil
             )
+            if let tint {
+                context.saveGState()
+                context.setBlendMode(.sourceIn)
+                tint.setFill()
+                context.fill(rect)
+                context.restoreGState()
+            }
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = tint == nil
         image.alignmentRect = NSRect(origin: .zero, size: outputSize)
         return image
     }
@@ -681,7 +715,8 @@ enum LauncherNativeSearchFieldStyle {
     static func apply(
         to searchField: NSSearchField,
         metrics: LauncherSearchMetrics,
-        iconColor: NSColor
+        iconColor: NSColor,
+        placeholderColor: NSColor? = nil
     ) {
         let cell = (searchField.cell as? LauncherNativeSearchFieldCell) ?? LauncherNativeSearchFieldCell(textCell: "")
         cell.searchMetrics = metrics
@@ -690,7 +725,7 @@ enum LauncherNativeSearchFieldStyle {
         let defaultPlaceholder = placeholder(
             "Search",
             metrics: metrics,
-            color: .placeholderTextColor
+            color: placeholderColor ?? iconColor
         )
         if let searchField = searchField as? LauncherNativeSearchField {
             searchField.setCenteredPlaceholder(defaultPlaceholder)
@@ -712,7 +747,8 @@ enum LauncherNativeSearchFieldStyle {
             weight: .regular,
             size: metrics.symbolSize,
             drawingScale: metrics.symbolDrawingScale,
-            drawingVerticalScale: metrics.symbolDrawingVerticalScale
+            drawingVerticalScale: metrics.symbolDrawingVerticalScale,
+            tint: iconColor
         ) {
             cell.searchButtonCell?.image = magnifier
             cell.searchButtonCell?.imageScaling = .scaleProportionallyUpOrDown
@@ -724,7 +760,8 @@ enum LauncherNativeSearchFieldStyle {
             named: "xmark.circle.fill",
             pointSize: 15,
             weight: .regular,
-            size: metrics.cancelSize
+            size: metrics.cancelSize,
+            tint: iconColor
         ) {
             cell.cancelButtonCell?.image = cancel
             cell.cancelButtonCell?.imageScaling = .scaleProportionallyUpOrDown
@@ -740,88 +777,86 @@ enum LauncherNativeSearchFieldStyle {
 
 /// The complete Liquid Glass launcher surface.
 ///
-/// Liquid Glass is a single functional surface in Spotlight. Embedding the launcher content
-/// through `contentView` lets AppKit coordinate legibility and sampling while the search field
-/// remains fully interactive. The glass itself stays passive so AppKit cannot paint a temporary
-/// rectangular response lens around a click inside the capsule.
+/// The launcher is one continuous HUD material that samples the desktop behind the window.
+/// `NSGlassEffectView` was measured against this at both the collapsed capsule height and the
+/// expanded launcher height: its lens is nearly blur-free at pill size, and layering a material
+/// beneath it only removes the lens, because glass samples in-window content too. A single
+/// behind-window material is what produces a readable backdrop at every height.
+///
+/// Do not layer-back that material to round it. A layer-backed visual-effect view drops
+/// vibrancy, so placeholder text and the header rule composite as plain gray over wallpaper.
 @MainActor
 final class LauncherLiquidGlassSurfaceView: NSView {
     static let cornerRadius = LauncherLiquidGlassMetrics.cornerRadius
     static let collapsedHeight = LauncherLiquidGlassMetrics.searchHeight
 
-    private let contentHost = NSView()
+    private let materialView = NSVisualEffectView()
     private var hostedContent: NSView?
-    private var nativeGlass: NSView?
 
     init(frame frameRect: NSRect = .zero, interactive: Bool = false) {
         super.init(frame: frameRect)
-        // Keep this argument source-compatible with live and preview callers. It must not
-        // enable NSGlassEffectView's local click-response lens around editable content.
+        // Keep this argument source-compatible with live and preview callers. The surface is
+        // passive in both: it must never paint a local response lens around editable content.
         _ = interactive
-        contentHost.frame = bounds
-        contentHost.autoresizingMask = [.width, .height]
 
-        if #available(macOS 26, *) {
-            let glass = NSGlassEffectView(frame: bounds)
-            glass.autoresizingMask = [.width, .height]
-            glass.cornerRadius = Self.cornerRadius
-            // Regular glass bounds the desktop's influence and supplies AppKit's standard
-            // legibility treatment. Clear glass reacts too strongly to bright or colorful
-            // wallpaper for a launcher whose primary content is editable text.
-            // Configure the persistent surface once. Resizing and appearance changes must
-            // not select a different variant, tint, or corner treatment.
-            glass.style = .regular
-            glass.tintColor = nil
-            if #available(macOS 27, *) {
-                glass.effectIsInteractive = false
-            }
-            glass.contentView = contentHost
-            addSubview(glass)
-            nativeGlass = glass
-        } else {
-            let effect = NSVisualEffectView(frame: bounds)
-            effect.autoresizingMask = [.width, .height]
-            effect.blendingMode = .behindWindow
-            effect.material = .hudWindow
-            effect.state = .active
-            effect.wantsLayer = true
-            effect.layer?.cornerRadius = Self.cornerRadius
-            effect.layer?.cornerCurve = .continuous
-            effect.layer?.masksToBounds = true
-            contentHost.frame = bounds
-            contentHost.autoresizingMask = [.width, .height]
-            effect.addSubview(contentHost)
-            addSubview(effect)
-        }
+        // Configure the persistent surface once. Resizing and appearance changes must not
+        // select a different material, blending mode, or corner treatment. AppKit derives
+        // Light and Dark from the inherited appearance and handles Reduce Transparency and
+        // Increase Contrast itself. A stretchable mask rounds the capsule without
+        // `wantsLayer`, which would flatten vibrancy for every descendant.
+        materialView.frame = bounds
+        materialView.autoresizingMask = [.width, .height]
+        materialView.material = .hudWindow
+        materialView.blendingMode = .behindWindow
+        materialView.state = .active
+        materialView.maskImage = Self.stretchingCornerMask(radius: Self.cornerRadius)
+        addSubview(materialView)
     }
 
     required init?(coder: NSCoder) { nil }
 
     override func layout() {
         super.layout()
-        contentHost.frame = bounds
-        if #available(macOS 26, *), let glass = nativeGlass as? NSGlassEffectView {
-            glass.frame = bounds
-        }
+        materialView.frame = bounds
     }
 
     func setContentView(_ view: NSView) {
         hostedContent?.removeFromSuperview()
         hostedContent = view
-        // NSGlassEffectView owns a private content-view layout pass. Give that hierarchy its
-        // destination geometry before activating descendant constraints; installing into the
-        // initial zero-sized lens makes AppKit briefly recover by breaking a private glass
-        // constraint, even though the next layout pass reaches the expected frame.
-        contentHost.frame = bounds
-        view.frame = contentHost.bounds
+        // Host content on the material itself so labels and the header rule stay in the
+        // vibrancy hierarchy. Give it destination geometry before activating constraints:
+        // a detached preview has no window display cycle to expand a zero-sized effect
+        // view afterward, so it would otherwise settle at the search field's fitting height.
+        materialView.frame = bounds
+        view.frame = bounds
         view.translatesAutoresizingMaskIntoConstraints = false
-        contentHost.addSubview(view)
+        materialView.addSubview(view)
         NSLayoutConstraint.activate([
-            view.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
-            view.topAnchor.constraint(equalTo: contentHost.topAnchor),
-            view.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: materialView.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: materialView.trailingAnchor),
+            view.topAnchor.constraint(equalTo: materialView.topAnchor),
+            view.bottomAnchor.constraint(equalTo: materialView.bottomAnchor),
         ])
+    }
+
+    /// Cap-inset mask that stretches to any panel size while keeping the shared corner radius.
+    private static func stretchingCornerMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let size = NSSize(width: edge, height: edge)
+        let image = NSImage(size: size, flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            let layer = CALayer()
+            layer.frame = rect
+            layer.backgroundColor = NSColor.black.cgColor
+            layer.cornerRadius = radius
+            layer.cornerCurve = .continuous
+            layer.masksToBounds = true
+            layer.render(in: context)
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 }
 
@@ -1399,6 +1434,16 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// Liquid Glass starts as one compact search capsule. Any useful match opens one stable
     /// result viewport so a single Finder/application result is never hidden in the header.
     private var liquidResultsExpanded = false
+    /// The newest committed geometry whose motion has not started yet. Result changes coalesce
+    /// here so a burst of keystrokes schedules one transition instead of one per key.
+    private var pendingExpansionTarget: NSRect?
+    private var expansionFlushScheduled = false
+    private var expansionAnimationGeneration: UInt64 = 0
+    private var expansionMotionInProgress = false
+    private let expansionAnimationDuration: (@MainActor () -> TimeInterval)?
+    /// Last sampled motion duration. apply() must not sample the environment on every
+    /// keystroke; this refreshes wherever the environment is already being read.
+    private var cachedExpansionAnimationDuration: TimeInterval = 0
 
     private var searchField: NSTextField { nativeSearchField }
 
@@ -1413,8 +1458,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     var onPreferences: (() -> Void)?
     var onSelectionChanged: (() -> Void)?
 
-    init(environmentProvider: @escaping @MainActor () -> LauncherAppearanceEnvironment = { .current }) {
+    init(
+        environmentProvider: @escaping @MainActor () -> LauncherAppearanceEnvironment = { .current },
+        expansionAnimationDuration: (@MainActor () -> TimeInterval)? = nil
+    ) {
         self.environmentProvider = environmentProvider
+        self.expansionAnimationDuration = expansionAnimationDuration
         iconCache = IconCache()
         preparedResultRows = (0..<Self.maximumPreparedResultRows).map { _ in
             let row = ResultRowView()
@@ -1429,6 +1478,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             defer: false
         )
         super.init()
+        cachedExpansionAnimationDuration = effectiveExpansionAnimationDuration
         configurePanel()
         configureContent()
         iconCache.onIconLoaded = { [weak self] key in self?.reloadVisibleIcon(for: key) }
@@ -1448,6 +1498,10 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
     var isSearchSurfaceWindowBacked: Bool { liquidGlassSurface.window === panel }
     var isResultViewportVisible: Bool { !scrollView.isHidden }
+    /// True while a sanctioned height transition is scheduled, coalescing, or in flight.
+    var isExpansionAnimationInFlight: Bool {
+        expansionMotionInProgress || pendingExpansionTarget != nil
+    }
     var listedResultIDs: [String] { results.map(\.entry.id) }
     var selectedResultID: String? {
         guard results.indices.contains(tableView.selectedRow) else { return nil }
@@ -1467,6 +1521,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         force: Bool = false
     ) {
         let environment = environmentProvider()
+        cachedExpansionAnimationDuration = effectiveExpansionAnimationDuration
         let next = themeController.descriptor(for: preferences, environment: environment)
         let sameLayout = appliedAppearance?.hasSameLayout(as: preferences) == true
             && (next.surface == theme.surface || preferences.design == .minimal)
@@ -1508,9 +1563,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         modeBadge.effectiveAppearance.performAsCurrentDrawingAppearance {
             modeBadge.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.10).cgColor
         }
-        // Placeholder and suggestion already retain semantic NSColors. AppKit redraws them
-        // in the new appearance; replacing their attributed strings would trigger needless
-        // TextKit layout and force the search hierarchy through a layout pass on every switch.
+        LauncherNativeSearchFieldStyle.apply(
+            to: nativeSearchField,
+            metrics: theme.searchMetrics,
+            iconColor: theme.searchIconColor,
+            placeholderColor: theme.searchPlaceholderColor
+        )
+        updateModeChrome()
         nativeSearchField.needsDisplay = true
         iconCache.prewarm(results.map(\.entry), context: iconContext)
         for row in results.indices where row < preparedResultRows.count {
@@ -1538,9 +1597,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
 
     private func applyAppearanceNow(_ preferences: LauncherAppearancePreferences, descriptor: LauncherThemeDescriptor? = nil) {
         let oldFrame = panel.frame
+        cancelPendingPanelMotion()
         pendingAppearance = nil
         appliedAppearance = preferences
         theme = descriptor ?? themeController.descriptor(for: preferences, environment: environmentProvider())
+        cachedExpansionAnimationDuration = effectiveExpansionAnimationDuration
         panel.appearance = theme.appearance
         panel.hasShadow = theme.hasShadow
         tableView.rowHeight = theme.rowHeight
@@ -1636,6 +1697,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             return
         }
         isProgrammaticallyHiding = true
+        // Drop any pending or in-flight height motion before the panel leaves the screen;
+        // the next presentation reuses this controller with fresh geometry.
+        cancelPendingPanelMotion()
         panel.makeFirstResponder(nil)
         panel.endEditing(for: nil)
         panel.acceptsMouseMovedEvents = false
@@ -1907,30 +1971,24 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         host.autoresizingMask = [.width, .height]
         if theme.surface == .glass {
             // The window shadow follows the composited window contents. Clip its outer
-            // content boundary to the same geometry as native glass, including while the
-            // backdrop changes size; rectangular corner pixels must not reach WindowServer.
+            // content boundary to the same geometry as the material surface, including while
+            // the backdrop changes size; rectangular corner pixels must not reach WindowServer.
             host.wantsLayer = true
             host.layer?.cornerCurve = .continuous
             host.layer?.cornerRadius = theme.cornerRadius
             host.layer?.masksToBounds = true
         }
 
-        // Native glass and the native window shadow must share the same boundary. An inset
-        // glass surface inside a larger transparent window produces a separated outer rim.
+        // The material surface and the native window shadow must share the same boundary. An
+        // inset surface inside a larger transparent window produces a separated outer rim.
         let surfaceFrame = host.bounds
         let surface: NSView
         switch theme.surface {
         case .glass:
-            if #available(macOS 26, *) {
-                liquidGlassSurface.frame = surfaceFrame
-                liquidGlassSurface.layoutSubtreeIfNeeded()
-                liquidGlassSurface.setContentView(content)
-                surface = liquidGlassSurface
-            } else {
-                let fallback = NSView()
-                install(content, in: fallback)
-                surface = fallback
-            }
+            liquidGlassSurface.frame = surfaceFrame
+            liquidGlassSurface.layoutSubtreeIfNeeded()
+            liquidGlassSurface.setContentView(content)
+            surface = liquidGlassSurface
         case .ultraThick, .opaque:
             let material = LauncherMinimalMaterialSurfaceView(
                 frame: host.bounds,
@@ -1974,7 +2032,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         LauncherNativeSearchFieldStyle.apply(
             to: nativeSearchField,
             metrics: theme.searchMetrics,
-            iconColor: theme.searchIconColor
+            iconColor: theme.searchIconColor,
+            placeholderColor: theme.searchPlaceholderColor
         )
         searchField.textColor = theme.searchTextColor
         searchField.setAccessibilityLabel("Search Broccoli")
@@ -2121,16 +2180,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         updateHeaderSeparatorVisibility()
     }
 
-    private func install(_ content: NSView, in container: NSView) {
-        container.addSubview(content)
-        NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            content.topAnchor.constraint(equalTo: container.topAnchor),
-            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-    }
-
     private func handle(_ command: SearchFieldCommand) {
         switch command {
         case .up:
@@ -2243,7 +2292,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private func updateHeight() {
         updateResultsGeometry()
         resizePanel(to: desiredPanelHeight, display: true)
-        scrollView.alphaValue = 1
     }
 
     private var desiredPanelHeight: CGFloat {
@@ -2308,6 +2356,78 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
 
     private func resizePanel(to height: CGFloat, display: Bool) {
         let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: height)
+        let shouldAnimate = display && panel.isVisible && frame.size != panel.frame.size
+            && max(0, cachedExpansionAnimationDuration) > 0
+        if shouldAnimate {
+            // Rows and text have already committed synchronously above this call. Only the
+            // surface motion is deferred, to the next main-loop turn, so input and result
+            // delivery never wait for animation work.
+            pendingExpansionTarget = frame
+            scheduleExpansionFlush()
+        } else {
+            cancelPendingPanelMotion()
+            commitPanelFrame(frame, display: display)
+        }
+    }
+
+    private func scheduleExpansionFlush() {
+        guard !expansionFlushScheduled else { return }
+        expansionFlushScheduled = true
+        expansionAnimationGeneration &+= 1
+        let generation = expansionAnimationGeneration
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.flushPendingExpansion(generation: generation)
+            }
+        }
+    }
+
+    private func flushPendingExpansion(generation: UInt64) {
+        expansionFlushScheduled = false
+        guard expansionAnimationGeneration == generation,
+              let target = pendingExpansionTarget
+        else { return }
+        pendingExpansionTarget = nil
+        expansionMotionInProgress = true
+        if target.height < panel.frame.height {
+            // While shrinking, keep the rows mounted and let the rising bottom edge clip
+            // them. Hiding the viewport up front is what produced the "empty glass that
+            // collapses" flash. Visibility settles when the motion ends.
+            scrollView.isHidden = false
+        }
+        expansionAnimationGeneration &+= 1
+        let motionGeneration = expansionAnimationGeneration
+        // The native window-server resize lets the material surface track every step, and a
+        // newer resize restarts from the interpolated frame by itself. CA-driven frame
+        // animation instead desynchronizes the surface from its content, which read as
+        // doubled text and a collapsing ghost panel.
+        panel.setFrame(target, display: true, animate: true)
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + LauncherMotionMetrics.nativeResizeSettlement,
+            execute: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.expansionAnimationGeneration == motionGeneration
+                    else { return }
+                    self.expansionMotionInProgress = false
+                    self.finishPanelMotion()
+                }
+            }
+        )
+    }
+
+    /// Reduce Motion (sampled through the controller's environment) collapses the motion to
+    /// the instant commit; an injected duration overrides both for deterministic tests.
+    private var effectiveExpansionAnimationDuration: TimeInterval {
+        expansionAnimationDuration?()
+            ?? (environmentProvider().reducesMotion
+                ? 0
+                : LauncherMotionMetrics.expansionAnimationDuration)
+    }
+
+    /// The instant commit used for first presentation, dismissal, accessibility fallbacks,
+    /// and any nonanimated resize. Nothing in this transaction may animate.
+    private func commitPanelFrame(_ frame: NSRect, display: Bool) {
         let shapeChanged = frame.size != panel.frame.size
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
@@ -2320,10 +2440,35 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             if frame != panel.frame { panel.setFrame(frame, display: false, animate: false) }
             let contentFrame = NSRect(origin: .zero, size: frame.size)
             retainedContentView?.frame = contentFrame
+            // Autoresizing only fires when the superview frame actually changes. Force
+            // every full-bleed surface to the committed bounds so window clip, frost, and
+            // glass never diverge.
+            if let host = retainedContentView {
+                for surface in host.subviews where surface.translatesAutoresizingMaskIntoConstraints {
+                    surface.frame = host.bounds
+                }
+            }
             panel.contentView?.layoutSubtreeIfNeeded()
+            scrollView.alphaValue = 1
+            scrollView.isHidden = !presentsResultViewport
             if display && panel.isVisible { panel.displayIfNeeded() }
             if shapeChanged && panel.hasShadow { panel.invalidateShadow() }
         }
+    }
+
+    /// Applies the post-motion state: exact committed geometry, settled result-viewport
+    /// visibility, and a shadow that matches the final outline.
+    private func finishPanelMotion() {
+        let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: desiredPanelHeight)
+        commitPanelFrame(frame, display: panel.isVisible)
+    }
+
+    /// Drops any not-yet-started transition and settles motion state without touching the
+    /// window frame. Callers that need a specific frame commit it themselves.
+    private func cancelPendingPanelMotion() {
+        expansionAnimationGeneration &+= 1
+        pendingExpansionTarget = nil
+        expansionMotionInProgress = false
     }
 
     private func refreshSelectionAppearance() {

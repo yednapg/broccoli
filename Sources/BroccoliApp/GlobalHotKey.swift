@@ -111,6 +111,8 @@ final class GlobalHotKey {
     private var bindingIDs: [UInt32: String] = [:]
     private var nextIdentifier: UInt32 = 1
     private let signature: OSType = 0x464C5348 // FLSH
+    private var pressedIdentifierIDs: Set<UInt32> = []
+    private var pressedAt: [UInt32: Date] = [:]
     var configuration: HotKeyConfiguration? { bindings["launcher"]?.configuration }
     var onPressed: (() -> Void)?
 
@@ -210,15 +212,26 @@ final class GlobalHotKey {
         guard let binding = bindings.removeValue(forKey: bindingID) else { return }
         UnregisterEventHotKey(binding.reference)
         bindingIDs = bindingIDs.filter { $0.value != bindingID }
+        // Drop press tracking for identifiers that no longer resolve to a binding.
+        pressedIdentifierIDs = pressedIdentifierIDs.filter { bindingIDs[$0] != nil }
+        pressedAt = pressedAt.filter { bindingIDs[$0.key] != nil }
     }
 
     @discardableResult
     private func installHandler() -> OSStatus {
         guard eventHandler == nil else { return noErr }
-        var type = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        // Listening for the release as well lets a held key repeat be told apart from a
+        // deliberate second press: repeats arrive without an intervening release.
+        var types = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
+            ),
+        ]
         let pointer = Unmanaged.passUnretained(self).toOpaque()
         var installedHandler: EventHandlerRef?
         let status = InstallEventHandler(
@@ -237,12 +250,29 @@ final class GlobalHotKey {
                     &identifier
                 )
                 guard parameterStatus == noErr else { return parameterStatus }
+                let eventKind = GetEventKind(event)
                 return MainActor.assumeIsolated {
                     guard identifier.signature == owner.signature,
                           let bindingID = owner.bindingIDs[identifier.id],
                           let binding = owner.bindings[bindingID] else {
                         return OSStatus(eventNotHandledErr)
                     }
+                    if eventKind == UInt32(kEventHotKeyReleased) {
+                        owner.pressedIdentifierIDs.remove(identifier.id)
+                        return noErr
+                    }
+                    // A held shortcut fires repeated press events. Toggling on each one
+                    // would open and close the launcher under the user's finger; only the
+                    // first press of a physical hold may act. A lost release event must not
+                    // wedge the binding, so the flag also expires.
+                    if owner.pressedIdentifierIDs.contains(identifier.id) {
+                        if let pressedAt = owner.pressedAt[identifier.id],
+                           Date().timeIntervalSince(pressedAt) < 3 {
+                            return noErr
+                        }
+                    }
+                    owner.pressedIdentifierIDs.insert(identifier.id)
+                    owner.pressedAt[identifier.id] = Date()
                     // The launcher is a non-activating panel, so ordering it synchronously is
                     // safe and claims keyboard focus before the next key-down can reach the
                     // previously active application. Window-management bindings still defer:
@@ -255,8 +285,8 @@ final class GlobalHotKey {
                     return noErr
                 }
             },
-            1,
-            &type,
+            types.count,
+            &types,
             pointer,
             &installedHandler
         )

@@ -456,11 +456,11 @@ final class LauncherPreviewRenderer: ObservableObject {
         descriptor: LauncherThemeDescriptor
     ) -> NSImage {
         let size = view.frame.size
-        // Do not attach the snapshot tree to a temporary NSWindow. NSVisualEffectView and
-        // NSGlassEffectView keep display-cycle state tied to their window; destroying an
-        // offscreen window immediately after `cacheDisplay` can leave AppKit with a dangling
-        // appearance coordinator. An active effect view can render safely in this detached,
-        // layer-backed tree, which also guarantees the capture never flashes onscreen.
+        // Do not attach the snapshot tree to a temporary NSWindow. NSVisualEffectView keeps
+        // display-cycle state tied to its window; destroying an offscreen window immediately
+        // after `cacheDisplay` can leave AppKit with a dangling appearance coordinator. An
+        // active effect view can render safely in this detached, layer-backed tree, which
+        // also guarantees the capture never flashes onscreen.
         view.appearance = descriptor.drawingAppearance
         view.prepareForCapture()
         view.displayIfNeeded()
@@ -712,25 +712,17 @@ final class LauncherPreviewContentView: NSView,
         // Screenshot and Settings previews are intentionally detached from a window. Preserve
         // the production surface size explicitly so AppKit cannot collapse the preview to the
         // native search field's fitting height before the surface gets its first layout pass.
-        // These preview-only axes do not participate in the live panel's glass hierarchy.
+        // These preview-only axes do not participate in the live panel's surface hierarchy.
         content.widthAnchor.constraint(equalToConstant: frame.width).isActive = true
         content.heightAnchor.constraint(equalToConstant: frame.height).isActive = true
 
         let surface: NSView
-        let surfaceManagesContent: Bool
         switch descriptor.surface {
         case .glass:
-            if #available(macOS 26, *) {
-                liquidGlassSurface.frame = bounds
-                liquidGlassSurface.layoutSubtreeIfNeeded()
-                liquidGlassSurface.setContentView(content)
-                surface = liquidGlassSurface
-                surfaceManagesContent = true
-            } else {
-                let fallback = NSView()
-                surface = fallback
-                surfaceManagesContent = false
-            }
+            liquidGlassSurface.frame = bounds
+            liquidGlassSurface.layoutSubtreeIfNeeded()
+            liquidGlassSurface.setContentView(content)
+            surface = liquidGlassSurface
         case .ultraThick, .opaque:
             let material = LauncherMinimalMaterialSurfaceView(
                 frame: bounds,
@@ -739,7 +731,6 @@ final class LauncherPreviewContentView: NSView,
             )
             material.setContentView(content)
             surface = material
-            surfaceManagesContent = true
         }
 
         surface.frame = bounds
@@ -756,17 +747,6 @@ final class LauncherPreviewContentView: NSView,
             surface.layer?.borderColor = nil
             surface.layer?.masksToBounds = true
         }
-        if !surfaceManagesContent {
-            // Establish the detached root's production frame before adding constrained
-            // descendants. Installing `content` with edge constraints while an
-            // NSVisualEffectView still has its default zero frame makes that effect adopt its
-            // 68-point fitting height; unlike the live panel, there is no window display cycle
-            // to expand it afterward.
-            content.translatesAutoresizingMaskIntoConstraints = true
-            content.frame = surface.bounds
-            content.autoresizingMask = [.width, .height]
-            surface.addSubview(content)
-        }
         addSubview(surface)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -781,7 +761,8 @@ final class LauncherPreviewContentView: NSView,
             LauncherNativeSearchFieldStyle.apply(
                 to: nativeSearchField,
                 metrics: descriptor.searchMetrics,
-                iconColor: descriptor.searchIconColor
+                iconColor: descriptor.searchIconColor,
+                placeholderColor: descriptor.searchPlaceholderColor
             )
             nativeSearchField.stringValue = fixture.query
         } else {

@@ -13,7 +13,7 @@ final class LauncherNoResultsLayoutTests: XCTestCase {
 
     func testSwitchingToMinimalRestoresItsStandardNoResultsRow() throws {
         _ = NSApplication.shared
-        let panel = LauncherPanelController()
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
         let results = LauncherMainSearchResultComposer.compose(
             catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
         for design in [LauncherDesign.liquidGlass, .minimal, .liquidGlass] {
@@ -33,7 +33,7 @@ final class LauncherNoResultsLayoutTests: XCTestCase {
 
     private func checkVisibleTransitions(mode: LauncherAppearanceMode) async throws {
         _ = NSApplication.shared
-        let panel = LauncherPanelController()
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         preferences.mode = mode
         panel.applyAppearance(preferences)

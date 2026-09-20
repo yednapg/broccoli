@@ -116,6 +116,28 @@ final class WindowManagementTests: XCTestCase {
         )
     }
 
+    func testOriginFittingShiftsRightAlignedOverflowInward() {
+        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        XCTAssertEqual(
+            WindowScreenGeometry.originFittingSnappedFrame(
+                applied: CGRect(x: 840, y: 30, width: 845, height: 1_013),
+                screen: screen
+            ),
+            CGPoint(x: 835, y: 30)
+        )
+    }
+
+    func testOriginFittingLeavesLeftAlignedMaximizeInPlace() {
+        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        XCTAssertEqual(
+            WindowScreenGeometry.originFittingSnappedFrame(
+                applied: CGRect(x: 0, y: 30, width: 1_681, height: 1_013),
+                screen: screen
+            ),
+            CGPoint(x: 0, y: 30)
+        )
+    }
+
     func testCenterPreservesSizeAndClampsOversizeWindow() {
         let screen = CGRect(x: 0, y: 25, width: 1000, height: 775)
         XCTAssertEqual(
@@ -638,7 +660,60 @@ final class WindowManagementTests: XCTestCase {
             XCTAssertEqual(actual.size, rejectedSize)
         }
         XCTAssertEqual(CGRect(origin: appliedPosition, size: appliedSize), original)
-        XCTAssertEqual(sizeWriteCount, 4)
+        XCTAssertEqual(sizeWriteCount, 3)
+    }
+
+    func testFrameWriteAcceptsTerminalCharacterGridSnap() throws {
+        let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
+        let cases: [(target: CGRect, snapped: CGRect)] = [
+            (
+                CGRect(x: 84, y: 81, width: 1_512, height: 918),
+                CGRect(x: 84, y: 81, width: 1_516, height: 921)
+            ),
+            (
+                CGRect(x: 0, y: 30, width: 1_680, height: 1_020),
+                CGRect(x: 0, y: 30, width: 1_681, height: 1_013)
+            ),
+            (
+                CGRect(x: 840, y: 30, width: 840, height: 1_020),
+                CGRect(x: 840, y: 30, width: 845, height: 1_013)
+            ),
+        ]
+        for item in cases {
+            let probe = FrameWriteProbe(frame: original, snapped: item.snapped)
+            let operation = probe.makeOperation()
+
+            XCTAssertNoThrow(try operation.setFrame(item.target, of: AXUIElementCreateApplication(100)))
+            XCTAssertEqual(probe.appliedFrame, item.snapped)
+            XCTAssertEqual(probe.sizeWriteCount, 1)
+        }
+    }
+
+    func testFrameWriteShiftsSnappedRightHalfOntoTheScreen() throws {
+        let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
+        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let target = CGRect(x: 840, y: 30, width: 840, height: 1_020)
+        let snapped = CGRect(x: 840, y: 30, width: 845, height: 1_013)
+        let probe = FrameWriteProbe(frame: original, snapped: snapped)
+        let operation = probe.makeOperation()
+
+        try operation.setFrame(target, of: AXUIElementCreateApplication(100), screen: screen)
+
+        XCTAssertEqual(probe.appliedFrame.origin, CGPoint(x: 835, y: 30))
+        XCTAssertEqual(probe.appliedFrame.size, snapped.size)
+        XCTAssertEqual(probe.sizeWriteCount, 1)
+    }
+
+    func testFrameWriteKeepsCompleteSnapInsteadOfRollingBack() throws {
+        let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
+        let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let snapped = CGRect(x: 0, y: 30, width: 1_650, height: 990)
+        let probe = FrameWriteProbe(frame: original, snapped: snapped)
+        let operation = probe.makeOperation()
+
+        XCTAssertNoThrow(try operation.setFrame(target, of: AXUIElementCreateApplication(100)))
+        XCTAssertEqual(probe.appliedFrame, snapped)
+        XCTAssertEqual(probe.sizeWriteCount, 2)
     }
 
     func testFrameWriteMovesExpandedAxisToDynamicScreenOriginBeforeSizing() throws {
@@ -1012,5 +1087,57 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(finalSize, target.size)
         XCTAssertFalse(ranOnMainThread)
         XCTAssertEqual(timeout, 0.75)
+    }
+}
+
+private final class FrameWriteProbe {
+    let original: CGRect
+    let snapped: CGRect
+    var appliedFrame: CGRect
+    var sizeWriteCount = 0
+
+    init(frame: CGRect, snapped: CGRect) {
+        original = frame
+        self.snapped = snapped
+        appliedFrame = frame
+    }
+
+    func makeOperation() -> WindowAccessibilityOperation {
+        WindowAccessibilityOperation(
+            attributeReader: { [self] _, attribute in
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgPoint, &value)
+                    )
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: AXValueCreate(.cgSize, &value)
+                    )
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { [self] _, attribute, value in
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    AXValueGetValue(accessibilityValue, .cgPoint, &appliedFrame.origin)
+                    return .success
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var requestedSize = CGSize.zero
+                    AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
+                    sizeWriteCount += 1
+                    appliedFrame.size = requestedSize == original.size ? requestedSize : snapped.size
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
+        )
     }
 }

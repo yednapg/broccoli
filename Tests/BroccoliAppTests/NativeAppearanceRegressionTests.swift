@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class NativeAppearanceRegressionTests: XCTestCase {
-    func testNativeRegularGlassAcrossAppearanceAndAccessibilityMatrix() throws {
+    func testLiquidSurfaceMaterialAcrossAppearanceAndAccessibilityMatrix() throws {
         _ = NSApplication.shared
         for dark in [false, true] {
             for transparency in [false, true] {
@@ -25,9 +25,17 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                         let surface = LauncherLiquidGlassSurfaceView()
                         surface.appearance = theme.drawingAppearance
                         surface.layoutSubtreeIfNeeded()
-                        let glass = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSGlassEffectView }.first)
-                        XCTAssertEqual(glass.style, .regular)
-                        XCTAssertNil(glass.tintColor)
+                        // One behind-window HUD material carries the whole surface in every
+                        // appearance and accessibility combination. AppKit adapts it to
+                        // Reduce Transparency and Increase Contrast on its own.
+                        let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                        XCTAssertEqual(material.material, .hudWindow)
+                        XCTAssertEqual(material.blendingMode, .behindWindow)
+                        XCTAssertEqual(material.state, .active)
+                        XCTAssertFalse(material.wantsLayer, "Layer-backing the HUD drops vibrancy for labels and the header rule")
+                        XCTAssertNotNil(material.maskImage)
+                        XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
+                        XCTAssertEqual(material.maskImage?.resizingMode, .stretch)
                         let minimal = LauncherThemeController().descriptor(
                             for: .defaults(design: .minimal), environment: environment)
                         XCTAssertEqual(minimal.surface, transparency || contrast ? .opaque : .ultraThick)
@@ -52,7 +60,6 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         let field = try XCTUnwrap(descendants(root).compactMap { $0 as? NSSearchField }.first)
         let cell = field.cell
         let nativeField = try XCTUnwrap(field as? LauncherNativeSearchField)
-        let placeholder = nativeField.centeredPlaceholderAttributedString
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
         _ = panel.control(field, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:)))
         editor.setSelectedRange(NSRange(location: 1, length: 2))
@@ -71,17 +78,24 @@ final class NativeAppearanceRegressionTests: XCTestCase {
             XCTAssertTrue(window.contentView === root)
             XCTAssertTrue(window.firstResponder === editor)
             XCTAssertTrue(field.cell === cell)
-            XCTAssertEqual(nativeField.centeredPlaceholderAttributedString, placeholder)
-            XCTAssertEqual(nativeField.centeredPlaceholderAttributedString?.attribute(
-                .foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .placeholderTextColor)
+            XCTAssertEqual(nativeField.centeredPlaceholderAttributedString?.string, "Search Broccoli")
+            XCTAssertEqual(
+                nativeField.centeredPlaceholderAttributedString?.attribute(
+                    .foregroundColor, at: 0, effectiveRange: nil
+                ) as? NSColor,
+                LauncherThemeController().descriptor(for: preferences).searchPlaceholderColor
+            )
             XCTAssertEqual(editor.string, text)
             XCTAssertEqual(panel.query, query)
             XCTAssertEqual(editor.selectedRange(), caret)
             XCTAssertEqual(editor.markedRange(), marked)
             XCTAssertEqual(panel.selectedResultID, selection)
             XCTAssertEqual(scroll.contentView.bounds.origin, scrollOrigin)
-            XCTAssertEqual(field.textColor, .labelColor)
-            XCTAssertTrue((field.cell as? NSSearchFieldCell)?.searchButtonCell?.image?.isTemplate == true)
+            XCTAssertEqual(
+                field.textColor,
+                LauncherThemeController().descriptor(for: preferences).searchTextColor
+            )
+            XCTAssertNotNil((field.cell as? NSSearchFieldCell)?.searchButtonCell?.image)
         }
         editor.unmarkText()
         var executed: String?
@@ -147,9 +161,9 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         XCTAssertEqual(Set(keys).count, 3)
     }
 
-    func testLiquidPanelWindowBoundaryMatchesGlassAcrossExpansion() throws {
+    func testLiquidPanelWindowBoundaryMatchesSurfaceAcrossExpansion() throws {
         _ = NSApplication.shared
-        let panel = LauncherPanelController()
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
         let window = panel.visibilityIsolationWindow
         for mode in [LauncherAppearanceMode.light, .dark] {
             var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
@@ -165,14 +179,16 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                 XCTAssertFalse(window.isOpaque)
                 XCTAssertFalse(root.isOpaque)
                 XCTAssertEqual(window.backgroundColor, .clear)
-                XCTAssertEqual(surface.frame, root.bounds, "The shadow window must not surround an inset second glass rectangle")
+                XCTAssertEqual(surface.frame, root.bounds, "The shadow window must not surround an inset second surface rectangle")
                 XCTAssertEqual(window.frame.size, surface.frame.size)
                 XCTAssertEqual(surface.frame.width, LauncherLiquidGlassMetrics.width)
                 XCTAssertEqual(surface.layer?.shadowOpacity ?? 0, 0, "Only the native window supplies the added shadow")
-                let glass = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSGlassEffectView }.first)
+                let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
                 let boundary = try XCTUnwrap(root.layer)
-                XCTAssertTrue(boundary.masksToBounds, "Window content must not paint a rectangular corner beyond rounded glass")
-                XCTAssertEqual(boundary.cornerRadius, glass.cornerRadius)
+                XCTAssertTrue(boundary.masksToBounds, "Window content must not paint a rectangular corner beyond the rounded surface")
+                XCTAssertEqual(boundary.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                XCTAssertFalse(material.wantsLayer)
+                XCTAssertNotNil(material.maskImage)
                 XCTAssertEqual(boundary.cornerCurve, .continuous)
                 XCTAssertEqual(boundary.borderWidth, 0)
                 XCTAssertEqual(boundary.shadowOpacity, 0, "Retain AppKit's window shadow, without a second layer shadow")
@@ -183,9 +199,9 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         XCTAssertFalse(window.hasShadow, "Minimal keeps its existing presentation")
     }
 
-    func testVisibleExpansionPreservesCompactGlassConfigurationAndFocus() async throws {
+    func testVisibleExpansionPreservesCompactSurfaceConfigurationAndFocus() async throws {
         _ = NSApplication.shared
-        let panel = LauncherPanelController()
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         preferences.mode = .light
         panel.applyAppearance(preferences)
@@ -196,11 +212,13 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         let window = panel.visibilityIsolationWindow
         let root = try XCTUnwrap(window.contentView)
         root.layoutSubtreeIfNeeded()
-        let originalGlass = try XCTUnwrap(descendants(root).compactMap { $0 as? NSGlassEffectView }.first)
-        let compactRadius = originalGlass.cornerRadius
+        let originalMaterial = try XCTUnwrap(descendants(root).compactMap { $0 as? NSVisualEffectView }.first)
+        let compactRadius = LauncherLiquidGlassMetrics.cornerRadius
         let responder = window.firstResponder
         let fixtures = LauncherPreviewFixture.standard.results
-        XCTAssertEqual(compactRadius, window.frame.height / 2)
+        XCTAssertEqual(root.layer?.cornerRadius, compactRadius)
+        XCTAssertFalse(originalMaterial.wantsLayer)
+        XCTAssertNotNil(originalMaterial.maskImage)
 
         for mode in [LauncherAppearanceMode.light, .dark, .light] {
             preferences.mode = mode
@@ -209,21 +227,21 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                 panel.apply(results)
                 try await Task.sleep(for: .milliseconds(10))
                 root.layoutSubtreeIfNeeded()
-                let glasses = descendants(root).compactMap { $0 as? NSGlassEffectView }
-                let glass = try XCTUnwrap(glasses.first)
-                XCTAssertEqual(glasses.count, 1)
+                let materials = descendants(root).compactMap { $0 as? NSVisualEffectView }
+                let material = try XCTUnwrap(materials.first)
+                XCTAssertEqual(materials.count, 1)
                 XCTAssertTrue(window.contentView === root)
-                XCTAssertTrue(glass === originalGlass, "Expansion must retain the compact bar's native surface")
-                XCTAssertEqual(glass.cornerRadius, compactRadius, "Showing results must not tighten the corners")
+                XCTAssertTrue(material === originalMaterial, "Expansion must retain the compact bar's native surface")
+                XCTAssertFalse(material.wantsLayer, "Showing results must not layer-back the HUD")
+                XCTAssertEqual(material.maskImage?.capInsets.top, compactRadius, "Showing results must not tighten the corners")
                 XCTAssertEqual(root.layer?.cornerRadius, compactRadius)
-                XCTAssertEqual(glass.style, .regular)
-                XCTAssertNil(glass.tintColor)
-                XCTAssertEqual(glass.alphaValue, 1)
-                XCTAssertEqual(glass.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]),
+                XCTAssertEqual(material.material, .hudWindow)
+                XCTAssertEqual(material.blendingMode, .behindWindow)
+                XCTAssertEqual(material.alphaValue, 1)
+                XCTAssertEqual(material.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]),
                                mode == .dark ? .darkAqua : .aqua)
                 XCTAssertTrue(window.firstResponder === responder)
                 XCTAssertEqual(panel.query, "screen")
-                if #available(macOS 27, *) { XCTAssertFalse(glass.effectIsInteractive) }
                 XCTAssertEqual(root.layer?.borderWidth, 0)
                 XCTAssertEqual(root.layer?.backgroundColor?.alpha ?? 0, 0)
             }
@@ -231,8 +249,8 @@ final class NativeAppearanceRegressionTests: XCTestCase {
     }
 
     private func assertTransparentWindowCorners(_ boundary: CALayer) throws {
-        // A solid probe exercises the production window's outer clipping, independent of
-        // glass sampling. This checks corner alpha, not desktop blur or native shadow fidelity.
+        // A solid probe exercises the production window's outer clipping, independent of the
+        // material's sampling. This checks corner alpha, not blur or native shadow fidelity.
         let probe = CALayer()
         probe.frame = boundary.bounds
         probe.backgroundColor = NSColor.red.cgColor
@@ -255,7 +273,7 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         XCTAssertEqual(pixels[((height / 2) * width + width / 2) * 4 + 3], 255)
     }
 
-    func testGlassHasOneNativeBoundaryAcrossAppearanceScaleAndExpansion() throws {
+    func testSurfaceHasOneNativeBoundaryAcrossAppearanceScaleAndExpansion() throws {
         _ = NSApplication.shared
         for dark in [false, true] {
             for contrast in [false, true] {
@@ -270,14 +288,20 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                     for height: CGFloat in [58, 200, 58] {
                         surface.frame.size.height = height
                         surface.layoutSubtreeIfNeeded()
-                        let glass = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSGlassEffectView }.first)
-                        XCTAssertEqual(surface.subviews.count, 1, "Native glass must not acquire another stroked overlay")
-                        XCTAssertEqual(glass.frame, surface.bounds)
-                        XCTAssertEqual(glass.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
-                        XCTAssertTrue(glass.contentView === content.superview)
+                        // Exactly one surface. A second backdrop underneath is what flattened
+                        // the material and produced a hard rim; anything else here would be a
+                        // stroked overlay on the native boundary.
+                        XCTAssertEqual(surface.subviews.count, 1, "The surface must not acquire a second backdrop or overlay")
+                        let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                        XCTAssertEqual(material.frame, surface.bounds)
+                        XCTAssertFalse(material.wantsLayer)
+                        XCTAssertNotNil(material.maskImage)
+                        XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
+                        XCTAssertEqual(material.maskImage?.capInsets.left, LauncherLiquidGlassMetrics.cornerRadius)
                         XCTAssertEqual(content.convert(content.bounds, to: surface), surface.bounds)
-                        XCTAssertEqual(glass.style, .regular)
-                        XCTAssertNil(glass.tintColor)
+                        XCTAssertTrue(content.isDescendant(of: material))
+                        XCTAssertEqual(material.material, .hudWindow)
+                        XCTAssertEqual(material.blendingMode, .behindWindow)
                     }
                 }
             }

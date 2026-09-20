@@ -373,6 +373,24 @@ enum WindowScreenGeometry {
             height: appKitFrame.height
         )
     }
+
+    static func originFittingSnappedFrame(
+        applied: CGRect,
+        screen: CGRect
+    ) -> CGPoint {
+        var origin = applied.origin
+        // A terminal-style resize increment can grow a right-aligned window past the screen
+        // edge. Shift inward only when that move stays on the opposite edge; do not push a
+        // left-aligned maximize one pixel offscreen to chase a one-pixel overflow, and do not
+        // fight window-server origin normalization of a few points.
+        if applied.maxX > screen.maxX, applied.minX > screen.minX {
+            origin.x = max(screen.minX, screen.maxX - applied.width)
+        }
+        if applied.maxY > screen.maxY, applied.minY > screen.minY {
+            origin.y = max(screen.minY, screen.maxY - applied.height)
+        }
+        return origin
+    }
 }
 
 struct DockPreferenceSnapshot: Sendable {
@@ -462,7 +480,10 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     private static let maximumFrameStabilityPolls = 10
     private static let requiredStableFrameSamples = 2
     private static let frameOriginTolerance: CGFloat = 8
-    private static let frameSizeTolerance: CGFloat = 2
+    // Terminal, iTerm, and similar grid-snapping windows round to a character cell. A typical
+    // cell is about 7–16 pt; keep this large enough to accept that rounding without treating an
+    // 80 pt one-axis clamp as success.
+    private static let frameSizeTolerance: CGFloat = 24
     private static let frameStabilityTolerance: CGFloat = 1
 
     private enum WindowCandidateResolution {
@@ -543,26 +564,30 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         } ?? 0
 
         let targetFrame: CGRect
+        let layoutScreen: CGRect
         switch action {
         case .nextDisplay, .previousDisplay:
             guard screens.count > 1 else { return }
             let offset = action == .nextDisplay ? 1 : -1
             let destinationIndex = (currentScreenIndex + offset + screens.count) % screens.count
+            layoutScreen = screens[destinationIndex]
             targetFrame = WindowGeometry.movedFrame(
                 window: currentFrame,
                 from: screens[currentScreenIndex],
-                to: screens[destinationIndex]
+                to: layoutScreen
             )
         default:
+            layoutScreen = screens[currentScreenIndex]
             targetFrame = WindowGeometry.frame(
                 for: action,
                 window: currentFrame,
-                screen: screens[currentScreenIndex]
+                screen: layoutScreen
             )
         }
         try setFrame(
             targetFrame,
             of: window,
+            screen: layoutScreen,
             deadline: deadline,
             checkCancellation: checkCancellation
         )
@@ -728,10 +753,11 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         return CGRect(origin: position, size: size)
     }
 
-    func setFrame(_ frame: CGRect, of window: AXUIElement) throws {
+    func setFrame(_ frame: CGRect, of window: AXUIElement, screen: CGRect? = nil) throws {
         try setFrame(
             frame,
             of: window,
+            screen: screen ?? frame,
             deadline: uptimeProvider() + actionTimeout,
             checkCancellation: {}
         )
@@ -740,6 +766,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     private func setFrame(
         _ frame: CGRect,
         of window: AXUIElement,
+        screen: CGRect,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
     ) throws {
@@ -756,6 +783,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             checkCancellation: checkCancellation
         )
         var finalAppliedFrame = originalFrame
+        var previousAttemptFrame: CGRect?
         for attempt in 1...Self.maximumFrameApplicationAttempts {
             let expandsWidth = frame.width > finalAppliedFrame.width + Self.frameSizeTolerance
             let expandsHeight = frame.height > finalAppliedFrame.height + Self.frameSizeTolerance
@@ -814,7 +842,16 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                     deadline: deadline,
                     checkCancellation: checkCancellation
                 )
-                if Self.framesApproximatelyMatch(finalAppliedFrame, frame) { return }
+                if Self.framesApproximatelyMatch(finalAppliedFrame, frame) {
+                    applyFittedOrigin(
+                        applied: finalAppliedFrame,
+                        screen: screen,
+                        of: window,
+                        deadline: deadline,
+                        checkCancellation: checkCancellation
+                    )
+                    return
+                }
             }
             guard attempt < Self.maximumFrameApplicationAttempts else { break }
 
@@ -826,15 +863,80 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                 deadline: deadline,
                 checkCancellation: checkCancellation
             )
+            if let previousAttemptFrame,
+               Self.framesMatch(
+                finalAppliedFrame,
+                previousAttemptFrame,
+                originTolerance: Self.frameStabilityTolerance,
+                sizeTolerance: Self.frameStabilityTolerance
+               ) {
+                // The target is rounding or clamping to the same frame on every write. Further
+                // attempts only jitter the window.
+                break
+            }
+            previousAttemptFrame = finalAppliedFrame
         }
-        let rejectedFrame = finalAppliedFrame
-        restoreFrame(
+
+        if Self.framesApproximatelyMatch(finalAppliedFrame, frame) {
+            applyFittedOrigin(
+                applied: finalAppliedFrame,
+                screen: screen,
+                of: window,
+                deadline: deadline,
+                checkCancellation: checkCancellation
+            )
+            return
+        }
+        if Self.framesMatch(
+            finalAppliedFrame,
             originalFrame,
+            originTolerance: Self.frameStabilityTolerance,
+            sizeTolerance: Self.frameStabilityTolerance
+        ) {
+            throw WindowManagementError.frameRejected(expected: frame, actual: finalAppliedFrame)
+        }
+        if Self.isPartialAxisFailure(expected: frame, actual: finalAppliedFrame) {
+            restoreFrame(
+                originalFrame,
+                of: window,
+                deadline: deadline,
+                checkCancellation: checkCancellation
+            )
+            throw WindowManagementError.frameRejected(expected: frame, actual: finalAppliedFrame)
+        }
+        applyFittedOrigin(
+            applied: finalAppliedFrame,
+            screen: screen,
             of: window,
             deadline: deadline,
             checkCancellation: checkCancellation
         )
-        throw WindowManagementError.frameRejected(expected: frame, actual: rejectedFrame)
+    }
+
+    private func applyFittedOrigin(
+        applied: CGRect,
+        screen: CGRect,
+        of window: AXUIElement,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) {
+        let origin = WindowScreenGeometry.originFittingSnappedFrame(
+            applied: applied,
+            screen: screen
+        )
+        guard abs(origin.x - applied.minX) > 0.5 || abs(origin.y - applied.minY) > 0.5 else {
+            return
+        }
+        var position = origin
+        guard let positionValue = AXValueCreate(.cgPoint, &position) else { return }
+        try? writeAttribute(
+            kAXPositionAttribute as CFString,
+            value: positionValue,
+            to: window,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+        frameSettlementWaiter(0)
     }
 
     private func restoreFrame(
@@ -905,6 +1007,12 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             originTolerance: frameOriginTolerance,
             sizeTolerance: frameSizeTolerance
         )
+    }
+
+    private static func isPartialAxisFailure(expected: CGRect, actual: CGRect) -> Bool {
+        let widthMatches = abs(actual.width - expected.width) <= frameSizeTolerance
+        let heightMatches = abs(actual.height - expected.height) <= frameSizeTolerance
+        return widthMatches != heightMatches
     }
 
     private static func framesMatch(

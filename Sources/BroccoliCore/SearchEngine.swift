@@ -165,7 +165,12 @@ public struct SearchEngine: Sendable {
             }
             return score
         }
-        for token in entry.tokens where token.hasPrefix(query) { return 650 }
+        // Applications are a launcher's primary targets and are launched by partial name
+        // words constantly, so one of their title tokens beginning with the query counts
+        // as strongly as a direct title-prefix match; panes keep the token-prefix score.
+        for token in entry.tokens where token.hasPrefix(query) {
+            return entry.kind == .application ? 800 : 650
+        }
         if entry.acronym.hasPrefix(query) { return 600 }
         if entry.normalizedTitle.contains(query) { return 450 }
         if !compactQuery.isEmpty, entry.compactTitle.contains(compactQuery) { return 450 }
@@ -252,6 +257,20 @@ public struct SearchEngine: Sendable {
 
     private func resultOrder(_ lhs: Candidate, _ rhs: Candidate) -> Bool {
         if lhs.result.score != rhs.result.score { return lhs.result.score > rhs.result.score }
+        let lhsPriority = kindTieBreakPriority(lhs.result.entry.kind)
+        let rhsPriority = kindTieBreakPriority(rhs.result.entry.kind)
+        if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
         return lhs.localizedSortRank < rhs.localizedSortRank
+    }
+
+    /// Equal-relevance matches break ties toward launchable targets: the application named
+    /// “System Settings” outranks every pane whose title merely contains the matched word.
+    private func kindTieBreakPriority(_ kind: SearchKind) -> Int {
+        switch kind {
+        case .application: 0
+        case .systemSetting: 1
+        case .action: 2
+        case .file, .calculator, .clipboard, .status: 3
+        }
     }
 }

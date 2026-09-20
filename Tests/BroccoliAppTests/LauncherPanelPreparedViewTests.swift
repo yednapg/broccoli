@@ -35,7 +35,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
 
     func testResultResizeDoesNotInheritAnEnclosingAnimation() throws {
         _ = NSApplication.shared
-        let controller = LauncherPanelController()
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
         controller.applyAppearance(.defaults(design: .liquidGlass))
         controller.setMode(.main, initialQuery: "fixture")
         let root = try XCTUnwrap(controller.visibilityIsolationWindow.contentView)
@@ -55,7 +55,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
 
     func testVisibleResultTransitionsKeepTheirSizeAfterAppKitUpdates() async throws {
         _ = NSApplication.shared
-        let controller = LauncherPanelController()
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         let noResults = LauncherMainSearchResultComposer.compose(
             catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
