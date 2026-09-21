@@ -293,16 +293,8 @@ final class LauncherAppearanceTests: XCTestCase {
             var preferences = LauncherAppearancePreferences.defaults(design: design)
             preferences.mode = .dark
             let descriptor = controller.descriptor(for: preferences)
-            let window = NSWindow(
-                contentRect: NSRect(
-                    x: 0,
-                    y: 0,
-                    width: descriptor.width,
-                    height: descriptor.searchHeight
-                ),
-                styleMask: [.borderless],
-                backing: .buffered,
-                defer: false
+            let window = BroccoliAppTestWindows.window(
+                size: NSSize(width: descriptor.width, height: descriptor.searchHeight)
             )
             window.appearance = NSAppearance(named: .darkAqua)
             window.backgroundColor = .black
@@ -671,12 +663,7 @@ final class LauncherAppearanceTests: XCTestCase {
 
     func testBorderlessNativeSearchEditorUsesAppKitSearchTextBounds() throws {
         _ = NSApplication.shared
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 58),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: NSSize(width: 640, height: 58))
         let field = LauncherNativeSearchField(
             frame: NSRect(x: 28, y: 12, width: 584, height: 34)
         )
@@ -791,12 +778,7 @@ final class LauncherAppearanceTests: XCTestCase {
             width: descriptor.width - descriptor.searchHorizontalInset * 2,
             height: descriptor.searchHeight - descriptor.searchControlVerticalInset * 2
         )
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: fieldSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: fieldSize)
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = .black
 
@@ -874,12 +856,7 @@ final class LauncherAppearanceTests: XCTestCase {
             width: descriptor.width - descriptor.searchHorizontalInset * 2,
             height: descriptor.searchHeight - descriptor.searchControlVerticalInset * 2
         )
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: fieldSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: fieldSize)
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = NSColor.black
 
@@ -940,12 +917,7 @@ final class LauncherAppearanceTests: XCTestCase {
     func testMinimalPlaceholderAndTypedQueryShareTheSameVerticalInkOrigin() throws {
         _ = NSApplication.shared
         let fieldSize = NSSize(width: 500, height: 40)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: fieldSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: fieldSize)
         window.appearance = NSAppearance(named: .aqua)
         window.backgroundColor = .white
 
@@ -1011,7 +983,7 @@ final class LauncherAppearanceTests: XCTestCase {
         preferences.mode = .dark
         controller.applyAppearance(preferences, force: true)
         controller.setMode(.main)
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
 
         func searchField(in view: NSView) -> LauncherNativeSearchField? {
@@ -1088,12 +1060,7 @@ final class LauncherAppearanceTests: XCTestCase {
     func testPlaceholderInkDoesNotMoveWhenFocusChanges() throws {
         _ = NSApplication.shared
         let fieldSize = NSSize(width: 560, height: 40)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: fieldSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: fieldSize)
         window.appearance = NSAppearance(named: .aqua)
         window.backgroundColor = .white
 
@@ -1175,12 +1142,7 @@ final class LauncherAppearanceTests: XCTestCase {
 
     func testMinimalSearchRenderedInkIsAutomaticallyCentered() throws {
         _ = NSApplication.shared
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 40),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: NSSize(width: 560, height: 40))
         window.appearance = NSAppearance(named: .aqua)
         window.backgroundColor = .white
 
@@ -1245,7 +1207,7 @@ final class LauncherAppearanceTests: XCTestCase {
         preferences.mode = .light
         controller.applyAppearance(preferences, force: true)
         controller.setMode(.main)
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
 
         let window = controller.visibilityIsolationWindow
@@ -1324,7 +1286,7 @@ final class LauncherAppearanceTests: XCTestCase {
         preferences.mode = .light
         controller.applyAppearance(preferences, force: true)
         controller.setMode(.main)
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
 
         func searchField(in view: NSView) -> LauncherNativeSearchField? {
@@ -1362,7 +1324,7 @@ final class LauncherAppearanceTests: XCTestCase {
         let controller = LauncherPanelController()
         controller.applyAppearance(.defaults(design: .minimal), force: true)
         controller.setMode(.main)
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
 
         func searchField(in view: NSView) -> LauncherNativeSearchField? {
@@ -1657,7 +1619,21 @@ final class LauncherAppearanceTests: XCTestCase {
         let controller = LauncherPanelController()
         let preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         controller.applyAppearance(preferences)
-        controller.show(on: screen)
+        let expected = LauncherPanelGeometry.positionedFrame(
+            in: screen.visibleFrame,
+            preferredWidth: LauncherLiquidGlassMetrics.width,
+            height: LauncherLiquidGlassMetrics.searchHeight,
+            originX: CGFloat(preferences.originX),
+            originY: CGFloat(preferences.originY)
+        )
+        XCTAssertEqual(expected.midX, screen.visibleFrame.midX, accuracy: 0.5)
+        XCTAssertEqual(
+            expected.maxY,
+            screen.visibleFrame.maxY - screen.visibleFrame.height * CGFloat(preferences.originY),
+            accuracy: 0.5
+        )
+
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let root = try XCTUnwrap(window.contentView)
@@ -1666,10 +1642,8 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(visibleScreenFrame, window.frame)
         XCTAssertEqual(visibleScreenFrame.width, LauncherLiquidGlassMetrics.width)
         XCTAssertEqual(visibleScreenFrame.height, LauncherLiquidGlassMetrics.searchHeight)
-        XCTAssertEqual(visibleScreenFrame.midX, screen.visibleFrame.midX, accuracy: 0.5)
-        XCTAssertEqual(visibleScreenFrame.maxY,
-                       screen.visibleFrame.maxY - screen.visibleFrame.height * CGFloat(preferences.originY),
-                       accuracy: 0.5)
+        XCTAssertLessThanOrEqual(window.frame.maxX, 0)
+        XCTAssertLessThanOrEqual(window.frame.maxY, 0)
     }
 
     func testReduceTransparencyChangesMaterialWithoutChangingGeometry() {
@@ -1898,6 +1872,8 @@ final class LauncherAppearanceTests: XCTestCase {
     }
 
     func testDraggableChromeExcludesSearchFieldAndResults() {
+        // Chrome mouse-downs are handed to Window Server via performDrag(with:). The search
+        // field and result rows must keep their own tracking, or typing and selection break.
         let searchField = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 24))
         let results = NSScrollView(frame: NSRect(x: 0, y: 0, width: 100, height: 80))
         let document = NSView(frame: results.bounds)
@@ -1932,6 +1908,12 @@ final class LauncherAppearanceTests: XCTestCase {
                 resultsView: results
             )
         )
+    }
+
+    func testLauncherPanelStaysMovableSoWindowServerCanDragIt() {
+        let controller = LauncherPanelController()
+        XCTAssertTrue(controller.visibilityIsolationWindow.isMovable)
+        XCTAssertFalse(controller.visibilityIsolationWindow.isMovableByWindowBackground)
     }
 
     func testCalculatorPreferenceMigrationPreservesOldEnablement() throws {
@@ -2055,6 +2037,62 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertLessThan(fitted.height, productionSize.height)
     }
 
+    func testLauncherDesignChooserKeepsSelectionChromeOnTheClickedCard() {
+        XCTAssertTrue(LauncherDesignChooserLayout.disablesGroupFocusEffect)
+        XCTAssertEqual(LauncherDesignChooserLayout.unselectedStrokeNSColor, .separatorColor)
+        XCTAssertGreaterThan(
+            LauncherDesignChooserLayout.selectedLineWidth,
+            LauncherDesignChooserLayout.unselectedLineWidth
+        )
+
+        let liquid = LauncherDesignChooserLayout.selectionWellFrame(for: .liquidGlass)
+        let minimal = LauncherDesignChooserLayout.selectionWellFrame(for: .minimal)
+        XCTAssertEqual(liquid.size, LauncherDesignChooserLayout.selectionWellSize)
+        XCTAssertEqual(minimal.size, LauncherDesignChooserLayout.selectionWellSize)
+        XCTAssertEqual(liquid.width, LauncherDesignChooserLayout.thumbnailWidth)
+        XCTAssertEqual(liquid.height, LauncherDesignChooserLayout.thumbnailHeight)
+        XCTAssertFalse(
+            liquid.intersects(minimal),
+            "Selecting Liquid Glass must not cover the Minimal well"
+        )
+        XCTAssertLessThan(
+            liquid.width,
+            LauncherDesignChooserLayout.pickerWidth,
+            "Selection chrome is one card, not the whole chooser"
+        )
+        XCTAssertLessThan(
+            LauncherDesignChooserLayout.pickerWidth,
+            SettingsShellLayout.detailMinimumWidth,
+            "Chooser cards must not span the full Appearance row"
+        )
+
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.design(at: CGPoint(x: liquid.midX, y: liquid.midY)),
+            .liquidGlass
+        )
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.design(at: CGPoint(x: minimal.midX, y: minimal.midY)),
+            .minimal
+        )
+        let gap = CGPoint(
+            x: liquid.maxX + LauncherDesignChooserLayout.thumbnailSpacing / 2,
+            y: liquid.midY
+        )
+        XCTAssertNil(
+            LauncherDesignChooserLayout.design(at: gap),
+            "The space between cards is not a selection target"
+        )
+        XCTAssertNil(
+            LauncherDesignChooserLayout.design(at: CGPoint(x: -40, y: liquid.midY)),
+            "The Launcher Design title sits outside the card hit targets"
+        )
+        XCTAssertNil(
+            LauncherDesignChooserLayout.design(
+                at: CGPoint(x: LauncherDesignChooserLayout.pickerWidth + 12, y: liquid.midY)
+            )
+        )
+    }
+
     func testSettingsSidebarUsesCherryStyleFilledSymbols() {
         let expectedSymbols: [PreferencesSection: String] = [
             .general: "gearshape.fill",
@@ -2116,23 +2154,19 @@ final class LauncherAppearanceTests: XCTestCase {
     }
 
     func testLauncherVisibilitySessionTemporarilySuppressesOnlyOtherVisibleWindows() {
-        let launcher = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 100, height: 40),
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: true
+        let launcher = BroccoliAppTestWindows.panel(
+            size: NSSize(width: 100, height: 40),
+            deferred: true
         )
-        let settings = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 160),
+        let settings = BroccoliAppTestWindows.window(
+            size: NSSize(width: 200, height: 160),
             styleMask: .titled,
-            backing: .buffered,
-            defer: true
+            deferred: true
         )
-        let alreadyHidden = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+        let alreadyHidden = BroccoliAppTestWindows.window(
+            size: NSSize(width: 100, height: 100),
             styleMask: .titled,
-            backing: .buffered,
-            defer: true
+            deferred: true
         )
         defer {
             launcher.orderOut(nil)
@@ -2164,23 +2198,19 @@ final class LauncherAppearanceTests: XCTestCase {
     }
 
     func testLauncherVisibilitySessionKeepsTheForegroundBroccoliWindowVisible() {
-        let launcher = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 100, height: 40),
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: true
+        let launcher = BroccoliAppTestWindows.panel(
+            size: NSSize(width: 100, height: 40),
+            deferred: true
         )
-        let foregroundSettings = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 160),
+        let foregroundSettings = BroccoliAppTestWindows.window(
+            size: NSSize(width: 200, height: 160),
             styleMask: .titled,
-            backing: .buffered,
-            defer: true
+            deferred: true
         )
-        let backgroundBroccoliWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 180, height: 140),
+        let backgroundBroccoliWindow = BroccoliAppTestWindows.window(
+            size: NSSize(width: 180, height: 140),
             styleMask: .titled,
-            backing: .buffered,
-            defer: true
+            deferred: true
         )
         defer {
             launcher.orderOut(nil)
@@ -2288,11 +2318,9 @@ final class LauncherAppearanceTests: XCTestCase {
         field.isBezeled = false
         field.drawsBackground = false
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 80),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 220, height: 80),
+            styleMask: [.titled]
         )
         window.contentView?.addSubview(field)
 

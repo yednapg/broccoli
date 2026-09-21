@@ -84,9 +84,6 @@ enum LauncherSelection {
 /// only the bottom edge; the top edge is invariant until the user reopens or repositions the
 /// launcher.
 enum LauncherPanelGeometry {
-    /// Pointer travel required before chrome click-and-hold becomes a move.
-    static let dragThreshold: CGFloat = 4
-
     static func resizing(_ frame: NSRect, toHeight height: CGFloat) -> NSRect {
         let height = max(0, height)
         return NSRect(
@@ -924,11 +921,18 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
 private final class LauncherPanel: NSPanel {
     var onCommand: ((SearchFieldCommand) -> Void)?
-    /// Return `true` to consume the mouse-down and run move tracking.
+    /// Return `true` to consume the mouse-down and hand the move to Window Server.
     var onPotentialMove: ((NSEvent) -> Bool)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        // Geometry already clamps live presentation to the visible frame. Returning the
+        // requested rect unchanged lets automated tests keep the panel off-screen; AppKit
+        // would otherwise snap `(0, 0)` and negative origins to the bottom-left of the desktop.
+        frameRect
+    }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown, onPotentialMove?(event) == true {
@@ -1528,6 +1532,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// Used so a new query can pin the table to the top without wiping the user's scroll
     /// offset on every result delivery for the same query.
     private var lastAppliedQuery: String?
+    /// True while Window Server is tracking a chrome-initiated `performDrag(with:)`.
+    /// AppKit may swallow the matching mouse-up, so monitors and a button-state poll
+    /// both call `finishNativeWindowDrag()`.
+    private var isNativeWindowDragActive = false
+    private var nativeDragLocalMouseUpMonitor: Any?
+    private var nativeDragGlobalMouseUpMonitor: Any?
+    private var nativeDragEndPoll: Timer?
 
     private var searchField: NSTextField { nativeSearchField }
 
@@ -1557,7 +1568,10 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         theme = LauncherThemeController().descriptor(for: .defaults(design: .minimal), environment: environmentProvider())
         panel = LauncherPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.searchHeight),
+            contentRect: NSRect(
+                origin: Self.automatedTestOrigin,
+                size: NSSize(width: Self.panelWidth, height: Self.searchHeight)
+            ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -1739,11 +1753,31 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         focusSearchField()
     }
 
-    func prepareIcons(for entries: [SearchEntry]) {
-        iconCache.prewarm(entries, limit: LauncherSearchLimits.resultSetCap, context: iconContext)
+    func prepareIcons(for entries: [SearchEntry], resolveNativeSettings: Bool = true) {
+        iconCache.prewarm(
+            entries,
+            limit: LauncherSearchLimits.resultSetCap,
+            context: iconContext,
+            resolveNativeSettings: resolveNativeSettings
+        )
     }
 
+    /// Origin used before the first live `show(on:)` and for AppKit tests. AppKit's default
+    /// `(0, 0)` is the bottom-left of the desktop; constructing or interrupting a test panel
+    /// must not flash the Minimal capsule there.
+    static let automatedTestOrigin = NSPoint(x: -16_000, y: -16_000)
+
     func show(on screen: NSScreen?) {
+        present(on: screen, origin: nil)
+    }
+
+    /// Presents a real key window off-screen so tests can use the field editor without
+    /// placing the launcher on the developer's desktop.
+    func showForAutomatedTests() {
+        present(on: nil, origin: Self.automatedTestOrigin)
+    }
+
+    private func present(on screen: NSScreen?, origin: NSPoint?) {
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
         NSAnimationContext.current.allowsImplicitAnimation = false
@@ -1769,7 +1803,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         resizePanel(to: desiredPanelHeight, display: false)
         confirmationEntryID = nil
         onQueryChanged?("")
-        position(on: screen ?? NSScreen.main ?? NSScreen.screens.first)
+        if let origin {
+            var frame = panel.frame
+            frame.origin = origin
+            panel.setFrame(frame, display: false)
+        } else {
+            position(on: screen ?? NSScreen.main ?? NSScreen.screens.first)
+        }
         panel.ignoresMouseEvents = false
         panel.acceptsMouseMovedEvents = true
         panel.contentView?.layoutSubtreeIfNeeded()
@@ -1802,6 +1842,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             return
         }
         isProgrammaticallyHiding = true
+        if isNativeWindowDragActive {
+            finishNativeWindowDrag()
+        }
         // Drop any pending or in-flight height motion before the panel leaves the screen;
         // the next presentation reuses this controller with fresh geometry.
         cancelPendingPanelMotion()
@@ -1885,6 +1928,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         refreshSelectionAppearance()
         updateHeight()
+        if !results.isEmpty {
+            iconCache.prewarm(
+                iconEntriesNearViewport,
+                limit: max(theme.visibleResultCount + 2, 8),
+                context: iconContext
+            )
+        }
         if needsPresentationIconRefresh, !results.isEmpty {
             needsPresentationIconRefresh = false
             refreshDisplayedNativeIcons()
@@ -2031,6 +2081,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         dismiss(notify: false)
     }
 
+    func windowDidMove(_ notification: Notification) {
+        // `performDrag(with:)` returns immediately. If the drag already ended without a
+        // delivered mouse-up, the last move is the signal to persist origin.
+        finishNativeWindowDragIfMouseIsUp()
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         focusSearchField(movingCaretToEnd: false)
     }
@@ -2053,6 +2109,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         // happen before that delegate callback and leave isVisible out of sync with the launch
         // session, causing the next global shortcut to restore an old app instead of opening.
         panel.hidesOnDeactivate = false
+        panel.isMovable = true
         panel.acceptsMouseMovedEvents = false
         panel.ignoresMouseEvents = true
         panel.delegate = self
@@ -2634,38 +2691,70 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             searchField: searchField,
             resultsView: scrollView
         ) else { return false }
-        trackMove(starting: event)
+        beginNativeWindowDrag(with: event)
         return true
     }
 
-    private func trackMove(starting downEvent: NSEvent) {
-        let startMouse = downEvent.window == nil
-            ? NSEvent.mouseLocation
-            : panel.convertToScreen(NSRect(origin: downEvent.locationInWindow, size: .zero)).origin
-        let startFrame = panel.frame
-        var didMove = false
-        while let event = panel.nextEvent(
-            matching: [.leftMouseDragged, .leftMouseUp],
-            until: .distantFuture,
-            inMode: .eventTracking,
-            dequeue: true
-        ) {
-            if event.type == .leftMouseUp {
-                if didMove { commitMove() }
-                break
-            }
-            let mouse = NSEvent.mouseLocation
-            let deltaX = mouse.x - startMouse.x
-            let deltaY = mouse.y - startMouse.y
-            if !didMove {
-                if hypot(deltaX, deltaY) < LauncherPanelGeometry.dragThreshold { continue }
-                didMove = true
-            }
-            var frame = startFrame
-            frame.origin.x += deltaX
-            frame.origin.y += deltaY
-            panel.setFrame(frame, display: true)
+    /// Hands a chrome mouse-down to Window Server. The app must not `setFrame` while the
+    /// pointer is down; that redraws HUD glass on every dragged event and trails the cursor.
+    /// `performDrag(with:)` returns immediately and may swallow mouse-up, so end-of-drag
+    /// persistence is driven by monitors, `windowDidMove`, and a button-state poll.
+    private func beginNativeWindowDrag(with event: NSEvent) {
+        guard !isNativeWindowDragActive else { return }
+        isNativeWindowDragActive = true
+        installNativeDragEndObservers()
+        panel.performDrag(with: event)
+        if NSEvent.pressedMouseButtons & 1 == 0 {
+            finishNativeWindowDrag()
         }
+    }
+
+    private func installNativeDragEndObservers() {
+        removeNativeDragEndObservers()
+        nativeDragLocalMouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            Task { @MainActor in
+                self?.finishNativeWindowDrag()
+            }
+            return event
+        }
+        nativeDragGlobalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
+            Task { @MainActor in
+                self?.finishNativeWindowDrag()
+            }
+        }
+        let poll = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.finishNativeWindowDragIfMouseIsUp()
+            }
+        }
+        poll.tolerance = 0.004
+        RunLoop.main.add(poll, forMode: .common)
+        nativeDragEndPoll = poll
+    }
+
+    private func removeNativeDragEndObservers() {
+        if let nativeDragLocalMouseUpMonitor {
+            NSEvent.removeMonitor(nativeDragLocalMouseUpMonitor)
+            self.nativeDragLocalMouseUpMonitor = nil
+        }
+        if let nativeDragGlobalMouseUpMonitor {
+            NSEvent.removeMonitor(nativeDragGlobalMouseUpMonitor)
+            self.nativeDragGlobalMouseUpMonitor = nil
+        }
+        nativeDragEndPoll?.invalidate()
+        nativeDragEndPoll = nil
+    }
+
+    private func finishNativeWindowDragIfMouseIsUp() {
+        guard isNativeWindowDragActive, NSEvent.pressedMouseButtons & 1 == 0 else { return }
+        finishNativeWindowDrag()
+    }
+
+    private func finishNativeWindowDrag() {
+        guard isNativeWindowDragActive else { return }
+        isNativeWindowDragActive = false
+        removeNativeDragEndObservers()
+        commitMove()
     }
 
     private func commitMove() {
@@ -2676,7 +2765,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             visibleFrame: visibleFrame
         )
         if placement.frame != panel.frame {
-            panel.setFrame(placement.frame, display: true)
+            commitPanelFrame(placement.frame, display: panel.isVisible)
         }
         if var appearance = appliedAppearance {
             appearance.originX = Double(placement.originX)

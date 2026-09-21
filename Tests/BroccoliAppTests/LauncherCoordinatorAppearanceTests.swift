@@ -27,7 +27,7 @@ final class LauncherCoordinatorAppearanceTests: XCTestCase {
     func testSystemAppearanceChangeRefreshesVisibleActionWithoutChangingEditingState() async throws {
         let fixture = try Fixture()
         defer { fixture.close() }
-        fixture.panel.show(on: NSScreen.main)
+        fixture.panel.showForAutomatedTests()
         fixture.search("dark mode")
         try await fixture.waitForTitle("Switch to Light Mode")
         let editor = try XCTUnwrap(fixture.panel.visibilityIsolationWindow.firstResponder as? NSTextView)
@@ -52,7 +52,7 @@ final class LauncherCoordinatorAppearanceTests: XCTestCase {
         // follow system state even when the launcher's appearance preference differs.
         fixture.preferences.appearance.mode = .dark
         fixture.coordinator.updatePreferences()
-        fixture.panel.show(on: NSScreen.main)
+        fixture.panel.showForAutomatedTests()
         fixture.search("dark mode")
         // This main-actor turn cannot publish the pending search yet. Simulate a system
         // change before its notification is delivered; the snapshot still describes Dark.
@@ -64,7 +64,7 @@ final class LauncherCoordinatorAppearanceTests: XCTestCase {
             fixture.panel.dismiss(notify: false)
             fixture.appearance = appearance
             fixture.coordinator.refreshAppearanceForSystemChange()
-            fixture.panel.show(on: NSScreen.main)
+            fixture.panel.showForAutomatedTests()
             fixture.search("light mode")
             try await fixture.waitForTitle(appearance == .dark ? "Switch to Light Mode" : "Switch to Dark Mode")
         }

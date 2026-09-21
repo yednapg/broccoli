@@ -220,13 +220,9 @@ final class LauncherInteractivePreviewTests: XCTestCase {
             interactive: true
         )
         let field = try XCTUnwrap(content.previewSearchField as? LauncherNativeSearchField)
-        let window = NSWindow(
-            contentRect: content.bounds,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window = BroccoliAppTestWindows.window(size: content.bounds.size)
         window.contentView = content
+        BroccoliAppTestWindows.placeOffscreen(window)
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
 

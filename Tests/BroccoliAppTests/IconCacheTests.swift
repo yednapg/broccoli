@@ -281,6 +281,24 @@ final class IconCacheTests: XCTestCase {
         )
     }
 
+    func testResolverPublishesIconsInRequestOrderBeforeReturning() async throws {
+        let requests = SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
+        final class StreamedKeys: @unchecked Sendable {
+            var values: [String] = []
+        }
+        let streamed = StreamedKeys()
+        let resolution = await SystemSettingsNativeIconResolver.resolve(
+            requests: requests,
+            context: .init(appearance: .light, backingScale: 2)
+        ) { key, icon in
+            streamed.values.append(key)
+            XCTAssertEqual(icon.image.size, NSSize(width: 40, height: 40))
+        }
+
+        XCTAssertEqual(streamed.values, requests.map(\.iconKey))
+        XCTAssertEqual(Set(resolution.iconsByKey.keys), Set(streamed.values))
+    }
+
     func testApplicationFallbackValidationRequiresStandardSystemRoots() {
         XCTAssertEqual(
             SystemSettingsNativeIconResolver.validatedSystemApplicationURL(
@@ -407,6 +425,70 @@ final class IconCacheTests: XCTestCase {
             _ = cache.image(for: entry)
         }
         XCTAssertEqual(store.resolutionAttemptCount, 0)
+    }
+
+    func testImageLookupStartsResolutionForVisibleSettingsPanes() {
+        let store = SystemSettingsNativeIconStore { _, _ in
+            await Task.yield()
+            return SystemSettingsNativeIconResolution(
+                iconsByKey: [:],
+                extensionIndexSucceeded: true
+            )
+        }
+        let cache = IconCache(systemSettingsIconStore: store, backingScale: 2)
+        let entry = SystemSettingsTestFixtures.entries[0]
+
+        XCTAssertEqual(store.resolutionAttemptCount, 0)
+        _ = cache.image(for: entry)
+        XCTAssertEqual(store.resolutionAttemptCount, 1)
+        _ = cache.image(for: entry)
+        XCTAssertEqual(store.resolutionAttemptCount, 1)
+    }
+
+    func testCatalogPrewarmDoesNotStartNativeSettingsResolution() {
+        let store = SystemSettingsNativeIconStore { _, _ in
+            await Task.yield()
+            return SystemSettingsNativeIconResolution(
+                iconsByKey: [:],
+                extensionIndexSucceeded: true
+            )
+        }
+        let cache = IconCache(systemSettingsIconStore: store, backingScale: 2)
+
+        cache.prewarm(SystemSettingsTestFixtures.entries, resolveNativeSettings: false)
+        XCTAssertEqual(store.resolutionAttemptCount, 0)
+        _ = cache.image(for: SystemSettingsTestFixtures.entries[0])
+        XCTAssertEqual(store.resolutionAttemptCount, 1)
+    }
+
+    func testSettingsFallbackIsTemplateWithoutABorderedTile() throws {
+        _ = NSApplication.shared
+        let cache = IconCache(startsNativeIconResolution: false)
+        let entry = SystemSettingsTestFixtures.entries[0]
+        cache.prewarm([entry], resolveNativeSettings: false)
+        let icon = cache.image(for: entry)
+
+        XCTAssertTrue(icon.isTemplate)
+        XCTAssertEqual(icon.size, NSSize(width: 40, height: 40))
+        XCTAssertLessThanOrEqual(IconCache.boundedImageCost(icon), 80 * 80 * 4)
+
+        let bitmap = try XCTUnwrap(
+            icon.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
+            "Could not inspect Settings fallback"
+        )
+        for point in [
+            NSPoint(x: 0, y: 0),
+            NSPoint(x: bitmap.pixelsWide - 1, y: 0),
+            NSPoint(x: 0, y: bitmap.pixelsHigh - 1),
+            NSPoint(x: bitmap.pixelsWide - 1, y: bitmap.pixelsHigh - 1),
+        ] {
+            XCTAssertEqual(
+                bitmap.colorAt(x: Int(point.x), y: Int(point.y))?.alphaComponent ?? 1,
+                0,
+                accuracy: 0.001,
+                "Settings fallback contains a custom tile/border"
+            )
+        }
     }
 
     func testMultipleIconCachesStartOneSharedResolutionAfterCatalogPrewarm() {

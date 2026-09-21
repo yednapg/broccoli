@@ -51,7 +51,7 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         preferences.mode = .light
         panel.applyAppearance(preferences)
-        panel.show(on: NSScreen.main)
+        panel.showForAutomatedTests()
         defer { panel.dismiss(notify: false) }
         panel.setMode(.main, initialQuery: "screen")
         panel.apply(LauncherPreviewFixture.standard.results)
@@ -130,8 +130,10 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         preferences.mode = .light
         let host = LauncherInteractivePreviewHostView(configuration: renderer.interactiveConfiguration(for: preferences),
                                                       interactive: true, fillsWidth: false)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 300),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 640, height: 300),
+            styleMask: [.titled]
+        )
         window.contentView = host
         defer { window.orderOut(nil) }
         let content = try XCTUnwrap(host.content)
@@ -205,7 +207,7 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         preferences.mode = .light
         panel.applyAppearance(preferences)
-        panel.show(on: NSScreen.main)
+        panel.showForAutomatedTests()
         defer { panel.dismiss(notify: false) }
         panel.setMode(.main, initialQuery: "screen")
         panel.apply([])

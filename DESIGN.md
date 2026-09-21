@@ -16,11 +16,13 @@ Broccoli intentionally uses both AppKit and SwiftUI. AppKit is the right owner f
 
 The launcher is the heart of the app. It is keyboard-first and intentionally compact. Opening it should feel immediate. Results should not make the window twitch, jump, or leave awkward empty space.
 
-Keep its measurements in `LauncherThemeController.swift` instead of fixing spacing locally in several views. The real launcher and the preview in Settings should use the same measurements and rendering decisions. If one changes, check the other. Appearance shows production mini-previews of each launcher design.
+Keep its measurements in `LauncherThemeController.swift` instead of fixing spacing locally in several views. The real launcher and the preview in Settings should use the same measurements and rendering decisions. If one changes, check the other. Appearance shows production mini-previews of each launcher design. Selection chrome stays on the chosen thumbnail; it does not wrap the Launcher Design row.
 
-The search field should stay optically aligned when the user starts typing. Result growth should happen in complete rows. Selection, focus, and inactive states should remain easy to read in Light and Dark appearances. Position the live launcher by clicking and holding its chrome, then dragging; release to place it anywhere on the display. Opening from the keyboard restores the stored origin. Height changes keep that top edge and grow downward.
+The search field should stay optically aligned when the user starts typing. Result growth should happen in complete rows. Selection, focus, and inactive states should remain easy to read in Light and Dark appearances. Position the live launcher by dragging its chrome. AppKit hands that gesture to Window Server so the panel stays with the pointer; Broccoli stores the origin when the drag ends. Do not move the panel with a mouse-tracking setFrame loop. Opening from the keyboard restores the stored origin. Height changes keep that top edge and grow downward.
 
 Appearance's Visible Results setting sizes the launcher viewport in complete rows (3 through 10). Search can retain additional matches up to an internal cap; those extra rows stay available by scrolling inside that viewport. The window still grows downward in complete rows with a fixed top edge. It does not grow to fit every match.
+
+System Settings results use native pane artwork from installed Settings extensions. Visible rows resolve first and replace their icons as each source finishes; until then they show an SF Symbol template with no custom tile or border. Catalog load must not hold those visible icons behind a full-catalog batch.
 
 Typing should focus search. Arrow keys should move through the full result list and keep the selected row visible. Return should do the obvious thing. Escape should back out or close the launcher predictably. Do not add permanent buttons or labels for actions that are already clear from the keyboard or selected result.
 

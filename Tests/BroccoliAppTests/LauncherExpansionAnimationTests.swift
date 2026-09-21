@@ -28,7 +28,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let top = window.frame.maxY
@@ -68,7 +68,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let top = window.frame.maxY
@@ -95,7 +95,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
             resolvedAppearance: .light, reducesMotion: true, backingScale: 2)
         let controller = LauncherPanelController(environmentProvider: { environment })
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let top = window.frame.maxY
@@ -117,7 +117,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         _ = NSApplication.shared
         let controller = makeController(duration: 0)
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let top = window.frame.maxY
@@ -138,7 +138,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         let window = controller.visibilityIsolationWindow
 
         controller.setMode(.main, initialQuery: "fixture")
@@ -154,7 +154,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         XCTAssertFalse(controller.isExpansionAnimationInFlight)
         XCTAssertFalse(window.isVisible)
 
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         XCTAssertFalse(controller.isExpansionAnimationInFlight)
         XCTAssertEqual(window.frame.height, LauncherLiquidGlassMetrics.searchHeight, accuracy: 0.5)
         controller.dismiss(notify: false)
@@ -164,7 +164,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))
@@ -194,7 +194,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
         controller.applyAppearance(.defaults(design: .liquidGlass))
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))

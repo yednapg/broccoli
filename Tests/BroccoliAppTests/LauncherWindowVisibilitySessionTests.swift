@@ -8,6 +8,10 @@ final class LauncherWindowVisibilitySessionTests: XCTestCase {
         var orderFrontCount = 0
         var orderBackCount = 0
 
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+            frameRect
+        }
+
         override func orderFront(_ sender: Any?) {
             orderFrontCount += 1
             super.orderFront(sender)
@@ -25,18 +29,20 @@ final class LauncherWindowVisibilitySessionTests: XCTestCase {
     }
 
     func testExternalDispatchRestoresSettingsBehindForegroundApplication() {
-        let launcher = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 100, height: 40),
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: true
+        let launcher = BroccoliAppTestWindows.panel(
+            size: NSSize(width: 100, height: 40),
+            deferred: true
         )
         let settings = OrderingWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 240, height: 180),
+            contentRect: NSRect(
+                origin: BroccoliAppTestWindows.offscreenOrigin,
+                size: NSSize(width: 240, height: 180)
+            ),
             styleMask: .titled,
             backing: .buffered,
             defer: true
         )
+        BroccoliAppTestWindows.placeOffscreen(settings)
         defer {
             launcher.orderOut(nil)
             settings.orderOut(nil)

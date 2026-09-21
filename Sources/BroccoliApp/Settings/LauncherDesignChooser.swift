@@ -7,13 +7,24 @@ enum LauncherDesignChooserLayout {
     static let thumbnailWidth: CGFloat = 128
     static let thumbnailPadding: CGFloat = 6
     static let thumbnailSpacing: CGFloat = 8
-    static let wellCornerRadius: CGFloat = 7
+    static let titleSpacing: CGFloat = 6
+    static let wellCornerRadius: CGFloat = 10
     static let selectedLineWidth: CGFloat = 2
     static let unselectedLineWidth: CGFloat = 1
+    static let unselectedStrokeNSColor: NSColor = .separatorColor
+    /// Hide the group focus ring so keyboard focus cannot paint both thumbnails at once.
+    static let disablesGroupFocusEffect = true
+
+    static var unselectedStroke: Color { Color(nsColor: unselectedStrokeNSColor) }
+    static var selectedStroke: Color { Color.accentColor }
 
     static var pickerWidth: CGFloat {
         let count = CGFloat(designs.count)
         return count * thumbnailWidth + max(0, count - 1) * thumbnailSpacing
+    }
+
+    static var selectionWellSize: CGSize {
+        CGSize(width: thumbnailWidth, height: thumbnailHeight)
     }
 
     /// Shared well height, fitted to the production Liquid Glass screenshot aspect.
@@ -46,6 +57,54 @@ enum LauncherDesignChooserLayout {
         guard designs.indices.contains(next) else { return nil }
         return designs[next]
     }
+
+    /// Local well for a design, in chooser coordinates with origin at the top-leading card.
+    static func selectionWellFrame(for design: LauncherDesign) -> CGRect {
+        guard let index = designs.firstIndex(of: design) else { return .zero }
+        let x = CGFloat(index) * (thumbnailWidth + thumbnailSpacing)
+        return CGRect(origin: CGPoint(x: x, y: 0), size: selectionWellSize)
+    }
+
+    /// Clickable card, including the caption under the well. Wells stay exclusive.
+    static func cardFrame(for design: LauncherDesign) -> CGRect {
+        let well = selectionWellFrame(for: design)
+        return CGRect(
+            x: well.minX,
+            y: well.minY,
+            width: well.width,
+            height: well.height + titleSpacing + 16
+        )
+    }
+
+    static func design(at point: CGPoint) -> LauncherDesign? {
+        designs.first { cardFrame(for: $0).contains(point) }
+    }
+}
+
+/// Title plus independent design cards. Kept out of `SpotlightSettingsRow` so the row
+/// HStack cannot share focus or selection chrome with the thumbnails.
+struct LauncherDesignChooserRow: View {
+    @Binding var selection: LauncherDesign
+    let appearance: LauncherAppearancePreferences
+    @ObservedObject var renderer: LauncherPreviewRenderer
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 18) {
+            Text(LauncherDesignChooserLayout.accessibilityLabel)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityHidden(true)
+
+            LauncherDesignChooser(
+                selection: $selection,
+                appearance: appearance,
+                renderer: renderer
+            )
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
 }
 
 struct LauncherDesignChooser: View {
@@ -61,6 +120,7 @@ struct LauncherDesignChooser: View {
         }
         .frame(width: LauncherDesignChooserLayout.pickerWidth, alignment: .trailing)
         .focusable()
+        .focusEffectDisabled(LauncherDesignChooserLayout.disablesGroupFocusEffect)
         .onMoveCommand(perform: moveSelection)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(LauncherDesignChooserLayout.accessibilityLabel)
@@ -80,41 +140,8 @@ struct LauncherDesignChooser: View {
         return Button {
             selection = design
         } label: {
-            VStack(spacing: 6) {
-                LauncherDesignPreviewThumbnail(
-                    design: design,
-                    appearance: appearance,
-                    renderer: renderer
-                )
-                .frame(
-                    width: LauncherDesignChooserLayout.thumbnailWidth,
-                    height: LauncherDesignChooserLayout.thumbnailHeight
-                )
-                .background {
-                    RoundedRectangle(
-                        cornerRadius: LauncherDesignChooserLayout.wellCornerRadius,
-                        style: .continuous
-                    )
-                    .fill(.quaternary.opacity(0.4))
-                }
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: LauncherDesignChooserLayout.wellCornerRadius,
-                        style: .continuous
-                    )
-                )
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: LauncherDesignChooserLayout.wellCornerRadius,
-                        style: .continuous
-                    )
-                    .strokeBorder(
-                        isSelected ? Color.accentColor : Color.primary.opacity(0.16),
-                        lineWidth: isSelected
-                            ? LauncherDesignChooserLayout.selectedLineWidth
-                            : LauncherDesignChooserLayout.unselectedLineWidth
-                    )
-                }
+            VStack(spacing: LauncherDesignChooserLayout.titleSpacing) {
+                thumbnailWell(for: design, isSelected: isSelected)
 
                 Text(design.title)
                     .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
@@ -124,9 +151,39 @@ struct LauncherDesignChooser: View {
             .frame(width: LauncherDesignChooserLayout.thumbnailWidth)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(LauncherDesignCardButtonStyle())
         .focusable(false)
         .accessibilityHidden(true)
+    }
+
+    private func thumbnailWell(for design: LauncherDesign, isSelected: Bool) -> some View {
+        let well = RoundedRectangle(
+            cornerRadius: LauncherDesignChooserLayout.wellCornerRadius,
+            style: .continuous
+        )
+        return LauncherDesignPreviewThumbnail(
+            design: design,
+            appearance: appearance,
+            renderer: renderer
+        )
+        .frame(
+            width: LauncherDesignChooserLayout.thumbnailWidth,
+            height: LauncherDesignChooserLayout.thumbnailHeight
+        )
+        .background {
+            well.fill(.quaternary.opacity(0.4))
+        }
+        .clipShape(well)
+        .overlay {
+            well.strokeBorder(
+                isSelected
+                    ? LauncherDesignChooserLayout.selectedStroke
+                    : LauncherDesignChooserLayout.unselectedStroke,
+                lineWidth: isSelected
+                    ? LauncherDesignChooserLayout.selectedLineWidth
+                    : LauncherDesignChooserLayout.unselectedLineWidth
+            )
+        }
     }
 
     private func moveSelection(_ direction: MoveCommandDirection) {
@@ -146,6 +203,14 @@ struct LauncherDesignChooser: View {
         if let next = LauncherDesignChooserLayout.neighbor(of: selection, offset: offset) {
             selection = next
         }
+    }
+}
+
+/// Avoids the default macOS button fill, which can paint the whole settings row.
+private struct LauncherDesignCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.88 : 1)
     }
 }
 
