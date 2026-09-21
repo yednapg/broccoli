@@ -320,7 +320,13 @@ final class LauncherCoordinator {
     func setSystemSettings(_ entries: [SearchEntry]) {
         guard entries != systemSettings else { return }
         systemSettings = entries
-        panel.prepareIcons(for: entries, resolveNativeSettings: false)
+        // One icon exists per Settings pane, but the catalog also carries a searchable row
+        // for every term inside each pane. Warming the panes alone keeps launch from mapping
+        // hundreds of duplicate icon requests on the main thread.
+        panel.prepareIcons(
+            for: entries.filter { $0.id == $0.iconKey },
+            resolveNativeSettings: true
+        )
         scheduleSnapshotRebuild(prewarmIcons: false)
     }
 
