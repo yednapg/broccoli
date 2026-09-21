@@ -122,6 +122,13 @@ enum LauncherMotionMetrics {
     static let nativeResizeSettlement: TimeInterval = 0.3
 }
 
+/// Search retains more matches than the Appearance viewport can show at once.
+/// `visibleResultCount` (3...10) is how many complete rows fit on screen; this cap is
+/// the bounded result set those rows can scroll through.
+enum LauncherSearchLimits {
+    static let resultSetCap = 50
+}
+
 @MainActor
 struct LauncherThemeDescriptor {
     enum Surface: Equatable {
@@ -290,32 +297,28 @@ struct LauncherThemeDescriptor {
     }
 
     func panelHeight(resultCount: Int) -> CGFloat {
-        // Every theme grows by exactly the rows it displays so query changes do not leave an
-        // empty viewport or make the whole launcher appear to jump. Status messages occupy
-        // the same row as ordinary results; geometry depends on count, never result kind.
+        // The window grows in complete viewport rows so query changes do not leave an empty
+        // band or make the launcher jump. Extra matches stay in the document and scroll
+        // inside that fixed viewport. Status messages occupy the same row as ordinary
+        // results; geometry depends on count, never result kind.
         // NSTableView reserves its vertical intercell spacing after every row, including the
-        // last one. Keep the visual bottom inset outside the scroll viewport so the viewport
-        // itself is always exactly the height of its document.
+        // last one. Keep the visual bottom inset outside the scroll viewport so a short list
+        // still sizes the viewport to its document, and a long list scrolls in complete rows.
         let insets = resultVerticalInsets(resultCount: resultCount)
         return searchHeight + insets.top
-            + resultsDocumentHeight(resultCount: resultCount) + insets.bottom
+            + resultsViewportHeight(resultCount: resultCount) + insets.bottom
     }
 
     func resultsDocumentHeight(resultCount: Int) -> CGFloat {
-        let displayedRows = displayedResultCount(for: resultCount)
-        return CGFloat(displayedRows) * (rowHeight + rowSpacing)
+        rowStackHeight(rowCount: max(0, resultCount))
     }
 
     func resultsViewportHeight(resultCount: Int) -> CGFloat {
-        let displayedRows = displayedResultCount(for: resultCount)
-        guard displayedRows > 0 else { return 0 }
-        return max(
-            0,
-            panelHeight(resultCount: resultCount)
-                - searchHeight
-                - resultTopInset
-                - resultBottomInset
-        )
+        rowStackHeight(rowCount: displayedResultCount(for: resultCount))
+    }
+
+    private func rowStackHeight(rowCount: Int) -> CGFloat {
+        CGFloat(max(0, rowCount)) * (rowHeight + rowSpacing)
     }
 }
 
