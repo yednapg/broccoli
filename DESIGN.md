@@ -18,7 +18,7 @@ The launcher is the heart of the app. It is keyboard-first and intentionally com
 
 Keep its measurements in `LauncherThemeController.swift` instead of fixing spacing locally in several views. The real launcher and the preview in Settings should use the same measurements and rendering decisions. If one changes, check the other.
 
-The search field should stay optically aligned when the user starts typing. Result growth should happen in complete rows. Selection, focus, and inactive states should remain easy to read in Light and Dark appearances.
+The search field should stay optically aligned when the user starts typing. Result growth should happen in complete rows. Selection, focus, and inactive states should remain easy to read in Light and Dark appearances. Position the live launcher by clicking and holding its chrome, then dragging; release to place it anywhere on the display. Opening from the keyboard restores the stored origin. Height changes keep that top edge and grow downward.
 
 Typing should focus search. Arrow keys should move through results. Return should do the obvious thing. Escape should back out or close the launcher predictably. Do not add permanent buttons or labels for actions that are already clear from the keyboard or selected result.
 
@@ -59,7 +59,7 @@ Prefer the native toggle, picker, slider, button, stepper, or text field unless 
 Each pane has a clear job:
 
 - General owns the launcher shortcut, launch-at-login behavior, and shortcut recovery.
-- Appearance owns launcher design, color mode, display, position, result presentation, and the launcher preview.
+- Appearance owns launcher design, color mode, display, position, result presentation, and the launcher preview. Position is set by dragging the live launcher, not a slider.
 - Search owns result sources and adaptive ranking.
 - Files owns explicit file search, its scope, and excluded locations.
 - Calculator owns offline calculator and formatting preferences.

@@ -1564,7 +1564,8 @@ final class LauncherAppearanceTests: XCTestCase {
             in: screen,
             preferredWidth: descriptor.width,
             height: descriptor.panelHeight(resultCount: 0),
-            verticalPosition: descriptor.verticalPosition
+            originX: descriptor.originX,
+            originY: descriptor.originY
         )
         let fixedTopEdge = frame.maxY
 
@@ -1594,7 +1595,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(visibleScreenFrame.height, LauncherLiquidGlassMetrics.searchHeight)
         XCTAssertEqual(visibleScreenFrame.midX, screen.visibleFrame.midX, accuracy: 0.5)
         XCTAssertEqual(visibleScreenFrame.maxY,
-                       screen.visibleFrame.maxY - max(36, screen.visibleFrame.height * preferences.verticalPosition),
+                       screen.visibleFrame.maxY - screen.visibleFrame.height * CGFloat(preferences.originY),
                        accuracy: 0.5)
     }
 
@@ -1631,15 +1632,36 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(preferences.appearance.design, .liquidGlass)
     }
 
-    func testAppearanceSanitizationMatchesSettingsVerticalPositionRange() {
+    func testAppearanceSanitizationClampsOriginToVisibleFrame() {
         var preferences = LauncherAppearancePreferences.defaults()
-        preferences.verticalPosition = -1
+        preferences.originX = -1
+        preferences.originY = -1
         preferences.sanitize()
-        XCTAssertEqual(preferences.verticalPosition, 0.05)
+        XCTAssertEqual(preferences.originX, 0)
+        XCTAssertEqual(preferences.originY, 0)
 
-        preferences.verticalPosition = 0.8
+        preferences.originX = 1.8
+        preferences.originY = 0.8
         preferences.sanitize()
-        XCTAssertEqual(preferences.verticalPosition, 0.5)
+        XCTAssertEqual(preferences.originX, 1)
+        XCTAssertEqual(preferences.originY, 0.8)
+
+        preferences.originX = .nan
+        preferences.originY = .infinity
+        preferences.sanitize()
+        XCTAssertEqual(preferences.originX, LauncherAppearancePreferences.defaultOriginX)
+        XCTAssertEqual(preferences.originY, LauncherAppearancePreferences.defaultOriginY)
+    }
+
+    func testAppearanceLayoutComparisonIgnoresOrigin() {
+        var moved = LauncherAppearancePreferences.defaults()
+        moved.originX = 0.1
+        moved.originY = 0.9
+        XCTAssertTrue(moved.hasSameLayout(as: .defaults()))
+
+        var restyled = moved
+        restyled.design = .minimal
+        XCTAssertFalse(moved.hasSameLayout(as: restyled))
     }
 
     func testAppDefaultsHideRecentSelectionsForAnEmptyQueryAndPersistOptIn() {
@@ -1692,9 +1714,151 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(preferences.appearance.mode, .dark)
         XCTAssertEqual(preferences.appearance.visibleResultCount, 10)
         XCTAssertEqual(preferences.appearance.screen, .pointer)
-        XCTAssertEqual(preferences.appearance.verticalPosition, 0.25)
+        XCTAssertEqual(preferences.appearance.originX, LauncherAppearancePreferences.defaultOriginX)
+        XCTAssertEqual(preferences.appearance.originY, 0.25)
         XCTAssertFalse(preferences.appearance.showsSubtitles)
         XCTAssertFalse(preferences.appearance.showsShortcuts)
+    }
+
+    func testAppearanceMigratesLegacyVerticalPositionToCenteredOrigin() throws {
+        let defaults = makeDefaults()
+        let storedValue: [String: Any] = [
+            "design": "liquidGlass",
+            "mode": "system",
+            "visibleResultCount": 7,
+            "screen": "active",
+            "verticalPosition": 0.32,
+            "showsSubtitles": true,
+            "showsShortcuts": true,
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: storedValue,
+            format: .binary,
+            options: 0
+        )
+        defaults.set(data, forKey: "appearance.configuration.v1")
+
+        let preferences = AppPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.appearance.originX, 0.5)
+        XCTAssertEqual(preferences.appearance.originY, 0.32)
+    }
+
+    func testAppearancePersistsNormalizedOriginWithoutWritingVerticalPosition() throws {
+        let defaults = makeDefaults()
+        let preferences = AppPreferences(defaults: defaults)
+        var changed = preferences.appearance
+        changed.originX = 0.2
+        changed.originY = 0.65
+        preferences.appearance = changed
+
+        let reloaded = AppPreferences(defaults: defaults)
+        XCTAssertEqual(reloaded.appearance.originX, 0.2)
+        XCTAssertEqual(reloaded.appearance.originY, 0.65)
+
+        let stored = try XCTUnwrap(defaults.data(forKey: "appearance.configuration.v1"))
+        let decoded = try PropertyListSerialization.propertyList(
+            from: stored,
+            options: [],
+            format: nil
+        ) as? [String: Any]
+        XCTAssertNil(decoded?["verticalPosition"])
+        XCTAssertEqual(decoded?["originX"] as? Double, 0.2)
+        XCTAssertEqual(decoded?["originY"] as? Double, 0.65)
+    }
+
+    func testPositionedFrameUsesNormalizedOriginAndClampsToVisibleFrame() {
+        let visible = NSRect(x: 100, y: 48, width: 1_440, height: 900)
+        let width: CGFloat = 640
+        let height: CGFloat = 58
+
+        let centered = LauncherPanelGeometry.positionedFrame(
+            in: visible,
+            preferredWidth: width,
+            height: height,
+            originX: 0.5,
+            originY: 0.18
+        )
+        XCTAssertEqual(centered.midX, visible.midX, accuracy: 0.001)
+        XCTAssertEqual(centered.maxY, visible.maxY - visible.height * 0.18, accuracy: 0.001)
+        XCTAssertEqual(centered.width, width)
+        XCTAssertEqual(centered.height, height)
+
+        let right = LauncherPanelGeometry.positionedFrame(
+            in: visible,
+            preferredWidth: width,
+            height: height,
+            originX: 1,
+            originY: 0
+        )
+        XCTAssertEqual(right.maxX, visible.maxX, accuracy: 0.001)
+        XCTAssertEqual(right.maxY, visible.maxY, accuracy: 0.001)
+
+        let overflowing = LauncherPanelGeometry.positionedFrame(
+            in: visible,
+            preferredWidth: width,
+            height: height,
+            originX: -0.4,
+            originY: 1.4
+        )
+        XCTAssertGreaterThanOrEqual(overflowing.minX, visible.minX)
+        XCTAssertLessThanOrEqual(overflowing.maxX, visible.maxX)
+        XCTAssertGreaterThanOrEqual(overflowing.minY, visible.minY)
+        XCTAssertLessThanOrEqual(overflowing.maxY, visible.maxY)
+
+        let clamped = LauncherPanelGeometry.clamped(
+            NSRect(x: visible.maxX + 80, y: visible.minY - 40, width: width, height: height),
+            to: visible
+        )
+        XCTAssertEqual(clamped.maxX, visible.maxX, accuracy: 0.001)
+        XCTAssertEqual(clamped.minY, visible.minY, accuracy: 0.001)
+
+        let placed = LauncherPanelGeometry.positionedFrame(
+            in: visible,
+            preferredWidth: width,
+            height: height,
+            originX: 0.2,
+            originY: 0.4
+        )
+        let origin = LauncherPanelGeometry.normalizedOrigin(for: placed, in: visible)
+        XCTAssertEqual(origin.x, 0.2, accuracy: 0.001)
+        XCTAssertEqual(origin.y, 0.4, accuracy: 0.001)
+    }
+
+    func testDraggableChromeExcludesSearchFieldAndResults() {
+        let searchField = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 24))
+        let results = NSScrollView(frame: NSRect(x: 0, y: 0, width: 100, height: 80))
+        let document = NSView(frame: results.bounds)
+        results.documentView = document
+        let chrome = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+
+        XCTAssertTrue(
+            LauncherPanelGeometry.isDraggableChrome(
+                hitView: chrome,
+                searchField: searchField,
+                resultsView: results
+            )
+        )
+        XCTAssertTrue(
+            LauncherPanelGeometry.isDraggableChrome(
+                hitView: nil,
+                searchField: searchField,
+                resultsView: results
+            )
+        )
+        XCTAssertFalse(
+            LauncherPanelGeometry.isDraggableChrome(
+                hitView: searchField,
+                searchField: searchField,
+                resultsView: results
+            )
+        )
+        XCTAssertFalse(
+            LauncherPanelGeometry.isDraggableChrome(
+                hitView: document,
+                searchField: searchField,
+                resultsView: results
+            )
+        )
     }
 
     func testCalculatorPreferenceMigrationPreservesOldEnablement() throws {
