@@ -129,6 +129,11 @@ final class IconCache {
                     context: context,
                     interactive: true
                 )
+                if let url = SystemSettingsIconRequestMapper.request(for: entry).flatMap({
+                    SystemSettingsExtensionIndex.publishedURL(for: $0.bundleIdentifier)
+                }), let immediate = Self.immediateWorkspaceIcon(at: url.path) {
+                    return immediate
+                }
             }
             return pendingNativeIcon
         }
@@ -148,7 +153,7 @@ final class IconCache {
             }
             loadApplicationIcon(path: entry.iconKey, context: context, interactive: true)
             return previousNativeKeys[entry.iconKey].flatMap { nativeCache.image(for: $0)?.image }
-                ?? pendingNativeIcon
+                ?? immediateApplicationArtwork(path: entry.iconKey)
         case .file:
             let isDirectory: Bool
             if case .file(_, let directory) = entry.target { isDirectory = directory }
@@ -323,12 +328,42 @@ final class IconCache {
         )
     }
 
+    /// `loadApplicationIcon` stores bitmaps under the resolved path. Catalog `iconKey`s
+    /// are often the unresolved `/Applications` location, so look up both.
     private static func persistedIcon(
         at url: URL,
         context: IconRenderContext
     ) -> MaterializedSystemSettingsIcon? {
-        guard let diskKey = NativeIconDiskCache.key(forFileAt: url, context: context) else { return nil }
-        return NativeIconDiskCache.shared.icon(for: diskKey, pointSize: context.pointSize)
+        var seen = Set<String>()
+        for candidate in [url, url.resolvingSymlinksInPath()] {
+            let path = candidate.standardizedFileURL.path
+            guard seen.insert(path).inserted,
+                  let diskKey = NativeIconDiskCache.key(forFileAt: candidate, context: context),
+                  let icon = NativeIconDiskCache.shared.icon(
+                    for: diskKey,
+                    pointSize: context.pointSize
+                  ) else { continue }
+            return icon
+        }
+        return nil
+    }
+
+    /// Apple's current file icon, not an SF Symbol or Broccoli tile. Used only while the
+    /// materialized bitmap is still in flight so a disk miss cannot leave a hole.
+    private static func immediateWorkspaceIcon(at path: String) -> NSImage? {
+        guard FileManager.default.fileExists(atPath: path),
+              let icon = NSWorkspace.shared.icon(forFile: path).copy() as? NSImage else {
+            return nil
+        }
+        icon.isTemplate = false
+        return icon
+    }
+
+    private func immediateApplicationArtwork(path: String) -> NSImage {
+        if let icon = Self.immediateWorkspaceIcon(at: path) { return icon }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        if resolved != path, let icon = Self.immediateWorkspaceIcon(at: resolved) { return icon }
+        return pendingNativeIcon
     }
 
     private func loadApplicationIcon(
