@@ -221,6 +221,37 @@ final class LauncherPreviewRendererTests: XCTestCase {
         }
     }
 
+    func testDesignChooserThumbnailsRenderEachProductionDesignAtTheCurrentColorMode() async throws {
+        _ = NSApplication.shared
+        let renderer = LauncherPreviewRenderer(iconProvider: quietIconProvider())
+        renderer.beginSettingsSession()
+        defer { renderer.endSettingsSession() }
+
+        var appearance = LauncherAppearancePreferences.defaults(design: .liquidGlass)
+        appearance.mode = .dark
+        appearance.visibleResultCount = 10
+
+        for design in LauncherDesignChooserLayout.designs {
+            var previewPreferences = appearance
+            previewPreferences.design = design
+            let renderedImage = await renderer.image(for: previewPreferences)
+            let image = try XCTUnwrap(renderedImage)
+            var canonical = LauncherAppearancePreferences.defaults(design: design)
+            canonical.mode = .dark
+            canonical.visibleResultCount = 3
+            let descriptor = LauncherThemeController().descriptor(for: canonical)
+            XCTAssertEqual(image.size.width, descriptor.width, accuracy: 0.001)
+            XCTAssertEqual(
+                image.size.height,
+                descriptor.panelHeight(resultCount: LauncherPreviewFixture.standard.results.count),
+                accuracy: 0.001
+            )
+            XCTAssertEqual(renderer.cacheKey(for: previewPreferences).appearance, .dark)
+            XCTAssertEqual(renderer.cacheKey(for: previewPreferences).design, design)
+        }
+        XCTAssertEqual(renderer.cachedImageCount, LauncherDesignChooserLayout.designs.count)
+    }
+
     func testLiquidLauncherUsesOneUnifiedNativeMaterialSurface() throws {
         _ = NSApplication.shared
         let surface = LauncherLiquidGlassSurfaceView(
