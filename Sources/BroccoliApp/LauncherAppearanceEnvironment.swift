@@ -89,6 +89,10 @@ extension LauncherAppearancePreferences {
         var rhs = other
         lhs.mode = .system
         rhs.mode = .system
+        lhs.originX = 0
+        lhs.originY = 0
+        rhs.originX = 0
+        rhs.originY = 0
         return lhs == rhs
     }
 }
