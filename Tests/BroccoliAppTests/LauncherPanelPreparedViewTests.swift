@@ -25,7 +25,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 1
             context.allowsImplicitAnimation = true
-            controller.show(on: NSScreen.main)
+            controller.showForAutomatedTests()
             XCTAssertTrue(context.allowsImplicitAnimation)
         }
         XCTAssertTrue(window.isKeyWindow)
@@ -64,7 +64,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
             preferences.mode = mode
             controller.applyAppearance(preferences)
             let theme = LauncherThemeController().descriptor(for: preferences)
-            controller.show(on: NSScreen.main)
+            controller.showForAutomatedTests()
             let window = controller.visibilityIsolationWindow
             let top = window.frame.maxY
             controller.setMode(.main, initialQuery: "fixture")
@@ -185,7 +185,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         var appearance = LauncherAppearancePreferences.defaults(design: .minimal)
         appearance.visibleResultCount = 3
         controller.applyAppearance(appearance, force: true)
-        controller.show(on: NSScreen.main)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let theme = LauncherThemeController().descriptor(for: appearance)
         let fixtures = (0..<12).map { index in
@@ -254,11 +254,9 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
 
     func testPlaceholderSwiftUISceneCannotBecomeVisible() {
         _ = NSApplication.shared
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 500, height: 500),
+            styleMask: [.titled]
         )
         window.contentView = SuppressedLauncherSceneView()
 
@@ -284,7 +282,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         var requestedPreviousApplicationRestore = false
         controller.onDidHide = { didHide = true }
         controller.onDismiss = { requestedPreviousApplicationRestore = true }
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
 
         controller.windowDidResignKey(Notification(
             name: NSWindow.didResignKeyNotification,
@@ -299,7 +297,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
     func testRestoringVisibleSearchFocusPreservesTheMouseSelectedCaretPosition() throws {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let editor = try XCTUnwrap(
             controller.visibilityIsolationWindow.firstResponder as? NSTextView
@@ -362,7 +360,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         XCTAssertTrue(controller.isContentViewAttached)
         XCTAssertTrue(controller.isSearchSurfaceWindowBacked)
 
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         XCTAssertTrue(controller.isContentViewAttached)
         XCTAssertTrue(controller.isSearchSurfaceWindowBacked)
 

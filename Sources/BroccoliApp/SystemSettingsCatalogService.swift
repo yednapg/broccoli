@@ -113,8 +113,11 @@ final class SystemSettingsCatalogService {
 
     func start() {
         guard discoveryTask == nil else { return }
+        Task {
+            await SystemSettingsExtensionIndex.shared.prefetchStandardIndex()
+        }
         discoveryTask = Task { [weak self] in
-            let entries = await Task.detached(priority: .utility) {
+            let entries = await Task.detached(priority: .userInitiated) {
                 SystemSettingsCatalogDiscovery.discover()
             }.value
             guard !Task.isCancelled, let self else { return }

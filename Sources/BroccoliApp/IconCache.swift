@@ -66,10 +66,10 @@ final class IconCache {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            let completion = notification.object as? SystemSettingsNativeIconStore.Completion
-            MainActor.assumeIsolated {
-                guard let self, let completion,
-                      completion.storeIdentifier == ObjectIdentifier(systemSettingsIconStore) else { return }
+            guard let completion = notification.object as? SystemSettingsNativeIconStore.Completion else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      completion.storeIdentifier == ObjectIdentifier(self.systemSettingsIconStore) else { return }
                 self.onIconLoaded?(completion.iconKey)
                 self.onNativeIconLoaded?(completion.iconKey, completion.context)
             }
@@ -88,9 +88,20 @@ final class IconCache {
         if entry.kind == .action { return staticIcons[entry.iconKey] ?? genericApplication }
         let context = context ?? defaultContext
         if entry.kind == .systemSetting {
-            return systemSettingsIconStore.cachedIcon(for: entry.iconKey, context: context)?.image
-                ?? systemSettingsIconStore.previousIcon(for: entry.iconKey)?.image
-                ?? staticIcons[entry.iconKey] ?? genericApplication
+            if let native = systemSettingsIconStore.cachedIcon(for: entry.iconKey, context: context)?.image
+                ?? systemSettingsIconStore.previousIcon(for: entry.iconKey)?.image {
+                return native
+            }
+            if resolvesNativeSettingsIcons {
+                systemSettingsIconStore.ensureResolution(
+                    requests: SystemSettingsIconRequestMapper.requests(for: [entry]),
+                    context: context
+                )
+            }
+            if staticIcons[entry.iconKey] == nil {
+                prebuildSettingFallbacks([entry])
+            }
+            return staticIcons[entry.iconKey] ?? genericApplication
         }
         let key = context.cacheKey(for: entry.iconKey)
         if entry.kind == .file, let cached = cache.object(forKey: key.thumbnailKey) { return cached }
@@ -118,12 +129,17 @@ final class IconCache {
         }
     }
 
-    func prewarm(_ entries: [SearchEntry], limit: Int = 16, context: IconRenderContext? = nil) {
+    func prewarm(
+        _ entries: [SearchEntry],
+        limit: Int = 16,
+        context: IconRenderContext? = nil,
+        resolveNativeSettings: Bool = true
+    ) {
         let context = context ?? defaultContext
         let settings = entries.filter { $0.kind == .systemSetting }
         if !settings.isEmpty {
             prebuildSettingFallbacks(settings)
-            if resolvesNativeSettingsIcons {
+            if resolvesNativeSettingsIcons, resolveNativeSettings {
                 systemSettingsIconStore.ensureResolution(
                     requests: SystemSettingsIconRequestMapper.requests(for: settings), context: context)
             }
@@ -177,82 +193,13 @@ final class IconCache {
 
     private func prebuildSettingFallbacks(_ entries: [SearchEntry]) {
         for entry in entries where staticIcons[entry.iconKey] == nil {
-            let icon = badgeIcon(
-                symbol: NativeIconCatalog.symbolName(for: entry),
-                semanticFallback: "gearshape",
-                nativeTemplateName: entry.title.localizedCaseInsensitiveContains("bluetooth")
-                    ? NSImage.bluetoothTemplateName
-                    : nil,
-                accent: settingAccent(entry.iconKey)
+            let icon = Self.actionTemplateIcon(
+                symbolCandidates: [NativeIconCatalog.symbolName(for: entry), "gearshape"],
+                accessibilityDescription: entry.title
             )
             staticIcons[entry.iconKey] = icon
             cache.setObject(icon, forKey: entry.iconKey as NSString, cost: 40 * 40 * 4)
         }
-    }
-
-    private func badgeIcon(
-        symbol name: String,
-        semanticFallback: String,
-        nativeTemplateName: NSImage.Name? = nil,
-        accent: NSColor
-    ) -> NSImage {
-        let nativeGlyph = nativeTemplateName
-            .flatMap { NSImage(named: $0) }
-            .flatMap { Self.tintedTemplateImage($0, color: .white) }
-        let symbolGlyph = nativeGlyph == nil
-            ? Self.resolvedSystemSymbol(
-                preferred: name,
-                semanticFallbacks: [semanticFallback, "questionmark"]
-            )
-            : nil
-        let image = NSImage(size: NSSize(width: 40, height: 40))
-        image.lockFocus()
-        defer { image.unlockFocus() }
-
-        let tileRect = NSRect(x: 1, y: 1, width: 38, height: 38)
-        let tile = NSBezierPath(roundedRect: tileRect, xRadius: 9, yRadius: 9)
-        accent.withAlphaComponent(0.92).setFill()
-        tile.fill()
-        NSColor.white.withAlphaComponent(0.28).setStroke()
-        tile.lineWidth = 0.5
-        tile.stroke()
-
-        if let glyph = nativeGlyph {
-            glyph.draw(
-                in: Self.aspectFitRect(
-                    imageSize: glyph.size,
-                    boundingRect: NSRect(x: 8, y: 7, width: 24, height: 26)
-                ),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1,
-                respectFlipped: true,
-                hints: [.interpolation: NSImageInterpolation.high]
-            )
-        } else if let symbol = symbolGlyph {
-            symbol.size = NSSize(width: 26, height: 26)
-            symbol.draw(
-                in: NSRect(x: 7, y: 7, width: 26, height: 26),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1,
-                respectFlipped: true,
-                hints: [.interpolation: NSImageInterpolation.high]
-            )
-        } else {
-            // SF Symbols are supplied by the OS and can vary by release. This last-resort
-            // text glyph means even an unexpectedly absent semantic fallback cannot leave
-            // behind an empty colored tile.
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 23, weight: .medium),
-                .foregroundColor: NSColor.white,
-            ]
-            let fallback = NSAttributedString(string: "?", attributes: attributes)
-            let size = fallback.size()
-            fallback.draw(at: NSPoint(x: 20 - size.width / 2, y: 20 - size.height / 2))
-        }
-        image.isTemplate = false
-        return image
     }
 
     /// Resolves symbols in semantic order so OS-version availability never produces a blank
@@ -326,18 +273,6 @@ final class IconCache {
         return max(representationCost, Int(image.size.width * image.size.height * 4))
     }
 
-    private static func tintedTemplateImage(_ source: NSImage, color: NSColor) -> NSImage? {
-        guard source.size.width > 0, source.size.height > 0 else { return nil }
-        let result = NSImage(size: source.size)
-        result.lockFocus()
-        source.draw(in: NSRect(origin: .zero, size: source.size))
-        color.setFill()
-        NSRect(origin: .zero, size: source.size).fill(using: .sourceIn)
-        result.unlockFocus()
-        result.isTemplate = false
-        return result
-    }
-
     private static func aspectFitRect(imageSize: NSSize, boundingRect: NSRect) -> NSRect {
         guard imageSize.width > 0, imageSize.height > 0 else { return boundingRect }
         let scale = min(
@@ -351,24 +286,6 @@ final class IconCache {
             width: fitted.width,
             height: fitted.height
         )
-    }
-
-    private func settingAccent(_ key: String) -> NSColor {
-        switch key.replacingOccurrences(of: "setting:", with: "") {
-        case "wifi", "bluetooth", "network", "displays", "desktop-dock": .systemBlue
-        case "notifications", "software-update": .systemRed
-        case "sound": .systemPink
-        case "focus", "siri-spotlight": .systemPurple
-        case "appearance", "wallpaper", "screen-saver", "control-center": .systemCyan
-        case "accessibility", "sharing", "internet-accounts": .systemBlue
-        case "battery", "time-machine": .systemGreen
-        case "date-time": .systemRed
-        case "passwords": .systemYellow
-        case "printers", "storage", "general", "lock-screen", "keyboard", "trackpad", "mouse", "privacy", "users": .systemGray
-        case "login-items": .systemPurple
-        case "keyboard-shortcuts": .systemBlue
-        default: .systemBlue
-        }
     }
 
     private func loadApplicationIcon(path: String, context: IconRenderContext, interactive: Bool) {

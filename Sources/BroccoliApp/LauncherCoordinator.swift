@@ -320,7 +320,7 @@ final class LauncherCoordinator {
     func setSystemSettings(_ entries: [SearchEntry]) {
         guard entries != systemSettings else { return }
         systemSettings = entries
-        panel.prepareIcons(for: entries)
+        panel.prepareIcons(for: entries, resolveNativeSettings: false)
         scheduleSnapshotRebuild(prewarmIcons: false)
     }
 

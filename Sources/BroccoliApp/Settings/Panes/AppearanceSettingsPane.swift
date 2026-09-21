@@ -18,14 +18,11 @@ struct AppearanceSettingsPane: View {
     private var appearance: some View {
         Group {
             SpotlightSettingsCard("Appearance") {
-                SpotlightSettingsRow(title: "Launcher Design") {
-                    LauncherDesignChooser(
-                        selection: appearanceBinding(\.design),
-                        appearance: preferences.appearance,
-                        renderer: previewRenderer
-                    )
-                    .frame(width: LauncherDesignChooserLayout.pickerWidth)
-                }
+                LauncherDesignChooserRow(
+                    selection: appearanceBinding(\.design),
+                    appearance: preferences.appearance,
+                    renderer: previewRenderer
+                )
                 SpotlightSettingsRow(title: "Color Mode") {
                     Picker("Color Mode", selection: appearanceBinding(\.mode)) {
                         ForEach(LauncherAppearanceMode.allCases) { Text($0.title).tag($0) }
@@ -34,7 +31,10 @@ struct AppearanceSettingsPane: View {
                     .pickerStyle(.segmented)
                     .frame(width: 230)
                 }
-                SpotlightSettingsRow(title: "Visible Results") {
+                SpotlightSettingsRow(
+                    title: "Visible Results",
+                    subtitle: "Rows shown before the list scrolls"
+                ) {
                     Stepper(
                         value: appearanceBinding(\.visibleResultCount),
                         in: 3...10

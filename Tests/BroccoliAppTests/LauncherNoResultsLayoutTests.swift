@@ -37,7 +37,7 @@ final class LauncherNoResultsLayoutTests: XCTestCase {
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         preferences.mode = mode
         panel.applyAppearance(preferences)
-        panel.show(on: NSScreen.main)
+        panel.showForAutomatedTests()
         defer { panel.dismiss(notify: false) }
         panel.setMode(.main, initialQuery: "unmatched")
         let noResults = LauncherMainSearchResultComposer.compose(

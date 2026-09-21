@@ -210,7 +210,7 @@ final class LauncherInlineSuggestionTests: XCTestCase {
     func testApplyingResultsDoesNotTakeFocusFromNativeFieldEditor() throws {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
-        controller.show(on: NSScreen.main ?? NSScreen.screens.first)
+        controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
         let window = controller.visibilityIsolationWindow
         let responder = try XCTUnwrap(window.firstResponder as? NSTextView)

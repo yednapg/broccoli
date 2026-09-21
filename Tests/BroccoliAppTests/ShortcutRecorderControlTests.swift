@@ -25,11 +25,9 @@ final class ShortcutRecorderControlTests: XCTestCase {
 
     func testBeginRecordingFocusesControlAndResigningCancels() {
         let recorder = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 132, height: 30))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 320, height: 160),
+            styleMask: [.titled]
         )
         window.contentView?.addSubview(recorder)
 
@@ -45,11 +43,9 @@ final class ShortcutRecorderControlTests: XCTestCase {
 
     func testEscapeCancelsRecordingWithoutChangingShortcut() throws {
         let recorder = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 132, height: 30))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 320, height: 160),
+            styleMask: [.titled]
         )
         window.contentView?.addSubview(recorder)
         XCTAssertTrue(recorder.beginRecording())
@@ -76,11 +72,9 @@ final class ShortcutRecorderControlTests: XCTestCase {
         let recorder = ShortcutRecorderControl(
             frame: NSRect(x: 0, y: 0, width: 132, height: 30)
         )
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 320, height: 160),
+            styleMask: [.titled]
         )
         window.contentView?.addSubview(recorder)
         recorder.onChange = { _ in true }
@@ -113,11 +107,9 @@ final class ShortcutRecorderControlTests: XCTestCase {
 
     func testClickingTheControlBeginsRecording() throws {
         let recorder = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 132, height: 30))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 320, height: 160),
+            styleMask: [.titled]
         )
         window.contentView?.addSubview(recorder)
 
