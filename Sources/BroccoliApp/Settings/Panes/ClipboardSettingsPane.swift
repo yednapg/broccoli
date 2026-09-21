@@ -47,9 +47,7 @@ struct ClipboardSettingsPane: View {
             if !preferences.clipboard.enabled {
                 SettingsInfoBanner(
                     symbol: "lock.fill",
-                    message: "Clipboard History is off. Nothing is captured until you enable it.",
-                    actionTitle: "Enable…",
-                    action: { clipboardConsent = true }
+                    message: "Clipboard History is off. Nothing is captured until you enable it."
                 )
             }
 

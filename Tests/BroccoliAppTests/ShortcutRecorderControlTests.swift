@@ -110,4 +110,32 @@ final class ShortcutRecorderControlTests: XCTestCase {
         XCTAssertEqual(recorder.configuration.displayName, "⌘ + ←")
         XCTAssertFalse(recorder.isRecording)
     }
+
+    func testClickingTheControlBeginsRecording() throws {
+        let recorder = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 132, height: 30))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(recorder)
+
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 16, y: 16),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        recorder.mouseDown(with: click)
+
+        XCTAssertTrue(window.firstResponder === recorder)
+        XCTAssertTrue(recorder.isRecording)
+        XCTAssertEqual(recorder.accessibilityValue() as? String, "Recording")
+    }
 }

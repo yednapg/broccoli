@@ -10,7 +10,6 @@ struct GeneralSettingsPane: View {
     let onNavigate: (SettingsDestination) -> Void
 
     @State private var shortcutStatus = ""
-    @State private var shortcutRecordingRequest = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginMessage = ""
     @State private var launchAtLoginMessageStyle: LaunchAtLoginMessageStyle = .none
@@ -28,7 +27,7 @@ struct GeneralSettingsPane: View {
         }
         .onAppear {
             if shortcutStatus.isEmpty {
-                shortcutStatus = initialShortcutError ?? "Shortcut registered"
+                shortcutStatus = initialShortcutError ?? GeneralShortcutPresentation.registeredStatus
             }
             refreshLaunchAtLoginStatus()
         }
@@ -43,43 +42,30 @@ struct GeneralSettingsPane: View {
     }
 
     private var generalShortcutCard: some View {
-        SpotlightSettingsCard {
-            SpotlightSettingsRow(
-                symbol: "command",
-                title: "Global Shortcut",
-                subtitle: shortcutStatus == "Shortcut registered"
-                    ? "Open Broccoli from anywhere"
-                    : "Choose an available shortcut to open Broccoli"
-            ) {
-                ShortcutRecorderRepresentable(
-                    configuration: preferences.hotKey,
-                    recordingRequest: shortcutRecordingRequest,
-                    onChange: applyShortcutChange
+        Group {
+            SpotlightSettingsCard {
+                SpotlightSettingsRow(
+                    symbol: "command",
+                    title: "Global Shortcut",
+                    subtitle: GeneralShortcutPresentation.rowSubtitle(status: shortcutStatus)
+                ) {
+                    ShortcutRecorderRepresentable(
+                        configuration: preferences.hotKey,
+                        onChange: applyShortcutChange
+                    )
+                    .frame(width: 132, height: 30)
+                    .accessibilityLabel("Global Shortcut")
+                    .accessibilityValue(preferences.hotKey.displayName)
+                }
+            }
+            if GeneralShortcutPresentation.showsTroubleshooting(status: shortcutStatus) {
+                SettingsInfoBanner(
+                    symbol: "exclamationmark.triangle.fill",
+                    message: GeneralShortcutPresentation.troubleshootingMessage,
+                    color: .red,
+                    actionTitle: GeneralShortcutPresentation.troubleshootingActionTitle,
+                    action: { onNavigate(.shortcutTroubleshooting) }
                 )
-                .frame(width: 132, height: 30)
-                .accessibilityLabel("Global Shortcut")
-                .accessibilityValue(preferences.hotKey.displayName)
-            }
-            SpotlightSettingsRow(
-                symbol: shortcutStatus == "Shortcut registered"
-                    ? "checkmark.circle.fill"
-                    : "exclamationmark.triangle.fill",
-                symbolColor: shortcutStatus == "Shortcut registered" ? .green : .red,
-                title: shortcutStatus == "Shortcut registered"
-                    ? "Shortcut registered"
-                    : "Shortcut unavailable",
-                subtitle: shortcutStatus == "Shortcut registered"
-                    ? "Ready to open from any application"
-                    : (shortcutStatus.isEmpty ? "Checking the current shortcut" : shortcutStatus)
-            ) {
-                Button("Change…") { shortcutRecordingRequest &+= 1 }
-            }
-            SettingsNavigationRow(
-                symbol: "questionmark.circle",
-                title: "Having shortcut trouble?",
-                subtitle: "Resolve Spotlight conflicts or recover an invalid shortcut"
-            ) {
-                onNavigate(.shortcutTroubleshooting)
             }
         }
     }
@@ -140,7 +126,7 @@ struct GeneralSettingsPane: View {
             return false
         }
         preferences.hotKey = value
-        shortcutStatus = "Shortcut registered"
+        shortcutStatus = GeneralShortcutPresentation.registeredStatus
         return true
     }
 
@@ -165,7 +151,7 @@ struct GeneralSettingsPane: View {
                         if let error = onShortcutChanged(preferences.hotKey) {
                             shortcutStatus = error
                         } else {
-                            shortcutStatus = "Shortcut registered"
+                            shortcutStatus = GeneralShortcutPresentation.registeredStatus
                         }
                     }
                 }
@@ -248,4 +234,21 @@ struct GeneralSettingsPane: View {
     }
 
 
+}
+
+enum GeneralShortcutPresentation {
+    static let registeredStatus = "Shortcut registered"
+    static let troubleshootingMessage = "Resolve a Spotlight conflict or recover this shortcut."
+    static let troubleshootingActionTitle = "Troubleshoot…"
+
+    static func rowSubtitle(status: String) -> String {
+        if status.isEmpty {
+            return "Checking the current shortcut"
+        }
+        return status
+    }
+
+    static func showsTroubleshooting(status: String) -> Bool {
+        !status.isEmpty && status != registeredStatus
+    }
 }

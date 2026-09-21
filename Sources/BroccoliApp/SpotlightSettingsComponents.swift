@@ -183,14 +183,14 @@ struct SpotlightSettingsIconBadge: View {
 }
 
 private struct SpotlightSettingsGroupedSurfaceModifier: ViewModifier {
+    private static let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
     func body(content: Content) -> some View {
         content
-            .background(
-                .regularMaterial,
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
+            .background(.regularMaterial, in: Self.shape)
+            .clipShape(Self.shape)
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                Self.shape
                     .strokeBorder(
                         Color(nsColor: .separatorColor).opacity(0.32),
                         lineWidth: 0.6

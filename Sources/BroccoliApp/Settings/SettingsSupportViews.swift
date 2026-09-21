@@ -366,9 +366,28 @@ enum SettingsActionIconSource {
     }
 }
 
+enum ActionSettingsCopy {
+    static let powerWarning = "These commands require a second return within five seconds."
+    static let disruptiveDetail = "Requires a second return within five seconds"
+
+    static func detail(for definition: ActionDefinition) -> String {
+        if definition.risk == .disruptive { return disruptiveDetail }
+        switch definition.id {
+        case "appearance.toggleDark": return "Switch between light and dark appearance"
+        case "audio.toggleMute": return "Mute or restore the current output volume"
+        case "audio.volumeUp": return "Increase output volume by 10%; repeat with return"
+        case "audio.volumeDown": return "Decrease output volume by 10%; repeat with return"
+        case "screensaver.start": return "Start the current macOS screen saver"
+        case "catalog.refresh": return "Refresh the in-memory application index"
+        default: return definition.keepsPanelOpen
+            ? "Keeps the launcher open so the action can repeat"
+            : "Available from launcher search"
+        }
+    }
+}
+
 struct ActionGroupCard: View {
     let title: String
-    var subtitle: String? = nil
     let definitions: [ActionDefinition]
     @ObservedObject var preferences: AppPreferences
 
@@ -378,7 +397,7 @@ struct ActionGroupCard: View {
                 SpotlightSettingsRow(
                     symbol: SettingsActionIconSource.symbolName(for: definition),
                     title: definition.title,
-                    subtitle: detail(for: definition)
+                    subtitle: ActionSettingsCopy.detail(for: definition)
                 ) {
                     Toggle("", isOn: Binding(
                         get: { preferences.enabledActionIDs.contains(definition.id) },
@@ -395,29 +414,8 @@ struct ActionGroupCard: View {
                     )
                 }
             }
-            if let subtitle {
-                Label(subtitle, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 10)).foregroundStyle(.orange)
-                    .frame(minHeight: 34)
-            }
         }
     }
-
-    private func detail(for definition: ActionDefinition) -> String {
-        if definition.risk == .disruptive { return "Requires a second Return within five seconds" }
-        switch definition.id {
-        case "appearance.toggleDark": return "Switch between light and dark appearance"
-        case "audio.toggleMute": return "Mute or restore the current output volume"
-        case "audio.volumeUp": return "Increase output volume by 10%; repeat with Return"
-        case "audio.volumeDown": return "Decrease output volume by 10%; repeat with Return"
-        case "screensaver.start": return "Start the current macOS screen saver"
-        case "catalog.refresh": return "Refresh the in-memory application index"
-        default: return definition.keepsPanelOpen
-            ? "Keeps the launcher open so the action can repeat"
-            : "Available from launcher search"
-        }
-    }
-
 }
 
 enum LauncherDesignChooserLayout {

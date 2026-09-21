@@ -16,7 +16,6 @@ struct AboutSettingsPane: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Broccoli").font(.system(size: 24, weight: .semibold))
                     Text("Version \(appVersion) (\(appBuild))").font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text("A fast, private launcher for macOS.").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 20)
@@ -35,12 +34,10 @@ struct AboutSettingsPane: View {
                 }
                 .buttonStyle(.plain)
             }
-            VStack(spacing: 3) {
-                Text("© 2026 Gaurav Pandey. MIT License.")
-                Text("No telemetry. No analytics. Your searches stay on this Mac.")
-            }
-            .font(.system(size: 10)).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
+            Text("© 2026 Gaurav Pandey. MIT License.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
         }
     }
 
