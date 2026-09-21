@@ -285,6 +285,15 @@ final class LauncherCoordinator {
             self?.onOpenPreferences?(.general)
         }
         panel.onSelectionChanged = { [weak self] in self?.cancelConfirmation() }
+        panel.onOriginCommitted = { [weak self] originX, originY in
+            guard let self else { return }
+            var appearance = self.preferences.appearance
+            appearance.originX = originX
+            appearance.originY = originY
+            appearance.sanitize()
+            self.appliedAppearance = appearance
+            self.preferences.appearance = appearance
+        }
         panel.applyAppearance(preferences.appearance)
         snapshotIsDarkMode = systemIsDarkMode
         snapshot = SearchSnapshot(entries:

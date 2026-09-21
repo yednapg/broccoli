@@ -14,7 +14,7 @@ struct SettingsSearchItem: Identifiable {
         .init(id: "design", title: "Launcher Design", subtitle: "Appearance", destination: .section(.appearance), terms: "minimal liquid glass theme"),
         .init(id: "launcher-preview", title: "Launcher Preview", subtitle: "Appearance", destination: .launcherPreview, terms: "real screenshot fixture preview"),
         .init(id: "color", title: "Color Mode", subtitle: "Appearance", destination: .section(.appearance), terms: "system light dark"),
-        .init(id: "display", title: "Display and Position", subtitle: "Appearance", destination: .section(.appearance), terms: "screen vertical results subtitles shortcuts"),
+        .init(id: "display", title: "Display and Position", subtitle: "Appearance", destination: .section(.appearance), terms: "screen position drag move results subtitles shortcuts"),
         .init(id: "sources", title: "Result Sources", subtitle: "Search", destination: .section(.search), terms: "applications system settings actions"),
         .init(id: "ranking", title: "Adaptive Ranking", subtitle: "Search", destination: .section(.search), terms: "recent selections learned usage clear"),
         .init(id: "file-search", title: "File Search", subtitle: "Files", destination: .section(.files), terms: "find spotlight metadata filename folder"),

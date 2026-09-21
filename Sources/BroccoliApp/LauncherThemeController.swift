@@ -153,7 +153,8 @@ struct LauncherThemeDescriptor {
     let hasShadow: Bool
     let showsSubtitles: Bool
     let showsShortcuts: Bool
-    let verticalPosition: CGFloat
+    let originX: CGFloat
+    let originY: CGFloat
     let visibleResultCount: Int
 
     var iconContext: IconRenderContext {
@@ -374,7 +375,8 @@ final class LauncherThemeController {
                 hasShadow: false,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,
-                verticalPosition: CGFloat(preferences.verticalPosition),
+                originX: CGFloat(preferences.originX),
+                originY: CGFloat(preferences.originY),
                 visibleResultCount: preferences.visibleResultCount
             )
         case .liquidGlass:
@@ -406,7 +408,8 @@ final class LauncherThemeController {
                 hasShadow: true,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,
-                verticalPosition: CGFloat(preferences.verticalPosition),
+                originX: CGFloat(preferences.originX),
+                originY: CGFloat(preferences.originY),
                 visibleResultCount: preferences.visibleResultCount
             )
         }

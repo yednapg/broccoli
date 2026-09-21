@@ -53,9 +53,15 @@ struct LauncherAppearancePreferences: Codable, Equatable, Sendable {
     var mode: LauncherAppearanceMode
     var visibleResultCount: Int
     var screen: LauncherScreenPreference
-    var verticalPosition: Double
+    /// Remaining-width fraction of the panel's leading edge in the visible frame. `0.5` is centered.
+    var originX: Double
+    /// Top-edge inset as a fraction of the visible frame height. Migrated from the retired `verticalPosition`.
+    var originY: Double
     var showsSubtitles: Bool
     var showsShortcuts: Bool
+
+    static let defaultOriginX: Double = 0.5
+    static let defaultOriginY: Double = 0.18
 
     static func defaults(design: LauncherDesign = .liquidGlass) -> Self {
         Self(
@@ -63,7 +69,8 @@ struct LauncherAppearancePreferences: Codable, Equatable, Sendable {
             mode: .system,
             visibleResultCount: 7,
             screen: .active,
-            verticalPosition: 0.18,
+            originX: defaultOriginX,
+            originY: defaultOriginY,
             showsSubtitles: true,
             showsShortcuts: true
         )
@@ -71,7 +78,67 @@ struct LauncherAppearancePreferences: Codable, Equatable, Sendable {
 
     mutating func sanitize() {
         visibleResultCount = min(10, max(3, visibleResultCount))
-        verticalPosition = min(0.5, max(0.05, verticalPosition))
+        originX = Self.sanitizedOrigin(originX, fallback: Self.defaultOriginX)
+        originY = Self.sanitizedOrigin(originY, fallback: Self.defaultOriginY)
+    }
+
+    private static func sanitizedOrigin(_ value: Double, fallback: Double) -> Double {
+        guard value.isFinite else { return fallback }
+        return min(1, max(0, value))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case design, mode, visibleResultCount, screen
+        case originX, originY, verticalPosition
+        case showsSubtitles, showsShortcuts
+    }
+
+    init(
+        design: LauncherDesign,
+        mode: LauncherAppearanceMode,
+        visibleResultCount: Int,
+        screen: LauncherScreenPreference,
+        originX: Double,
+        originY: Double,
+        showsSubtitles: Bool,
+        showsShortcuts: Bool
+    ) {
+        self.design = design
+        self.mode = mode
+        self.visibleResultCount = visibleResultCount
+        self.screen = screen
+        self.originX = originX
+        self.originY = originY
+        self.showsSubtitles = showsSubtitles
+        self.showsShortcuts = showsShortcuts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        design = try container.decodeIfPresent(LauncherDesign.self, forKey: .design) ?? .liquidGlass
+        mode = try container.decodeIfPresent(LauncherAppearanceMode.self, forKey: .mode) ?? .system
+        visibleResultCount = try container.decodeIfPresent(Int.self, forKey: .visibleResultCount) ?? 7
+        screen = try container.decodeIfPresent(LauncherScreenPreference.self, forKey: .screen) ?? .active
+        showsSubtitles = try container.decodeIfPresent(Bool.self, forKey: .showsSubtitles) ?? true
+        showsShortcuts = try container.decodeIfPresent(Bool.self, forKey: .showsShortcuts) ?? true
+        let decodedX = try container.decodeIfPresent(Double.self, forKey: .originX)
+        let decodedY = try container.decodeIfPresent(Double.self, forKey: .originY)
+        let legacyY = try container.decodeIfPresent(Double.self, forKey: .verticalPosition)
+        originX = decodedX ?? Self.defaultOriginX
+        originY = decodedY ?? legacyY ?? Self.defaultOriginY
+        sanitize()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(design, forKey: .design)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(visibleResultCount, forKey: .visibleResultCount)
+        try container.encode(screen, forKey: .screen)
+        try container.encode(originX, forKey: .originX)
+        try container.encode(originY, forKey: .originY)
+        try container.encode(showsSubtitles, forKey: .showsSubtitles)
+        try container.encode(showsShortcuts, forKey: .showsShortcuts)
     }
 }
 
