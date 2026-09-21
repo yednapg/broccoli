@@ -50,12 +50,6 @@ struct AppearanceSettingsPane: View {
                     .labelsHidden()
                     .frame(width: 190)
                 }
-                SpotlightSettingsRow(title: "Vertical Position") {
-                    Slider(value: appearanceBinding(\.verticalPosition), in: 0.05...0.5)
-                        .frame(width: 210)
-                        .accessibilityLabel("Launcher Vertical Position")
-                        .accessibilityValue("\(Int(preferences.appearance.verticalPosition * 100)) percent from the top")
-                }
             }
             SpotlightSettingsCard("Result Details") {
                 SpotlightSettingsRow(

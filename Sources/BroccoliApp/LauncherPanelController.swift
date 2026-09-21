@@ -84,6 +84,9 @@ enum LauncherSelection {
 /// only the bottom edge; the top edge is invariant until the user reopens or repositions the
 /// launcher.
 enum LauncherPanelGeometry {
+    /// Pointer travel required before chrome click-and-hold becomes a move.
+    static let dragThreshold: CGFloat = 4
+
     static func resizing(_ frame: NSRect, toHeight height: CGFloat) -> NSRect {
         let height = max(0, height)
         return NSRect(
@@ -98,19 +101,78 @@ enum LauncherPanelGeometry {
         in visibleFrame: NSRect,
         preferredWidth: CGFloat,
         height: CGFloat,
-        verticalPosition: CGFloat
+        originX: CGFloat,
+        originY: CGFloat
     ) -> NSRect {
         let width = min(preferredWidth, max(0, visibleFrame.width - 80))
         let height = max(0, height)
-        let topInset = max(36, visibleFrame.height * verticalPosition)
-        return NSRect(
-            x: visibleFrame.midX - width / 2,
+        let availableWidth = max(0, visibleFrame.width - width)
+        let x = visibleFrame.minX + originX * availableWidth
+        let topInset = originY * visibleFrame.height
+        let frame = NSRect(
+            x: x,
             y: visibleFrame.maxY - height - topInset,
             width: width,
             height: height
         )
+        return clamped(frame, to: visibleFrame)
     }
 
+    /// Keeps the panel inside `visibleFrame` without changing its size. A panel taller than
+    /// the visible frame stays top-aligned so the search field remains reachable.
+    static func clamped(_ frame: NSRect, to visibleFrame: NSRect) -> NSRect {
+        var frame = frame
+        if frame.maxX > visibleFrame.maxX {
+            frame.origin.x = visibleFrame.maxX - frame.width
+        }
+        if frame.minX < visibleFrame.minX {
+            frame.origin.x = visibleFrame.minX
+        }
+        if frame.maxY > visibleFrame.maxY {
+            frame.origin.y = visibleFrame.maxY - frame.height
+        }
+        if frame.minY < visibleFrame.minY, frame.height <= visibleFrame.height {
+            frame.origin.y = visibleFrame.minY
+        }
+        return frame
+    }
+
+    /// Remaining-width `x` (0 = leading, 0.5 = centered) and top-inset fraction `y`.
+    static func normalizedOrigin(for frame: NSRect, in visibleFrame: NSRect) -> (x: CGFloat, y: CGFloat) {
+        let availableWidth = visibleFrame.width - frame.width
+        let x: CGFloat
+        if availableWidth > 0 {
+            x = (frame.minX - visibleFrame.minX) / availableWidth
+        } else {
+            x = CGFloat(LauncherAppearancePreferences.defaultOriginX)
+        }
+        let y = visibleFrame.height > 0
+            ? (visibleFrame.maxY - frame.maxY) / visibleFrame.height
+            : CGFloat(LauncherAppearancePreferences.defaultOriginY)
+        return (min(1, max(0, x)), min(1, max(0, y)))
+    }
+
+    static func committedPlacement(
+        frame: NSRect,
+        visibleFrame: NSRect
+    ) -> (frame: NSRect, originX: CGFloat, originY: CGFloat) {
+        let frame = clamped(frame, to: visibleFrame)
+        let origin = normalizedOrigin(for: frame, in: visibleFrame)
+        return (frame, origin.x, origin.y)
+    }
+
+    /// Search typing and result-row clicks must keep their own mouse tracking.
+    @MainActor
+    static func isDraggableChrome(
+        hitView: NSView?,
+        searchField: NSView,
+        resultsView: NSView
+    ) -> Bool {
+        guard let hitView else { return true }
+        if hitView === searchField || hitView.isDescendant(of: searchField) { return false }
+        if hitView === resultsView || hitView.isDescendant(of: resultsView) { return false }
+        return true
+    }
 }
 
 private final class LauncherSearchField: NSTextField {
@@ -862,9 +924,18 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
 private final class LauncherPanel: NSPanel {
     var onCommand: ((SearchFieldCommand) -> Void)?
+    /// Return `true` to consume the mouse-down and run move tracking.
+    var onPotentialMove: ((NSEvent) -> Bool)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, onPotentialMove?(event) == true {
+            return
+        }
+        super.sendEvent(event)
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "," {
@@ -1457,6 +1528,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     var onReveal: ((RankedResult) -> Void)?
     var onPreferences: (() -> Void)?
     var onSelectionChanged: (() -> Void)?
+    var onOriginCommitted: ((Double, Double) -> Void)?
 
     init(
         environmentProvider: @escaping @MainActor () -> LauncherAppearanceEnvironment = { .current },
@@ -1946,6 +2018,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         panel.ignoresMouseEvents = true
         panel.delegate = self
         panel.onCommand = { [weak self] command in self?.handle(command) }
+        panel.onPotentialMove = { [weak self] event in
+            self?.handlePotentialMove(with: event) ?? false
+        }
     }
 
     private func configureContent() {
@@ -2494,9 +2569,88 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             in: screen.visibleFrame,
             preferredWidth: theme.width,
             height: height,
-            verticalPosition: theme.verticalPosition
+            originX: theme.originX,
+            originY: theme.originY
         )
         panel.setFrame(frame, display: false)
     }
 
+    private func handlePotentialMove(with event: NSEvent) -> Bool {
+        guard let content = panel.contentView else { return false }
+        let hit = content.hitTest(event.locationInWindow)
+        if let editor = searchField.currentEditor(),
+           hit === editor || hit?.isDescendant(of: editor) == true {
+            return false
+        }
+        guard LauncherPanelGeometry.isDraggableChrome(
+            hitView: hit,
+            searchField: searchField,
+            resultsView: scrollView
+        ) else { return false }
+        trackMove(starting: event)
+        return true
+    }
+
+    private func trackMove(starting downEvent: NSEvent) {
+        let startMouse = downEvent.window == nil
+            ? NSEvent.mouseLocation
+            : panel.convertToScreen(NSRect(origin: downEvent.locationInWindow, size: .zero)).origin
+        let startFrame = panel.frame
+        var didMove = false
+        while let event = panel.nextEvent(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            until: .distantFuture,
+            inMode: .eventTracking,
+            dequeue: true
+        ) {
+            if event.type == .leftMouseUp {
+                if didMove { commitMove() }
+                break
+            }
+            let mouse = NSEvent.mouseLocation
+            let deltaX = mouse.x - startMouse.x
+            let deltaY = mouse.y - startMouse.y
+            if !didMove {
+                if hypot(deltaX, deltaY) < LauncherPanelGeometry.dragThreshold { continue }
+                didMove = true
+            }
+            var frame = startFrame
+            frame.origin.x += deltaX
+            frame.origin.y += deltaY
+            panel.setFrame(frame, display: true)
+        }
+    }
+
+    private func commitMove() {
+        let screen = clampingScreen(for: panel.frame) ?? panel.screen
+        guard let visibleFrame = screen?.visibleFrame else { return }
+        let placement = LauncherPanelGeometry.committedPlacement(
+            frame: panel.frame,
+            visibleFrame: visibleFrame
+        )
+        if placement.frame != panel.frame {
+            panel.setFrame(placement.frame, display: true)
+        }
+        if var appearance = appliedAppearance {
+            appearance.originX = Double(placement.originX)
+            appearance.originY = Double(placement.originY)
+            appliedAppearance = appearance
+            theme = themeController.descriptor(for: appearance, environment: environmentProvider())
+        }
+        onOriginCommitted?(Double(placement.originX), Double(placement.originY))
+    }
+
+    private func clampingScreen(for frame: NSRect) -> NSScreen? {
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+        if let matching = NSScreen.screens.first(where: { NSMouseInRect(center, $0.frame, false) }) {
+            return matching
+        }
+        return NSScreen.screens.max { lhs, rhs in
+            lhs.frame.intersection(frame).area < rhs.frame.intersection(frame).area
+        }
+    }
+}
+
+private extension NSRect {
+    var area: CGFloat { max(0, width) * max(0, height) }
 }
