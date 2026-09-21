@@ -98,7 +98,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         var appearance = LauncherAppearancePreferences.defaults(design: .minimal)
         appearance.visibleResultCount = 10
         controller.applyAppearance(appearance, force: true)
-        controller.apply((0..<12).map { index in
+        let fixtures = (0..<12).map { index in
             RankedResult(
                 entry: SearchEntry(
                     id: "fixture:\(index)",
@@ -108,23 +108,133 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
                 ),
                 score: 0
             )
-        })
+        }
+        controller.apply(fixtures)
 
         let table = NSTableView()
-        XCTAssertEqual(controller.preparedResultRowCount, 10)
-        XCTAssertEqual(controller.numberOfRows(in: table), 10)
+        XCTAssertEqual(controller.preparedResultRowCount, LauncherSearchLimits.resultSetCap)
+        XCTAssertEqual(controller.numberOfRows(in: table), 12)
+        XCTAssertEqual(controller.listedResultIDs.count, 12)
 
-        let firstPass = try (0..<10).map { row in
+        let firstPass = try (0..<12).map { row in
             try XCTUnwrap(controller.tableView(table, viewFor: nil, row: row))
         }
-        let secondPass = try (0..<10).map { row in
+        let secondPass = try (0..<12).map { row in
             try XCTUnwrap(controller.tableView(table, viewFor: nil, row: row))
         }
-        XCTAssertEqual(Set(firstPass.map(ObjectIdentifier.init)).count, 10)
-        for row in 0..<10 {
+        XCTAssertEqual(Set(firstPass.map(ObjectIdentifier.init)).count, 12)
+        for row in 0..<12 {
             XCTAssertTrue(firstPass[row] === secondPass[row])
         }
-        XCTAssertNil(controller.tableView(table, viewFor: nil, row: 10))
+        XCTAssertNil(controller.tableView(table, viewFor: nil, row: 12))
+    }
+
+    func testApplyRetainsMatchesBeyondTheVisibleViewport() {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
+        var appearance = LauncherAppearancePreferences.defaults(design: .minimal)
+        appearance.visibleResultCount = 3
+        controller.applyAppearance(appearance, force: true)
+        let theme = LauncherThemeController().descriptor(for: appearance)
+        let fixtures = (0..<12).map { index in
+            RankedResult(
+                entry: SearchEntry(
+                    id: "fixture:\(index)",
+                    kind: .application,
+                    title: "Fixture \(index)",
+                    target: .none
+                ),
+                score: 12 - index
+            )
+        }
+
+        controller.apply(fixtures)
+
+        XCTAssertEqual(controller.listedResultIDs.count, 12)
+        XCTAssertEqual(controller.listedResultIDs, fixtures.map(\.entry.id))
+        XCTAssertEqual(controller.currentPanelHeight, theme.panelHeight(resultCount: 12))
+        XCTAssertEqual(controller.currentPanelHeight, theme.panelHeight(resultCount: 3))
+        XCTAssertEqual(
+            theme.resultsViewportHeight(resultCount: 12),
+            theme.resultsViewportHeight(resultCount: 3)
+        )
+        XCTAssertGreaterThan(
+            theme.resultsDocumentHeight(resultCount: 12),
+            theme.resultsViewportHeight(resultCount: 12)
+        )
+
+        let overflow = (0..<60).map { index in
+            RankedResult(
+                entry: SearchEntry(
+                    id: "overflow:\(index)",
+                    kind: .application,
+                    title: "Overflow \(index)",
+                    target: .none
+                ),
+                score: 60 - index
+            )
+        }
+        controller.apply(overflow)
+        XCTAssertEqual(controller.listedResultIDs.count, LauncherSearchLimits.resultSetCap)
+        XCTAssertEqual(controller.currentPanelHeight, theme.panelHeight(resultCount: 3))
+    }
+
+    func testArrowKeysMoveSelectionThroughTheFullListAndKeepItVisible() {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
+        var appearance = LauncherAppearancePreferences.defaults(design: .minimal)
+        appearance.visibleResultCount = 3
+        controller.applyAppearance(appearance, force: true)
+        controller.show(on: NSScreen.main)
+        defer { controller.dismiss(notify: false) }
+        let theme = LauncherThemeController().descriptor(for: appearance)
+        let fixtures = (0..<12).map { index in
+            RankedResult(
+                entry: SearchEntry(
+                    id: "fixture:\(index)",
+                    kind: .application,
+                    title: "Fixture \(index)",
+                    target: .none
+                ),
+                score: 12 - index
+            )
+        }
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(fixtures)
+        controller.visibilityIsolationWindow.contentView?.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(controller.selectedResultID, "fixture:0")
+        XCTAssertEqual(controller.resultsScrollOffset, 0, accuracy: 0.5)
+        for _ in 0..<5 {
+            XCTAssertTrue(controller.control(
+                NSTextField(),
+                textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.moveDown(_:))
+            ))
+        }
+        XCTAssertEqual(controller.selectedResultID, "fixture:5")
+        XCTAssertEqual(controller.selectedResultRow, 5)
+        XCTAssertGreaterThan(controller.resultsScrollOffset, 0)
+        let selectedFrame = NSRect(
+            x: 0,
+            y: CGFloat(5) * (theme.rowHeight + theme.rowSpacing),
+            width: max(1, controller.resultsVisibleRect.width),
+            height: theme.rowHeight
+        )
+        XCTAssertTrue(
+            controller.resultsVisibleRect.intersects(selectedFrame.insetBy(dx: 0, dy: 1)),
+            "Arrowing past the viewport must keep the selected row visible"
+        )
+
+        let scrolledOffset = controller.resultsScrollOffset
+        controller.apply(fixtures, preservingSelection: true)
+        XCTAssertEqual(controller.selectedResultID, "fixture:5")
+        XCTAssertEqual(controller.resultsScrollOffset, scrolledOffset, accuracy: 0.5)
+
+        controller.setMode(.main, initialQuery: "other")
+        controller.apply(Array(fixtures.prefix(8)))
+        XCTAssertEqual(controller.resultsScrollOffset, 0, accuracy: 0.5)
+        XCTAssertEqual(controller.selectedResultID, "fixture:0")
     }
 
     func testLauncherSearchAndResultsExposeVoiceOverLabels() {

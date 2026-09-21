@@ -881,14 +881,19 @@ private final class LauncherPanel: NSPanel {
     }
 }
 
-/// Every launcher result is already visible, so physically scrolling the table only creates
+/// When every result already fits the viewport, physically scrolling the table only creates
 /// a few pixels of accidental travel from AppKit's clip-view bookkeeping. Consume wheel and
-/// trackpad input and turn it into deterministic selection steps instead.
+/// trackpad input in that case and turn it into deterministic selection steps. A longer
+/// result set scrolls the document so matches beyond the visible rows stay reachable.
 private final class LauncherResultsScrollView: NSScrollView {
     var onSelectionStep: ((Bool) -> Void)?
     private var accumulator = LauncherScrollAccumulator()
 
     override func scrollWheel(with event: NSEvent) {
+        if canScrollDocumentVertically {
+            super.scrollWheel(with: event)
+            return
+        }
         // A single momentum event can contain hundreds of points. Processing every implied
         // row synchronously caused long main-thread bursts (and made an edge feel like it was
         // still moving). Bound work per event while retaining a small residual for continuity.
@@ -901,6 +906,11 @@ private final class LauncherResultsScrollView: NSScrollView {
         for movesUp in moves {
             onSelectionStep?(movesUp)
         }
+    }
+
+    private var canScrollDocumentVertically: Bool {
+        guard let documentView else { return false }
+        return documentView.frame.height > contentView.bounds.height + 0.5
     }
 }
 
@@ -1400,7 +1410,7 @@ final class ResultRowView: NSTableCellView {
 final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSTextFieldDelegate {
     private static let panelWidth = LauncherMinimalMetrics.width
     private static let searchHeight = LauncherMinimalMetrics.searchHeight
-    private static let maximumPreparedResultRows = 10
+    private static let maximumPreparedResultRows = LauncherSearchLimits.resultSetCap
     private let panel: LauncherPanel
     private let nativeSearchField = LauncherNativeSearchField()
     // The live launcher contains a real editable search control, while its enclosing glass
@@ -1444,6 +1454,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// Last sampled motion duration. apply() must not sample the environment on every
     /// keystroke; this refreshes wherever the environment is already being read.
     private var cachedExpansionAnimationDuration: TimeInterval = 0
+    /// Used so a new query can pin the table to the top without wiping the user's scroll
+    /// offset on every result delivery for the same query.
+    private var lastAppliedQuery: String?
 
     private var searchField: NSTextField { nativeSearchField }
 
@@ -1503,6 +1516,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         expansionMotionInProgress || pendingExpansionTarget != nil
     }
     var listedResultIDs: [String] { results.map(\.entry.id) }
+    var selectedResultRow: Int { tableView.selectedRow }
+    var resultsScrollOffset: CGFloat { scrollView.contentView.bounds.origin.y }
+    var resultsVisibleRect: NSRect { tableView.visibleRect }
     var selectedResultID: String? {
         guard results.indices.contains(tableView.selectedRow) else { return nil }
         return results[tableView.selectedRow].entry.id
@@ -1571,7 +1587,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         )
         updateModeChrome()
         nativeSearchField.needsDisplay = true
-        iconCache.prewarm(results.map(\.entry), context: iconContext)
+        iconCache.prewarm(
+            results.map(\.entry),
+            limit: LauncherSearchLimits.resultSetCap,
+            context: iconContext
+        )
         for row in results.indices where row < preparedResultRows.count {
             _ = tableView(tableView, viewFor: tableView.tableColumns.first, row: row)
         }
@@ -1587,7 +1607,19 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
 
     func refreshDisplayedNativeIcons() {
         guard panel.isVisible else { return }
-        iconCache.refreshNativeIcons(results.prefix(theme.visibleResultCount).map(\.entry), context: iconContext)
+        iconCache.refreshNativeIcons(iconEntriesNearViewport, context: iconContext)
+    }
+
+    /// Icons for the on-screen rows plus a small buffer so scrolling does not flash placeholders.
+    private var iconEntriesNearViewport: [SearchEntry] {
+        let visible = tableView.rows(in: tableView.visibleRect)
+        if visible.length > 0 {
+            let start = max(results.startIndex, visible.location - 2)
+            let end = min(results.endIndex, visible.location + visible.length + 2)
+            return results[start..<end].map(\.entry)
+        }
+        let fallbackCount = min(results.count, theme.visibleResultCount + 2)
+        return results.prefix(fallbackCount).map(\.entry)
     }
 
     func windowDidChangeBackingProperties(_ notification: Notification) {
@@ -1636,7 +1668,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     func prepareIcons(for entries: [SearchEntry]) {
-        iconCache.prewarm(entries, context: iconContext)
+        iconCache.prewarm(entries, limit: LauncherSearchLimits.resultSetCap, context: iconContext)
     }
 
     func show(on screen: NSScreen?) {
@@ -1656,6 +1688,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         searchField.stringValue = ""
         results = []
+        lastAppliedQuery = nil
         inlineSuggestion = nil
         updateInlineSuggestionPresentation()
         tableView.reloadData()
@@ -1747,30 +1780,36 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         let suppressesEmptyMainResults = theme.design == .liquidGlass
             && currentMode == .main
             && searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        // Search producers already honor the configured limit. Clamp defensively here as
-        // well so a malformed or streaming producer can never create a scrollable viewport.
+        let query = searchField.stringValue
+        let shouldResetScroll = query != lastAppliedQuery
+        lastAppliedQuery = query
+        // Search producers honor the bounded result-set cap. Clamp defensively here so a
+        // streaming producer cannot grow without limit. Extra rows beyond the viewport stay
+        // in the list and scroll.
         self.results = suppressesEmptyMainResults
             ? []
-            : Array(listedResults.prefix(theme.visibleResultCount))
+            : Array(listedResults.prefix(LauncherSearchLimits.resultSetCap))
         updateInlineSuggestionPresentation()
         updateLiquidPresentationState()
         if !self.results.contains(where: { $0.entry.id == confirmationEntryID }) {
             confirmationEntryID = nil
         }
-        resetTableScrollPosition()
         tableView.reloadData()
+        if shouldResetScroll {
+            resetTableScrollPosition()
+        }
         if inlineSuggestion != nil, selectedEntryID == nil {
             tableView.deselectAll(nil)
-            resetTableScrollPosition()
         } else if let preferredRow = LauncherSelection.preferredRow(
             preservingEntryID: selectedEntryID,
             in: self.results
         ) {
             tableView.selectRowIndexes(IndexSet(integer: preferredRow), byExtendingSelection: false)
-            resetTableScrollPosition()
+            if !shouldResetScroll {
+                scrollSelectedRowVisible()
+            }
         } else {
             tableView.deselectAll(nil)
-            resetTableScrollPosition()
         }
         refreshSelectionAppearance()
         updateHeight()
@@ -1859,8 +1898,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         guard results.indices.contains(row), preparedResultRows.indices.contains(row) else {
             return nil
         }
-        // The launcher displays at most ten rows. Give each row index a permanent view so the
-        // first keystroke never allocates AppKit controls or installs Auto Layout constraints.
+        // Views are prepared up to the bounded result-set cap so scrolling beyond the
+        // viewport never allocates row chrome on the first keystroke.
         let view = preparedResultRows[row]
         let result = results[row]
         view.configure(
@@ -2074,8 +2113,10 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = false
+        scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
         scrollView.verticalScrollElasticity = .none
         scrollView.horizontalScrollElasticity = .none
         scrollView.automaticallyAdjustsContentInsets = false
@@ -2190,7 +2231,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 results: results
             ) else { return }
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            resetTableScrollPosition()
+            scrollSelectedRowVisible()
         case .down:
             revealCompactLiquidResultsIfNeeded()
             guard let row = LauncherSelection.nextRow(
@@ -2199,7 +2240,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 results: results
             ) else { return }
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            resetTableScrollPosition()
+            scrollSelectedRowVisible()
         case .execute:
             if results.indices.contains(tableView.selectedRow) {
                 onExecute?(results[tableView.selectedRow])
@@ -2336,6 +2377,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private func resetTableScrollPosition() {
         scrollView.contentView.scroll(to: .zero)
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func scrollSelectedRowVisible() {
+        let row = tableView.selectedRow
+        guard results.indices.contains(row) else { return }
+        tableView.scrollRowToVisible(row)
     }
 
     private func updateResultsGeometry() {

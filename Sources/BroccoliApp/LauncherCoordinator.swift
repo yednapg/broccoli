@@ -491,7 +491,7 @@ final class LauncherCoordinator {
         let usage = usage
         let searchPreferences = preferences.searchPreferences
         let calculatorPreferences = preferences.calculator
-        let resultLimit = preferences.appearance.visibleResultCount
+        let resultLimit = LauncherSearchLimits.resultSetCap
         let hasVisibleQuery = !SearchNormalizer.normalize(query).isEmpty
         let state = signposter.beginInterval("QueryToResults")
         let start = ContinuousClock.now
@@ -906,7 +906,7 @@ final class LauncherCoordinator {
         fileSearchService.search(
             query: query,
             generation: generation,
-            limit: preferences.appearance.visibleResultCount
+            limit: LauncherSearchLimits.resultSetCap
         ) { [weak self] returnedGeneration, outcome in
             guard let self, returnedGeneration == self.queryGeneration,
                   case .fileSearch = self.modeController.mode else { return }
@@ -958,7 +958,7 @@ final class LauncherCoordinator {
             panel.apply([RankedResult(entry: entry, score: 0)])
             return
         }
-        let count = preferences.appearance.visibleResultCount
+        let count = LauncherSearchLimits.resultSetCap
         let results: [RankedResult] = clipboardMonitor.filteredSummaries(query: query)
             .prefix(count).enumerated().map {
             let summary = $0.element

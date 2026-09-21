@@ -1,4 +1,5 @@
 import AppKit
+import BroccoliCore
 import ServiceManagement
 import XCTest
 @testable import BroccoliApp
@@ -17,11 +18,13 @@ final class LauncherAppearanceTests: XCTestCase {
 
                 for resultCount in 0...(visibleCount + 2) {
                     let displayedRows = min(resultCount, visibleCount)
-                    let documentHeight = CGFloat(displayedRows)
+                    let viewportHeight = CGFloat(displayedRows)
+                        * (descriptor.rowHeight + descriptor.rowSpacing)
+                    let documentHeight = CGFloat(resultCount)
                         * (descriptor.rowHeight + descriptor.rowSpacing)
                     let expectedHeight = descriptor.searchHeight
                         + (displayedRows > 0 ? descriptor.resultTopInset : 0)
-                        + documentHeight
+                        + viewportHeight
                         + (displayedRows > 0 ? descriptor.resultBottomInset : 0)
 
                     XCTAssertEqual(
@@ -32,10 +35,29 @@ final class LauncherAppearanceTests: XCTestCase {
                     )
                     XCTAssertEqual(
                         descriptor.resultsViewportHeight(resultCount: resultCount),
-                        descriptor.resultsDocumentHeight(resultCount: resultCount),
+                        viewportHeight,
                         accuracy: 0.001,
-                        "\(design) must not leave an empty table viewport"
+                        "\(design) viewport must follow Visible Results, not the full list"
                     )
+                    XCTAssertEqual(
+                        descriptor.resultsDocumentHeight(resultCount: resultCount),
+                        documentHeight,
+                        accuracy: 0.001
+                    )
+                    if resultCount <= visibleCount {
+                        XCTAssertEqual(
+                            descriptor.resultsViewportHeight(resultCount: resultCount),
+                            descriptor.resultsDocumentHeight(resultCount: resultCount),
+                            accuracy: 0.001,
+                            "\(design) must not leave an empty table viewport"
+                        )
+                    } else {
+                        XCTAssertGreaterThan(
+                            descriptor.resultsDocumentHeight(resultCount: resultCount),
+                            descriptor.resultsViewportHeight(resultCount: resultCount),
+                            "\(design) must keep extra matches in a scrollable document"
+                        )
+                    }
                 }
             }
         }
@@ -67,7 +89,7 @@ final class LauncherAppearanceTests: XCTestCase {
                     actualDocumentHeight,
                     descriptor.resultsDocumentHeight(resultCount: count),
                     accuracy: 0.001,
-                    "\(design) AppKit row geometry must match the fixed viewport"
+                    "\(design) AppKit row geometry must match the document when it fills the viewport"
                 )
                 XCTAssertEqual(
                     actualDocumentHeight,
@@ -76,6 +98,57 @@ final class LauncherAppearanceTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testOverflowResultsKeepAFixedViewportAndATallerDocument() {
+        _ = NSApplication.shared
+        let controller = LauncherThemeController()
+        XCTAssertEqual(LauncherSearchLimits.resultSetCap, 50)
+        XCTAssertGreaterThan(LauncherSearchLimits.resultSetCap, 10)
+
+        for design in LauncherDesign.allCases {
+            var preferences = LauncherAppearancePreferences.defaults(design: design)
+            preferences.visibleResultCount = 3
+            let descriptor = controller.descriptor(for: preferences)
+            XCTAssertEqual(
+                descriptor.panelHeight(resultCount: 12),
+                descriptor.panelHeight(resultCount: 3),
+                accuracy: 0.001,
+                "\(design) window height must follow Visible Results, not the match count"
+            )
+            XCTAssertEqual(
+                descriptor.resultsViewportHeight(resultCount: 12),
+                descriptor.resultsViewportHeight(resultCount: 3),
+                accuracy: 0.001
+            )
+            XCTAssertGreaterThan(
+                descriptor.resultsDocumentHeight(resultCount: 12),
+                descriptor.resultsViewportHeight(resultCount: 12)
+            )
+        }
+    }
+
+    func testSearchResultComposerHonorsTheResultSetCap() {
+        let catalog = (0..<60).map { index in
+            RankedResult(
+                entry: SearchEntry(
+                    id: "catalog:\(index)",
+                    kind: .application,
+                    title: "Catalog \(index)",
+                    target: .none
+                ),
+                score: 1_000 - index
+            )
+        }
+        let composed = LauncherMainSearchResultComposer.compose(
+            catalogResults: catalog,
+            calculatorEvaluation: .notExpression,
+            hasVisibleQuery: true,
+            limit: LauncherSearchLimits.resultSetCap
+        )
+        XCTAssertEqual(composed.count, LauncherSearchLimits.resultSetCap)
+        XCTAssertEqual(composed.first?.entry.id, "catalog:0")
+        XCTAssertEqual(composed.last?.entry.id, "catalog:49")
     }
 
     func testLockedThemeGeometry() {
