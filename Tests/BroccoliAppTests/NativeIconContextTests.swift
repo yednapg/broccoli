@@ -384,6 +384,25 @@ final class NativeIconContextTests: XCTestCase {
         XCTAssertTrue(cache.image(for: entry, context: context) === image)
     }
 
+    func testPersistedApplicationArtworkIsFoundThroughASymlinkCatalogPath() throws {
+        _ = NSApplication.shared
+        let source = URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")
+        let context = IconRenderContext(appearance: .dark, pointSize: 50, backingScale: 2)
+        XCTAssertNotNil(SystemSettingsNativeIconResolver.materializeIcon(at: source, context: context))
+
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("broccoli-icon-link-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let link = directory.appendingPathComponent("Finder.app")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
+
+        let cache = IconCache(startsNativeIconResolution: false)
+        let image = cache.image(for: applicationEntry(path: link.path), context: context)
+        XCTAssertEqual(image.size, NSSize(width: 50, height: 50))
+        XCTAssertFalse(image.isTemplate)
+    }
+
     private func applicationEntry(path: String) -> SearchEntry {
         SearchEntry(
             id: "app:\(path)",

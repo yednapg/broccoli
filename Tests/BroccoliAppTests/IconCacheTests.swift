@@ -566,6 +566,32 @@ final class IconCacheTests: XCTestCase {
         try assertTransparentCorners(icon, message: "Application wait-state contains a custom tile/border")
     }
 
+    func testExistingApplicationDiskMissShowsWorkspaceArtworkInsteadOfAnEmptySlot() throws {
+        _ = NSApplication.shared
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let cache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { _, _ in
+            _ = gate.wait(timeout: .now() + 5)
+            return nil
+        })
+        let path = "/System/Library/CoreServices/Finder.app"
+        let entry = SearchEntry(
+            id: "app:\(path)",
+            kind: .application,
+            title: "Finder",
+            iconKey: path,
+            target: .application(path: path, bundleIdentifier: "com.apple.finder")
+        )
+        let icon = cache.image(for: entry)
+        XCTAssertFalse(icon.isTemplate)
+        XCTAssertGreaterThan(icon.size.width, 0)
+        XCTAssertNotEqual(
+            icon.size,
+            NSSize(width: 40, height: 40),
+            "Installed apps must not fall back to the empty wait canvas"
+        )
+    }
+
     func testMultipleIconCachesStartOneSharedResolutionAfterCatalogPrewarm() {
         let store = SystemSettingsNativeIconStore { _, _ in
             await Task.yield()

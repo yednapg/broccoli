@@ -259,6 +259,12 @@ actor SystemSettingsExtensionIndex {
             defer { lock.unlock() }
             return urls[bundleIdentifier]
         }
+
+        var isPublished: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !urls.isEmpty
+        }
     }
 
     private static func publishStandardIndex(_ urls: [String: URL]) {
@@ -266,7 +272,13 @@ actor SystemSettingsExtensionIndex {
     }
 
     nonisolated static func publishedURL(for bundleIdentifier: String) -> URL? {
-        PublishedStandardIndex.shared.url(for: bundleIdentifier)
+        if let url = PublishedStandardIndex.shared.url(for: bundleIdentifier) {
+            return url
+        }
+        if PublishedStandardIndex.shared.isPublished { return nil }
+        let index = buildIndexSynchronously(roots: standardRoots)
+        if !index.isEmpty { publishStandardIndex(index) }
+        return index[bundleIdentifier]
     }
 
     nonisolated private static func buildIndexSynchronously(roots: [URL]) -> [String: URL] {
