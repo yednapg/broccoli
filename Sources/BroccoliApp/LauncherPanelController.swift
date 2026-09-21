@@ -997,7 +997,7 @@ final class ResultRowView: NSTableCellView {
     static let statusIconSize = LauncherLiquidGlassMetrics.statusIconSize
 
     private let iconSlot = NSLayoutGuide()
-    private let resultIcon = NSImageView()
+    private let resultIcon = ResultIconView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
@@ -1316,12 +1316,16 @@ final class ResultRowView: NSTableCellView {
         } else {
             icon
         }
-        let configuredIcon = sourceIcon.isTemplate
+        let usesNativeArtwork = result.entry.kind == .application
+            || result.entry.kind == .systemSetting
+        let configuredIcon = sourceIcon.isTemplate && !usesNativeArtwork
             ? (sourceIcon.withSymbolConfiguration(.init(
                 pointSize: templatePointSize,
                 weight: templateWeight
             )) ?? sourceIcon)
             : sourceIcon
+        resultIcon.symbolConfiguration = nil
+        resultIcon.contentTintColor = nil
         resultIcon.image = if usesCompactStatusIcon {
             Self.normalizedIcon(
                 configuredIcon,
@@ -1474,10 +1478,43 @@ final class ResultRowView: NSTableCellView {
             ? selectedShortcutTextColor
             : .tertiaryLabelColor
         // SF Symbol action icons are template images. Let AppKit apply semantic label colors
-        // in Light, Dark, and selected states; native full-color app/Settings icons stay intact.
-        resultIcon.contentTintColor = resultIcon.image?.isTemplate == true
-            ? (highlighted ? selectedTextColor : .labelColor)
-            : nil
+        // in Light, Dark, and selected states. Native full-color app/Settings bitmaps must not
+        // inherit the table's emphasized backgroundStyle, which otherwise flattens pane art
+        // into a white SF-symbol silhouette on the selected row.
+        if resultIcon.image?.isTemplate == true {
+            resultIcon.cell?.backgroundStyle = backgroundStyle
+            resultIcon.contentTintColor = highlighted ? selectedTextColor : .labelColor
+        } else {
+            resultIcon.cell?.backgroundStyle = .normal
+            resultIcon.contentTintColor = nil
+        }
+        resultIcon.applyNativeCompositing()
+    }
+}
+
+/// Full-color application and Settings pane art sits inside the HUD material. Template
+/// images keep vibrancy so semantic tints work. Native bitmaps must not: vibrancy punches
+/// them into a white silhouette on the selected row. They also cannot draw into the row's
+/// transparent selection layer, or the same HUD punch-out leaves an empty slot on every
+/// unselected row. Give native artwork its own layer so it composites over the material.
+private final class ResultIconView: NSImageView {
+    override var allowsVibrancy: Bool {
+        image?.isTemplate == true
+    }
+
+    override var image: NSImage? {
+        get { super.image }
+        set {
+            super.image = newValue
+            applyNativeCompositing()
+        }
+    }
+
+    func applyNativeCompositing() {
+        let usesNativeArtwork = image?.isTemplate == false
+        wantsLayer = usesNativeArtwork
+        layer?.contentsGravity = .resizeAspect
+        layer?.masksToBounds = false
     }
 }
 
@@ -1500,6 +1537,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private let themeController = LauncherThemeController()
     private let environmentProvider: @MainActor () -> LauncherAppearanceEnvironment
     private var needsPresentationIconRefresh = false
+    private var lastNativeIconRefreshContext: IconRenderContext?
     private var theme: LauncherThemeDescriptor
     private var retainedContentView: NSView?
     private var results: [RankedResult] = []
@@ -1675,7 +1713,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         nativeSearchField.needsDisplay = true
         iconCache.prewarm(
             results.map(\.entry),
-            limit: LauncherSearchLimits.resultSetCap,
+            limit: LauncherSearchLimits.iconPrewarmCap,
             context: iconContext
         )
         for row in results.indices where row < preparedResultRows.count {
@@ -1693,7 +1731,17 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
 
     func refreshDisplayedNativeIcons() {
         guard panel.isVisible else { return }
-        iconCache.refreshNativeIcons(iconEntriesNearViewport, context: iconContext)
+        let context = iconContext
+        let entries = iconEntriesNearViewport
+        // Native artwork is cached per appearance, contrast, size and scale, so an unchanged
+        // context has nothing to re-sample. Re-materializing every near-viewport icon on each
+        // presentation was the launch-time convoy that delayed the rows being looked at.
+        guard lastNativeIconRefreshContext != context else {
+            iconCache.refreshProvisionalIcons(entries, context: context)
+            return
+        }
+        lastNativeIconRefreshContext = context
+        iconCache.refreshNativeIcons(entries, context: context)
     }
 
     /// Icons for the on-screen rows plus a small buffer so scrolling does not flash placeholders.
@@ -1756,7 +1804,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     func prepareIcons(for entries: [SearchEntry], resolveNativeSettings: Bool = true) {
         iconCache.prewarm(
             entries,
-            limit: LauncherSearchLimits.resultSetCap,
+            limit: LauncherSearchLimits.iconPrewarmCap,
             context: iconContext,
             resolveNativeSettings: resolveNativeSettings
         )
@@ -1904,6 +1952,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         self.results = suppressesEmptyMainResults
             ? []
             : Array(listedResults.prefix(LauncherSearchLimits.resultSetCap))
+        // Visible rows start their own interactive loads from `image(for:)` during the
+        // reload below. Warming them again here only queued a second materialization of the
+        // same artwork behind the first.
         updateInlineSuggestionPresentation()
         updateLiquidPresentationState()
         if !self.results.contains(where: { $0.entry.id == confirmationEntryID }) {
@@ -1928,13 +1979,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         refreshSelectionAppearance()
         updateHeight()
-        if !results.isEmpty {
-            iconCache.prewarm(
-                iconEntriesNearViewport,
-                limit: max(theme.visibleResultCount + 2, 8),
-                context: iconContext
-            )
-        }
         if needsPresentationIconRefresh, !results.isEmpty {
             needsPresentationIconRefresh = false
             refreshDisplayedNativeIcons()
@@ -2659,7 +2703,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func reloadVisibleIcon(for key: String) {
-        guard panel.isVisible else { return }
         let rows = IndexSet(results.indices.filter { results[$0].entry.iconKey == key })
         guard !rows.isEmpty else { return }
         for row in rows { _ = tableView(tableView, viewFor: tableView.tableColumns.first, row: row) }

@@ -226,7 +226,10 @@ actor SystemSettingsExtensionIndex {
         // A transient filesystem failure at cold launch must not poison the process for its
         // entire lifetime. Successful shallow scans are reused; a wholly empty scan can be
         // attempted again if another cache asks later.
-        if !result.isEmpty { cachedBundleURLs = result }
+        if !result.isEmpty {
+            cachedBundleURLs = result
+            Self.publishStandardIndex(result)
+        }
         indexingTask = nil
         return result
     }
@@ -236,6 +239,34 @@ actor SystemSettingsExtensionIndex {
         return await Task.detached(priority: .userInitiated) {
             indexBuilder(roots)
         }.value
+    }
+
+    /// Snapshot of the standard ExtensionKit index for the launcher paint path. Disk-backed
+    /// Settings artwork is keyed by `.appex` URL; this avoids an actor hop on each row.
+    private final class PublishedStandardIndex: @unchecked Sendable {
+        static let shared = PublishedStandardIndex()
+        private let lock = NSLock()
+        private var urls: [String: URL] = [:]
+
+        func publish(_ urls: [String: URL]) {
+            lock.lock()
+            self.urls = urls
+            lock.unlock()
+        }
+
+        func url(for bundleIdentifier: String) -> URL? {
+            lock.lock()
+            defer { lock.unlock() }
+            return urls[bundleIdentifier]
+        }
+    }
+
+    private static func publishStandardIndex(_ urls: [String: URL]) {
+        PublishedStandardIndex.shared.publish(urls)
+    }
+
+    nonisolated static func publishedURL(for bundleIdentifier: String) -> URL? {
+        PublishedStandardIndex.shared.url(for: bundleIdentifier)
     }
 
     nonisolated private static func buildIndexSynchronously(roots: [URL]) -> [String: URL] {
@@ -264,12 +295,66 @@ final class MaterializedSystemSettingsIcon: @unchecked Sendable {
     let cost: Int
     let pixelsWide: Int
     let pixelsHigh: Int
+    /// Content hash of the decoded pixels, used to recognize Icon Services' generic
+    /// placeholder. Process-local only: `Hasher` is seeded per process and this value is
+    /// never persisted or compared across launches.
+    let fingerprint: Int
+    /// True when Icon Services answered with its generic artwork instead of the real icon.
+    /// Provisional artwork is still shown so the row is not empty, but it is never written to
+    /// the disk cache and stays eligible for one later re-resolution.
+    let isProvisional: Bool
 
-    init(image: NSImage, bitmap: NSBitmapImageRep) {
+    init(image: NSImage, bitmap: NSBitmapImageRep, isProvisional: Bool = false) {
         self.image = image
         pixelsWide = bitmap.pixelsWide
         pixelsHigh = bitmap.pixelsHigh
         cost = bitmap.bytesPerRow * bitmap.pixelsHigh
+        fingerprint = SystemSettingsNativeIconResolver.fingerprint(of: bitmap)
+        self.isProvisional = isProvisional
+    }
+
+    private init(copying other: MaterializedSystemSettingsIcon, isProvisional: Bool) {
+        image = other.image
+        cost = other.cost
+        pixelsWide = other.pixelsWide
+        pixelsHigh = other.pixelsHigh
+        fingerprint = other.fingerprint
+        self.isProvisional = isProvisional
+    }
+
+    func markedProvisional() -> MaterializedSystemSettingsIcon {
+        isProvisional ? self : MaterializedSystemSettingsIcon(copying: self, isProvisional: true)
+    }
+}
+
+/// Remembers what Icon Services' generic application artwork looks like at each drawing size.
+/// Materializing it once per size is enough to recognize a placeholder answer later.
+private final class GenericApplicationIconFingerprints: @unchecked Sendable {
+    static let shared = GenericApplicationIconFingerprints()
+    private let lock = NSLock()
+    private var fingerprints: [String: Int?] = [:]
+
+    func fingerprint(pointSize: CGFloat, backingScale: CGFloat) -> Int? {
+        let key = "\(pointSize)x\(backingScale)"
+        lock.lock()
+        if let cached = fingerprints[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let resolved: Int? = autoreleasepool {
+            let generic = NSWorkspace.shared.icon(for: .applicationBundle)
+            return SystemSettingsNativeIconResolver.materializeImage(
+                generic,
+                pointSize: pointSize,
+                backingScale: backingScale
+            )?.fingerprint
+        }
+        lock.lock()
+        fingerprints[key] = resolved
+        lock.unlock()
+        return resolved
     }
 }
 
@@ -283,8 +368,12 @@ enum SystemSettingsNativeIconResolver {
         URL(fileURLWithPath: "/System/Applications", isDirectory: true),
         URL(fileURLWithPath: "/System/Library/CoreServices", isDirectory: true),
     ]
-    private static let materializeLock = NSLock()
-
+    /// Icon materialization contends on shared AppKit appearance state, so more workers stop
+    /// helping quickly. Measured on this class of machine, eight concurrent workers finished
+    /// a 40-icon batch in about the same wall time as three while more than doubling the
+    /// median per-icon cost. Keep both pools small.
+    static let interactiveWorkerLimit = 4
+    static let catalogWorkerLimit = 2
     static func validatedSystemApplicationURL(_ url: URL?) -> URL? {
         guard let url else { return nil }
         let candidate = url.standardizedFileURL
@@ -298,6 +387,7 @@ enum SystemSettingsNativeIconResolver {
     static func resolve(
         requests: [SystemSettingsIconRequest],
         context: IconRenderContext,
+        priority: TaskPriority = .userInitiated,
         onIcon: (@MainActor @Sendable (String, MaterializedSystemSettingsIcon) -> Void)? = nil
     ) async -> SystemSettingsNativeIconResolution {
         let identifiers = Set(requests.map(\.bundleIdentifier))
@@ -309,32 +399,68 @@ enum SystemSettingsNativeIconResolver {
             SystemSettingsPowerIconSelector.contentTypeIdentifier(
                 powerSourceTypes: SystemPowerSourceSnapshot.powerSourceTypes()
             )
-        var resolved: [String: MaterializedSystemSettingsIcon] = [:]
-        var iconsBySource: [SystemSettingsNativeIconSource: MaterializedSystemSettingsIcon] = [:]
-
-        // Honor caller order so currently visible rows materialize before the rest of the catalog.
+        var sourceByIconKey: [String: SystemSettingsNativeIconSource] = [:]
+        var uniqueSources: [SystemSettingsNativeIconSource] = []
+        var seenSources = Set<SystemSettingsNativeIconSource>()
         for request in requests {
             guard let source = SystemSettingsIconRequestMapper.preferredSource(
                 for: request,
                 installedExtensionBundleIdentifiers: Set(extensionURLs.keys),
                 powerIconContentTypeIdentifier: powerIconContentTypeIdentifier
             ) else { continue }
-            if let existing = iconsBySource[source] {
-                resolved[request.iconKey] = existing
-                if let onIcon {
-                    await MainActor.run { onIcon(request.iconKey, existing) }
+            sourceByIconKey[request.iconKey] = source
+            if seenSources.insert(source).inserted {
+                uniqueSources.append(source)
+            }
+        }
+
+        var iconsBySource: [SystemSettingsNativeIconSource: MaterializedSystemSettingsIcon] = [:]
+        let workerLimit = max(1, min(
+            uniqueSources.count,
+            priority >= .userInitiated ? interactiveWorkerLimit : catalogWorkerLimit
+        ))
+        await withTaskGroup(
+            of: (SystemSettingsNativeIconSource, MaterializedSystemSettingsIcon?).self
+        ) { group in
+            var remaining = uniqueSources.makeIterator()
+            for _ in 0..<workerLimit {
+                guard let source = remaining.next() else { break }
+                group.addTask(priority: priority) {
+                    let icon = materialize(
+                        source: source,
+                        extensionURLs: extensionURLs,
+                        context: context
+                    )
+                    return (source, icon)
                 }
-                continue
             }
-            let icon = await Task.detached(priority: .userInitiated) {
-                materialize(source: source, extensionURLs: extensionURLs, context: context)
-            }.value
-            guard let icon else { continue }
-            iconsBySource[source] = icon
+            for await (source, icon) in group {
+                if let icon {
+                    iconsBySource[source] = icon
+                    if let onIcon {
+                        for request in requests where sourceByIconKey[request.iconKey] == source {
+                            await MainActor.run { onIcon(request.iconKey, icon) }
+                        }
+                    }
+                }
+                if let next = remaining.next() {
+                    group.addTask(priority: priority) {
+                        let icon = materialize(
+                            source: next,
+                            extensionURLs: extensionURLs,
+                            context: context
+                        )
+                        return (next, icon)
+                    }
+                }
+            }
+        }
+
+        var resolved: [String: MaterializedSystemSettingsIcon] = [:]
+        for request in requests {
+            guard let source = sourceByIconKey[request.iconKey],
+                  let icon = iconsBySource[source] else { continue }
             resolved[request.iconKey] = icon
-            if let onIcon {
-                await MainActor.run { onIcon(request.iconKey, icon) }
-            }
         }
 
         return SystemSettingsNativeIconResolution(
@@ -348,8 +474,6 @@ enum SystemSettingsNativeIconResolver {
         extensionURLs: [String: URL],
         context: IconRenderContext
     ) -> MaterializedSystemSettingsIcon? {
-        materializeLock.lock()
-        defer { materializeLock.unlock() }
         switch source {
         case .contentType(let identifier):
             return materializeIcon(forContentTypeIdentifier: identifier, context: context)
@@ -365,21 +489,43 @@ enum SystemSettingsNativeIconResolver {
     }
 
     nonisolated static func materializeIcon(at url: URL, context: IconRenderContext) -> MaterializedSystemSettingsIcon? {
+        let diskKey = NativeIconDiskCache.key(forFileAt: url, context: context)
+        if let diskKey,
+           let persisted = NativeIconDiskCache.shared.icon(for: diskKey, pointSize: context.pointSize) {
+            return persisted
+        }
         var result: MaterializedSystemSettingsIcon?
         context.drawingAppearance.performAsCurrentDrawingAppearance {
             result = materializeIcon(at: url, pointSize: context.pointSize, backingScale: context.backingScale)
         }
+        if let result, let diskKey { NativeIconDiskCache.shared.store(result, for: diskKey) }
         return result
     }
 
     nonisolated static func materializeIcon(forContentTypeIdentifier identifier: String,
                                            context: IconRenderContext) -> MaterializedSystemSettingsIcon? {
+        let diskKey = NativeIconDiskCache.key(forContentTypeIdentifier: identifier, context: context)
+        if let persisted = NativeIconDiskCache.shared.icon(for: diskKey, pointSize: context.pointSize) {
+            return persisted
+        }
         var result: MaterializedSystemSettingsIcon?
         context.drawingAppearance.performAsCurrentDrawingAppearance {
             result = materializeIcon(forContentTypeIdentifier: identifier,
                 pointSize: context.pointSize, backingScale: context.backingScale)
         }
+        if let result { NativeIconDiskCache.shared.store(result, for: diskKey) }
         return result
+    }
+
+    /// Hashes the decoded pixels so a generic Icon Services answer can be told apart from the
+    /// real artwork.
+    nonisolated static func fingerprint(of bitmap: NSBitmapImageRep) -> Int {
+        guard let data = bitmap.bitmapData else { return 0 }
+        let count = bitmap.bytesPerRow * bitmap.pixelsHigh
+        guard count > 0 else { return 0 }
+        var hasher = Hasher()
+        hasher.combine(bytes: UnsafeRawBufferPointer(start: data, count: count))
+        return hasher.finalize()
     }
 
     nonisolated static func materializeIcon(
@@ -389,11 +535,19 @@ enum SystemSettingsNativeIconResolver {
     ) -> MaterializedSystemSettingsIcon? {
         return autoreleasepool {
             let workspaceImage = NSWorkspace.shared.icon(forFile: url.path)
-            return materializeImage(
+            guard let icon = materializeImage(
                 workspaceImage,
                 pointSize: pointSize,
                 backingScale: backingScale
-            )
+            ) else { return nil }
+            // A cold lookup can return the generic application tile before the real artwork
+            // is ready. Mark that answer so it is neither persisted nor treated as final.
+            guard url.pathExtension == "app",
+                  let generic = GenericApplicationIconFingerprints.shared.fingerprint(
+                      pointSize: pointSize,
+                      backingScale: backingScale
+                  ), generic == icon.fingerprint else { return icon }
+            return icon.markedProvisional()
         }
     }
 
@@ -441,10 +595,14 @@ enum SystemSettingsNativeIconResolver {
 
         let size = NSSize(width: pointSize, height: pointSize)
         let pixelSize = NSSize(width: pixels, height: pixels)
+        // Copy before changing `size`. The 32-point default often vends a small SF-symbol
+        // variant; matching the destination canvas selects the native squircle instead.
+        let drawable = (workspaceImage.copy() as? NSImage) ?? workspaceImage
+        drawable.size = pixelSize
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         context.cgContext.clear(CGRect(origin: .zero, size: pixelSize))
-        workspaceImage.draw(
+        drawable.draw(
             in: NSRect(origin: .zero, size: pixelSize),
             from: .zero,
             operation: .sourceOver,
@@ -460,6 +618,15 @@ enum SystemSettingsNativeIconResolver {
         image.addRepresentation(bitmap)
         image.isTemplate = false
         return MaterializedSystemSettingsIcon(image: image, bitmap: bitmap)
+    }
+}
+
+/// NotificationCenter's `object` must be a class. Posting `Completion` as a struct made
+/// `as? Completion` fail, so Settings rows never swapped fallback glyphs for native art.
+final class SystemSettingsNativeIconCompletionBox: NSObject, @unchecked Sendable {
+    let completion: SystemSettingsNativeIconStore.Completion
+    init(_ completion: SystemSettingsNativeIconStore.Completion) {
+        self.completion = completion
     }
 }
 
@@ -485,6 +652,7 @@ final class SystemSettingsNativeIconStore {
     private let resolutionOperation: ResolutionOperation
     private let streamsIncrementalIcons: Bool
     private var inFlight: Set<IconCacheKey> = []
+    private var interactiveInFlight: Set<IconCacheKey> = []
     private var previousKeys: [String: IconCacheKey] = [:]
     private(set) var resolutionAttemptCount = 0
     var inFlightRequestCount: Int { inFlight.count }
@@ -506,7 +674,49 @@ final class SystemSettingsNativeIconStore {
 
     func cachedIcon(for iconKey: String, context: IconRenderContext? = nil) -> MaterializedSystemSettingsIcon? {
         let context = context ?? LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40)
-        return cache.image(for: context.cacheKey(for: iconKey))
+        let key = context.cacheKey(for: iconKey)
+        if let cached = cache.image(for: key) { return cached }
+        // Injected stores stay cache-only so tests can observe resolution. Production reads
+        // the persisted bitmap on the first paint instead of waiting for a background hop.
+        guard streamsIncrementalIcons,
+              let persisted = Self.persistedIcon(for: iconKey, context: context) else { return nil }
+        _ = cache.insert(persisted, for: key)
+        previousKeys[iconKey] = key
+        return persisted
+    }
+
+    /// Settings rows are painted before `ensureResolution` returns. If this process already
+    /// materialized the pane on a previous launch, show that PNG immediately.
+    private static func persistedIcon(
+        for iconKey: String,
+        context: IconRenderContext
+    ) -> MaterializedSystemSettingsIcon? {
+        let bundleIdentifier = iconKey.hasPrefix("setting:")
+            ? String(iconKey.dropFirst("setting:".count))
+            : iconKey
+        if bundleIdentifier == SystemSettingsPowerIconSelector.settingsBundleIdentifier {
+            for identifier in [
+                SystemSettingsPowerIconSelector.batteryContentTypeIdentifier,
+                SystemSettingsPowerIconSelector.energyContentTypeIdentifier,
+            ] {
+                let diskKey = NativeIconDiskCache.key(
+                    forContentTypeIdentifier: identifier,
+                    context: context
+                )
+                if let icon = NativeIconDiskCache.shared.icon(
+                    for: diskKey,
+                    pointSize: context.pointSize
+                ) {
+                    return icon
+                }
+            }
+            return nil
+        }
+        guard let url = SystemSettingsExtensionIndex.publishedURL(for: bundleIdentifier),
+              let diskKey = NativeIconDiskCache.key(forFileAt: url, context: context) else {
+            return nil
+        }
+        return NativeIconDiskCache.shared.icon(for: diskKey, pointSize: context.pointSize)
     }
 
     func previousIcon(for iconKey: String) -> MaterializedSystemSettingsIcon? {
@@ -520,41 +730,60 @@ final class SystemSettingsNativeIconStore {
     }
 
     func ensureResolution(requests: [SystemSettingsIconRequest], context: IconRenderContext,
-                          refresh: Bool = false) {
+                          refresh: Bool = false, interactive: Bool = true) {
         var seen = Set<IconCacheKey>()
         let missing = requests.filter {
             let key = context.cacheKey(for: $0.iconKey)
-            return seen.insert(key).inserted && !inFlight.contains(key)
-                && (refresh || cache.image(for: key) == nil)
+            guard seen.insert(key).inserted else { return false }
+            if !refresh, cache.image(for: key) != nil { return false }
+            if interactive { return !interactiveInFlight.contains(key) }
+            return !inFlight.contains(key)
         }
         guard !missing.isEmpty else { return }
         let keys = missing.map { context.cacheKey(for: $0.iconKey) }
         inFlight.formUnion(keys)
+        if interactive { interactiveInFlight.formUnion(keys) }
         resolutionAttemptCount += 1
         let operation = resolutionOperation
         let shouldStream = streamsIncrementalIcons
-        Task { [weak self] in
+        Task(priority: interactive ? .userInitiated : .utility) { [weak self] in
             if shouldStream {
-                for request in missing {
-                    let partial = await SystemSettingsNativeIconResolver.resolve(
-                        requests: [request],
-                        context: context
-                    )
-                    guard let icon = partial.iconsByKey[request.iconKey] else { continue }
-                    self?.publish(
-                        icon,
-                        iconKey: request.iconKey,
+                if interactive {
+                    _ = await SystemSettingsNativeIconResolver.resolve(
+                        requests: missing,
                         context: context,
-                        replaceExisting: refresh
-                    )
+                        priority: .userInitiated
+                    ) { key, icon in
+                        self?.publish(
+                            icon,
+                            iconKey: key,
+                            context: context,
+                            replaceExisting: refresh
+                        )
+                    }
+                } else {
+                    _ = await SystemSettingsNativeIconResolver.resolve(
+                        requests: missing,
+                        context: context,
+                        priority: .utility
+                    ) { key, icon in
+                        self?.publish(
+                            icon,
+                            iconKey: key,
+                            context: context,
+                            replaceExisting: refresh
+                        )
+                    }
                 }
                 guard let self else { return }
                 inFlight.subtract(keys)
+                interactiveInFlight.subtract(keys)
                 return
             }
             let result = await operation(missing, context)
             guard let self else { return }
             inFlight.subtract(keys)
+            interactiveInFlight.subtract(keys)
             for request in missing {
                 guard let icon = result.iconsByKey[request.iconKey] else { continue }
                 publish(
@@ -583,8 +812,9 @@ final class SystemSettingsNativeIconStore {
             context: context,
             storeIdentifier: ObjectIdentifier(self)
         )
-        Task { @MainActor in
-            NotificationCenter.default.post(name: Self.didLoadNotification, object: completion)
-        }
+        NotificationCenter.default.post(
+            name: Self.didLoadNotification,
+            object: SystemSettingsNativeIconCompletionBox(completion)
+        )
     }
 }

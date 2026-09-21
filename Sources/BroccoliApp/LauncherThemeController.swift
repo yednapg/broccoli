@@ -127,6 +127,9 @@ enum LauncherMotionMetrics {
 /// the bounded result set those rows can scroll through.
 enum LauncherSearchLimits {
     static let resultSetCap = 50
+    /// Background application-icon warmup stays well below the result-set cap so launch
+    /// does not decode every catalog app. Visible rows still promote their own loads.
+    static let iconPrewarmCap = 16
 }
 
 @MainActor

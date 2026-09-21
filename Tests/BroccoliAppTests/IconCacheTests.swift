@@ -18,6 +18,17 @@ final class IconCacheTests: XCTestCase {
         XCTAssertEqual(Set(requests.map(\.bundleIdentifier)).count, requests.count - 1)
     }
 
+    func testIconWarmupStaysBoundedForLaunchAndVisibleRows() {
+        XCTAssertEqual(SystemSettingsNativeIconResolver.catalogWorkerLimit, 2)
+        XCTAssertEqual(SystemSettingsNativeIconResolver.interactiveWorkerLimit, 4)
+        XCTAssertEqual(LauncherSearchLimits.iconPrewarmCap, 16)
+        XCTAssertLessThan(LauncherSearchLimits.iconPrewarmCap, LauncherSearchLimits.resultSetCap)
+        XCTAssertLessThan(
+            SystemSettingsNativeIconResolver.catalogWorkerLimit,
+            SystemSettingsNativeIconResolver.interactiveWorkerLimit
+        )
+    }
+
     func testEmptyExtensionIndexIsRetriedThenSuccessfulIndexIsReused() async {
         let builder = RetryingSettingsIndexBuilder()
         let index = SystemSettingsExtensionIndex(indexBuilder: { roots in
@@ -281,7 +292,7 @@ final class IconCacheTests: XCTestCase {
         )
     }
 
-    func testResolverPublishesIconsInRequestOrderBeforeReturning() async throws {
+    func testResolverPublishesEveryIconBeforeReturning() async throws {
         let requests = SystemSettingsIconRequestMapper.requests(for: SystemSettingsTestFixtures.entries)
         final class StreamedKeys: @unchecked Sendable {
             var values: [String] = []
@@ -295,7 +306,8 @@ final class IconCacheTests: XCTestCase {
             XCTAssertEqual(icon.image.size, NSSize(width: 40, height: 40))
         }
 
-        XCTAssertEqual(streamed.values, requests.map(\.iconKey))
+        XCTAssertEqual(Set(streamed.values), Set(requests.map(\.iconKey)))
+        XCTAssertEqual(streamed.values.count, requests.count)
         XCTAssertEqual(Set(resolution.iconsByKey.keys), Set(streamed.values))
     }
 
@@ -461,34 +473,97 @@ final class IconCacheTests: XCTestCase {
         XCTAssertEqual(store.resolutionAttemptCount, 1)
     }
 
-    func testSettingsFallbackIsTemplateWithoutABorderedTile() throws {
+    func testVisibleSettingsLookupIsNotBlockedByCatalogPrewarm() {
+        let store = SystemSettingsNativeIconStore { _, _ in
+            await Task.yield()
+            return SystemSettingsNativeIconResolution(
+                iconsByKey: [:],
+                extensionIndexSucceeded: true
+            )
+        }
+        let cache = IconCache(systemSettingsIconStore: store, backingScale: 2)
+        let visible = SystemSettingsTestFixtures.entries[0]
+
+        cache.prewarm(SystemSettingsTestFixtures.entries)
+        XCTAssertEqual(store.resolutionAttemptCount, 1)
+        _ = cache.image(for: visible)
+        XCTAssertEqual(
+            store.resolutionAttemptCount,
+            2,
+            "Visible Settings rows must start immediately instead of waiting for catalog prewarm"
+        )
+    }
+
+    func testUncachedSettingsWaitStateIsNotAnSFSymbolTile() throws {
         _ = NSApplication.shared
         let cache = IconCache(startsNativeIconResolution: false)
         let entry = SystemSettingsTestFixtures.entries[0]
         cache.prewarm([entry], resolveNativeSettings: false)
         let icon = cache.image(for: entry)
 
-        XCTAssertTrue(icon.isTemplate)
+        XCTAssertFalse(icon.isTemplate)
         XCTAssertEqual(icon.size, NSSize(width: 40, height: 40))
-        XCTAssertLessThanOrEqual(IconCache.boundedImageCost(icon), 80 * 80 * 4)
-
-        let bitmap = try XCTUnwrap(
-            icon.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
-            "Could not inspect Settings fallback"
+        XCTAssertNotEqual(
+            icon.tiffRepresentation,
+            IconCache.actionTemplateIcon(
+                symbolCandidates: ["gearshape"],
+                accessibilityDescription: entry.title
+            ).tiffRepresentation
         )
-        for point in [
-            NSPoint(x: 0, y: 0),
-            NSPoint(x: bitmap.pixelsWide - 1, y: 0),
-            NSPoint(x: 0, y: bitmap.pixelsHigh - 1),
-            NSPoint(x: bitmap.pixelsWide - 1, y: bitmap.pixelsHigh - 1),
-        ] {
-            XCTAssertEqual(
-                bitmap.colorAt(x: Int(point.x), y: Int(point.y))?.alphaComponent ?? 1,
-                0,
-                accuracy: 0.001,
-                "Settings fallback contains a custom tile/border"
+        try assertTransparentCorners(icon, message: "Settings wait-state contains a custom tile/border")
+    }
+
+    func testProductionWallpaperWaitStateIsNotAnSFSymbolTile() throws {
+        _ = NSApplication.shared
+        let cache = IconCache(startsNativeIconResolution: false)
+        let entry = SearchEntry(
+            id: "setting:com.apple.Wallpaper-Settings.extension",
+            kind: .systemSetting,
+            title: "Wallpaper",
+            iconKey: "setting:com.apple.Wallpaper-Settings.extension",
+            target: .setting(
+                route: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
             )
-        }
+        )
+        cache.prewarm([entry], resolveNativeSettings: false)
+        let icon = cache.image(for: entry)
+
+        XCTAssertFalse(icon.isTemplate)
+        XCTAssertEqual(icon.size, NSSize(width: 40, height: 40))
+        XCTAssertNotEqual(
+            icon.tiffRepresentation,
+            IconCache.actionTemplateIcon(
+                symbolCandidates: ["photo.on.rectangle.angled", "gearshape"],
+                accessibilityDescription: entry.title
+            ).tiffRepresentation
+        )
+        try assertTransparentCorners(icon, message: "Wallpaper wait-state contains a custom tile/border")
+    }
+
+    func testUncachedApplicationWaitStateIsNotABorderedAppTile() throws {
+        _ = NSApplication.shared
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let cache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { _, _ in
+            _ = gate.wait(timeout: .now() + 5)
+            return nil
+        })
+        let entry = SearchEntry(
+            id: "app:/Applications/Pending.app",
+            kind: .application,
+            title: "Pending",
+            iconKey: "/Applications/Pending.app",
+            target: .application(path: "/Applications/Pending.app", bundleIdentifier: nil)
+        )
+        let icon = cache.image(for: entry)
+
+        XCTAssertFalse(icon.isTemplate)
+        XCTAssertEqual(icon.size, NSSize(width: 40, height: 40))
+        XCTAssertNotEqual(
+            icon.tiffRepresentation,
+            NSImage(systemSymbolName: "app", accessibilityDescription: nil)?.tiffRepresentation
+        )
+        try assertTransparentCorners(icon, message: "Application wait-state contains a custom tile/border")
     }
 
     func testMultipleIconCachesStartOneSharedResolutionAfterCatalogPrewarm() {
@@ -506,8 +581,9 @@ final class IconCacheTests: XCTestCase {
         second.prewarm(SystemSettingsTestFixtures.entries)
         XCTAssertEqual(store.resolutionAttemptCount, 1)
         _ = first.image(for: SystemSettingsTestFixtures.entries[0])
+        XCTAssertEqual(store.resolutionAttemptCount, 2)
         _ = second.image(for: SystemSettingsTestFixtures.entries[0])
-        XCTAssertEqual(store.resolutionAttemptCount, 1)
+        XCTAssertEqual(store.resolutionAttemptCount, 2)
     }
 
     func testMissingPreferredBadgeSymbolUsesOrderedSemanticFallback() throws {
@@ -618,6 +694,11 @@ final class IconCacheTests: XCTestCase {
                 iconView.contentTintColor?.isEqual(NSColor.alternateSelectedControlTextColor) == true,
                 "Selected \(mode) action icon must use semantic selected text color"
             )
+            XCTAssertTrue(iconView.allowsVibrancy, "Action templates should remain vibrant")
+            XCTAssertFalse(
+                iconView.wantsLayer,
+                "Template icons must stay in the HUD vibrancy path"
+            )
         }
 
         let fullColorIcon = NSImage(size: NSSize(width: 40, height: 40))
@@ -636,6 +717,86 @@ final class IconCacheTests: XCTestCase {
             theme: theme
         )
         XCTAssertNil(iconView.contentTintColor, "Full-color native icons must not be recolored")
+        XCTAssertTrue(
+            iconView.wantsLayer,
+            "Native artwork must composite on its own layer over the HUD"
+        )
+        XCTAssertFalse(iconView.allowsVibrancy)
+    }
+
+    func testSelectedSettingsRowKeepsNativePaneArtInsteadOfWhiteSymbol() throws {
+        _ = NSApplication.shared
+        let entry = SearchEntry(
+            id: "setting:com.apple.Wallpaper-Settings.extension",
+            kind: .systemSetting,
+            title: "Wallpaper",
+            iconKey: "setting:com.apple.Wallpaper-Settings.extension",
+            target: .setting(
+                route: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
+            )
+        )
+        let native = try XCTUnwrap(
+            SystemSettingsNativeIconResolver.materializeIcon(
+                at: URL(fileURLWithPath: "/System/Library/ExtensionKit/Extensions/Wallpaper.appex"),
+                context: IconRenderContext(appearance: .dark, pointSize: 50, backingScale: 2)
+            )
+        ).image
+        XCTAssertFalse(native.isTemplate)
+
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .liquidGlass),
+            reducedTransparency: false,
+            increasedContrast: false,
+            resolvedSystemDark: true
+        )
+        let row = ResultRowView()
+        row.appearance = theme.appearance
+        row.configure(
+            result: RankedResult(entry: entry, score: 1),
+            icon: native,
+            confirmation: false,
+            row: 0,
+            selected: true,
+            theme: theme
+        )
+        row.backgroundStyle = .emphasized
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+
+        XCTAssertEqual(iconView.cell?.backgroundStyle, .normal)
+        XCTAssertNil(iconView.contentTintColor)
+        XCTAssertFalse(iconView.allowsVibrancy)
+        XCTAssertTrue(iconView.wantsLayer)
+        XCTAssertFalse(iconView.image?.isTemplate ?? true)
+        XCTAssertNotEqual(
+            iconView.image?.tiffRepresentation,
+            NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)?.tiffRepresentation
+        )
+        XCTAssertNotEqual(
+            iconView.image?.tiffRepresentation,
+            IconCache.actionTemplateIcon(
+                symbolCandidates: ["photo.on.rectangle.angled", "gearshape"],
+                accessibilityDescription: entry.title
+            ).tiffRepresentation
+        )
+        let bitmap = try renderedMinimalIconBitmap(try XCTUnwrap(iconView.image))
+        XCTAssertNotNil(nonTransparentBounds(in: bitmap), "Native Wallpaper pane art was flattened away")
+
+        row.configure(
+            result: RankedResult(entry: entry, score: 1),
+            icon: native,
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        row.backgroundStyle = .normal
+        XCTAssertFalse(iconView.allowsVibrancy)
+        XCTAssertTrue(
+            iconView.wantsLayer,
+            "Unselected native icons must not draw into the row's transparent HUD layer"
+        )
+        XCTAssertNil(iconView.contentTintColor)
+        XCTAssertEqual(iconView.cell?.backgroundStyle, .normal)
     }
 
     func testMinimalRowsBalanceNativeAndActionIconOpticalSizes() {
@@ -982,6 +1143,26 @@ final class IconCacheTests: XCTestCase {
         // later by a Quick Look representation.
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(callbackCount, 1)
+    }
+
+    private func assertTransparentCorners(_ icon: NSImage, message: String) throws {
+        let bitmap = try XCTUnwrap(
+            icon.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
+            "Could not inspect icon corners"
+        )
+        for point in [
+            NSPoint(x: 0, y: 0),
+            NSPoint(x: bitmap.pixelsWide - 1, y: 0),
+            NSPoint(x: 0, y: bitmap.pixelsHigh - 1),
+            NSPoint(x: bitmap.pixelsWide - 1, y: bitmap.pixelsHigh - 1),
+        ] {
+            XCTAssertEqual(
+                bitmap.colorAt(x: Int(point.x), y: Int(point.y))?.alphaComponent ?? 1,
+                0,
+                accuracy: 0.001,
+                message
+            )
+        }
     }
 
     private func pixelData(_ icon: MaterializedSystemSettingsIcon) -> Data {

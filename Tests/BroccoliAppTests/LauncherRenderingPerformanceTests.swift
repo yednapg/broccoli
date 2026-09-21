@@ -77,25 +77,27 @@ final class LauncherRenderingPerformanceTests: XCTestCase {
         let cache = IconCache(systemSettingsIconStore: store, backingScale: 2)
         let application = LauncherPreviewFixture.standard.results[0].entry
         let pane = LauncherPreviewFixture.standard.results[1].entry
-        let loaded = expectation(description: "Application icon prepared")
-        cache.onIconLoaded = { key in if key == application.iconKey { loaded.fulfill() } }
-        cache.prewarm([application, pane])
-        _ = cache.image(for: application)
-        await fulfillment(of: [loaded], timeout: 5)
-        cache.onIconLoaded = nil
+        let context = LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40, backingScale: 2)
+        cache.prewarm([application, pane], context: context)
+        _ = cache.image(for: application, context: context)
+        _ = cache.image(for: pane, context: context)
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while store.cachedIcon(for: pane.iconKey) == nil, ContinuousClock.now < deadline {
+        while ContinuousClock.now < deadline {
+            let applicationReady = cache.image(for: application, context: context).representations.contains {
+                ($0 as? NSBitmapImageRep)?.pixelsWide ?? 0 >= 70
+            }
+            let paneReady = store.cachedIcon(for: pane.iconKey, context: context) != nil
+            if applicationReady && paneReady { break }
             try await Task.sleep(for: .milliseconds(5))
         }
-        XCTAssertNotNil(store.cachedIcon(for: pane.iconKey))
+        XCTAssertNotNil(store.cachedIcon(for: pane.iconKey, context: context))
         measureSamples("cached native application lookup (1000)", count: 80) {
-            for _ in 0..<1_000 { _ = cache.image(for: application) }
+            for _ in 0..<1_000 { _ = cache.image(for: application, context: context) }
         }
         measureSamples("cached native pane lookup (1000)", count: 80) {
-            for _ in 0..<1_000 { _ = cache.image(for: pane) }
+            for _ in 0..<1_000 { _ = cache.image(for: pane, context: context) }
         }
         let requests = SystemSettingsIconRequestMapper.requests(for: [pane])
-        let context = LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40, backingScale: 2)
         var samples: [Double] = []
         for iteration in 0..<50 {
             let start = ContinuousClock.now

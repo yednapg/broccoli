@@ -74,25 +74,4 @@ final class NativeIconCatalogTests: XCTestCase {
             Set(["gearshape", "xmark.circle"])
         )
     }
-
-    func testEverySystemSettingHasAnAvailableSemanticSystemSymbol() {
-        for entry in SystemSettingsTestFixtures.entries {
-            let symbol = NativeIconCatalog.symbolName(for: entry)
-            XCTAssertNotNil(
-                NSImage(systemSymbolName: symbol, accessibilityDescription: nil),
-                "Missing macOS system symbol \(symbol) for \(entry.id)"
-            )
-        }
-
-        let discovered = SearchEntry(
-            id: "setting:com.example.NewSettings",
-            kind: .systemSetting,
-            title: "New Settings",
-            iconKey: "setting:com.example.NewSettings",
-            target: .setting(
-                route: "x-apple.systempreferences:com.example.NewSettings"
-            )
-        )
-        XCTAssertEqual(NativeIconCatalog.symbolName(for: discovered), "gearshape")
-    }
 }

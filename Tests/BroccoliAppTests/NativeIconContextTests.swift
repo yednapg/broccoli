@@ -118,6 +118,111 @@ final class NativeIconContextTests: XCTestCase {
         XCTAssertEqual(counts.withLock { $0[dark] }, 2)
     }
 
+    func testInteractiveApplicationLookupPromotesInFlightPrewarmAndPublishesOnce() async throws {
+        let prewarmIcon = try bitmap(.red)
+        let interactiveIcon = try bitmap(.blue)
+        let prewarmGate = DispatchSemaphore(value: 0)
+        defer { prewarmGate.signal() }
+        let started = Mutex(0)
+        let published = Mutex(0)
+        let cache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { _, _ in
+            let count = started.withLock { $0 += 1; return $0 }
+            if count == 1 {
+                _ = prewarmGate.wait(timeout: .now() + 5)
+                return prewarmIcon
+            }
+            return interactiveIcon
+        })
+        let entry = applicationEntry(path: "/Applications/Promote.app")
+        cache.onNativeIconLoaded = { key, _ in
+            guard key == entry.iconKey else { return }
+            published.withLock { $0 += 1 }
+        }
+
+        cache.prewarm([entry], context: light)
+        try await waitUntil { started.withLock { $0 == 1 } }
+        let start = ContinuousClock.now
+        _ = cache.image(for: entry, context: light)
+        try await waitUntil { cache.image(for: entry, context: self.light) === interactiveIcon.image }
+        let elapsed = start.duration(to: .now)
+        let elapsedMilliseconds = Double(elapsed.components.seconds) * 1_000
+            + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+        print(String(
+            format: "ICON promoted application load: %.2f ms (prewarm still gated)",
+            elapsedMilliseconds
+        ))
+        XCTAssertEqual(started.withLock { $0 }, 2)
+        XCTAssertEqual(published.withLock { $0 }, 1)
+        XCTAssertLessThan(elapsedMilliseconds, 400)
+
+        prewarmGate.signal()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(cache.image(for: entry, context: light) === interactiveIcon.image)
+        XCTAssertEqual(published.withLock { $0 }, 1)
+    }
+
+    func testVisibleApplicationLoadDoesNotWaitForAGatedCatalogPrewarm() async throws {
+        let blockedIcon = try bitmap(.red)
+        let visibleIcon = try bitmap(.blue)
+        let blockedGate = DispatchSemaphore(value: 0)
+        defer { blockedGate.signal() }
+        let started = Mutex<[String]>([])
+        let cache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { url, _ in
+            started.withLock { $0.append(url.path) }
+            if url.path == "/Applications/Blocked.app" {
+                _ = blockedGate.wait(timeout: .now() + 5)
+                return blockedIcon
+            }
+            return visibleIcon
+        })
+        let blocked = applicationEntry(path: "/Applications/Blocked.app")
+        let visible = applicationEntry(path: "/Applications/Visible.app")
+        let visibleLoaded = expectation(description: "Visible row loaded while catalog prewarm is gated")
+        cache.onNativeIconLoaded = { key, _ in
+            if key == visible.iconKey { visibleLoaded.fulfill() }
+        }
+
+        cache.prewarm([blocked, visible], context: light)
+        try await waitUntil { started.withLock { $0.contains("/Applications/Blocked.app") } }
+        let start = ContinuousClock.now
+        _ = cache.image(for: visible, context: light)
+        await fulfillment(of: [visibleLoaded], timeout: 2)
+        let elapsed = start.duration(to: .now)
+        let elapsedMilliseconds = Double(elapsed.components.seconds) * 1_000
+            + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+        print(String(
+            format: "ICON visible application load behind gated prewarm: %.2f ms",
+            elapsedMilliseconds
+        ))
+        XCTAssertTrue(cache.image(for: visible, context: light) === visibleIcon.image)
+        XCTAssertFalse(cache.image(for: blocked, context: light) === blockedIcon.image)
+        XCTAssertLessThan(elapsedMilliseconds, 400)
+        blockedGate.signal()
+    }
+
+    func testProductionSettingsPaneNotifiesWhenNativeIconLoads() async throws {
+        _ = NSApplication.shared
+        let entry = SearchEntry(
+            id: "setting:com.apple.LoginItems-Settings.extension",
+            kind: .systemSetting,
+            title: "Login Items",
+            iconKey: "setting:com.apple.LoginItems-Settings.extension",
+            target: .setting(
+                route: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+            )
+        )
+        let context = IconRenderContext(appearance: .dark, pointSize: 50, backingScale: 2)
+        let store = SystemSettingsNativeIconStore()
+        let cache = IconCache(systemSettingsIconStore: store, backingScale: 2)
+        _ = cache.image(for: entry, context: context)
+        try await waitUntil {
+            cache.image(for: entry, context: context).size == NSSize(width: 50, height: 50)
+        }
+        let native = cache.image(for: entry, context: context)
+        XCTAssertFalse(native.isTemplate)
+        XCTAssertEqual(native.size, NSSize(width: 50, height: 50))
+    }
+
     func testNativeMaterializationUsesRequestedSizeScaleAndAppearance() throws {
         _ = NSApplication.shared
         let url = URL(fileURLWithPath: "/System/Applications/System Settings.app")
@@ -154,6 +259,139 @@ final class NativeIconContextTests: XCTestCase {
         tiny.insert(icon, for: light.cacheKey(for: "oversize"))
         XCTAssertEqual(tiny.cost, 0)
         XCTAssertNil(tiny.image(for: light.cacheKey(for: "oversize")))
+    }
+
+    /// The convoy fix: a warmup that has not started yet is promoted, not duplicated. Before
+    /// this, a visible row materialized artwork the catalog warmup was already going to
+    /// produce, so both competed for the same shared AppKit appearance state.
+    func testVisibleRowPromotesAQueuedWarmupInsteadOfMaterializingTwice() async throws {
+        let icon = try bitmap(.green)
+        let gate = DispatchSemaphore(value: 0)
+        defer { for _ in 0..<8 { gate.signal() } }
+        let started = Mutex<[String]>([])
+        let cache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { url, _ in
+            started.withLock { $0.append(url.path) }
+            // Occupy both warmup workers so the entry under test stays queued.
+            if url.path.hasPrefix("/Applications/Filler") { _ = gate.wait(timeout: .now() + 5) }
+            return icon
+        })
+        let fillers = (0..<4).map { applicationEntry(path: "/Applications/Filler\($0).app") }
+        let queued = applicationEntry(path: "/Applications/Queued.app")
+        let loaded = expectation(description: "Promoted artwork published")
+        cache.onNativeIconLoaded = { key, _ in if key == queued.iconKey { loaded.fulfill() } }
+
+        cache.prewarm(fillers + [queued], context: light)
+        try await waitUntil { started.withLock { $0.count >= 2 } }
+        XCTAssertFalse(started.withLock { $0.contains(queued.iconKey) })
+
+        _ = cache.image(for: queued, context: light)
+        for _ in 0..<8 { gate.signal() }
+        await fulfillment(of: [loaded], timeout: 5)
+
+        XCTAssertEqual(
+            started.withLock { $0.filter { $0 == queued.iconKey }.count },
+            1,
+            "A queued warmup must be promoted, never materialized a second time"
+        )
+    }
+
+    /// Icon Services can answer a cold lookup with its generic application tile. That answer
+    /// must not be persisted or treated as final, and a resolved icon must never be replaced
+    /// by a later generic one.
+    func testGenericPlaceholderArtworkIsRetriedAndNeverOverwritesResolvedArtwork() async throws {
+        let placeholder = try bitmap(.gray).markedProvisional()
+        let resolved = try bitmap(.blue)
+        let attempt = Mutex(0)
+        let cache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { _, _ in
+            let count = attempt.withLock { $0 += 1; return $0 }
+            return count == 1 ? placeholder : resolved
+        })
+        let entry = applicationEntry(path: "/Applications/Provisional.app")
+
+        _ = cache.image(for: entry, context: light)
+        try await waitUntil { cache.image(for: entry, context: self.light) === placeholder.image }
+
+        cache.refreshProvisionalIcons([entry], context: light)
+        try await waitUntil { cache.image(for: entry, context: self.light) === resolved.image }
+
+        // A further generic answer must not undo the resolved artwork.
+        let regressed = try bitmap(.gray).markedProvisional()
+        let regressingCache = IconCache(startsNativeIconResolution: false, applicationIconOperation: { _, _ in
+            regressed
+        })
+        _ = regressingCache.image(for: entry, context: light)
+        try await waitUntil { regressingCache.image(for: entry, context: self.light) === regressed.image }
+        regressingCache.refreshProvisionalIcons([entry], context: light)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(regressingCache.image(for: entry, context: light) === regressed.image)
+        XCTAssertFalse(placeholder.isProvisional == false)
+    }
+
+    func testPersistedArtworkSurvivesAColdCacheAndIgnoresPlaceholders() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("broccoli-icon-disk-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk = NativeIconDiskCache(directory: directory)
+        let key = NativeIconDiskCache.key(
+            forContentTypeIdentifier: "com.apple.graphic-icon.battery",
+            context: light
+        )
+        XCTAssertNil(disk.icon(for: key, pointSize: light.pointSize))
+
+        let resolved = try bitmap(.blue)
+        disk.store(resolved, for: key)
+        let restored = try XCTUnwrap(disk.icon(for: key, pointSize: light.pointSize))
+        XCTAssertEqual(restored.pixelsWide, resolved.pixelsWide)
+        XCTAssertEqual(restored.image.size.width, light.pointSize)
+        XCTAssertFalse(restored.isProvisional)
+
+        let placeholderKey = NativeIconDiskCache.key(
+            forContentTypeIdentifier: "com.apple.graphic-icon.energy",
+            context: light
+        )
+        disk.store(try bitmap(.gray).markedProvisional(), for: placeholderKey)
+        XCTAssertNil(
+            disk.icon(for: placeholderKey, pointSize: light.pointSize),
+            "Generic placeholder artwork must never be persisted"
+        )
+    }
+
+    func testColdApplicationLookupReadsDiskWithoutCallingIconServices() throws {
+        _ = NSApplication.shared
+        let path = "/System/Library/CoreServices/Finder.app"
+        let context = IconRenderContext(appearance: .dark, pointSize: 50, backingScale: 2)
+        XCTAssertNotNil(
+            SystemSettingsNativeIconResolver.materializeIcon(
+                at: URL(fileURLWithPath: path),
+                context: context
+            )
+        )
+
+        let cache = IconCache(startsNativeIconResolution: false)
+        let entry = applicationEntry(path: path)
+
+        let started = ContinuousClock.now
+        let image = cache.image(for: entry, context: context)
+        let elapsed = started.duration(to: .now)
+        let elapsedMilliseconds = Double(elapsed.components.seconds) * 1_000
+            + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+        print(String(format: "ICON cold disk-backed Finder lookup: %.2f ms", elapsedMilliseconds))
+
+        XCTAssertEqual(image.size, NSSize(width: 50, height: 50))
+        XCTAssertFalse(image.isTemplate)
+        XCTAssertLessThan(elapsedMilliseconds, 25)
+        XCTAssertTrue(cache.image(for: entry, context: context) === image)
+    }
+
+    private func applicationEntry(path: String) -> SearchEntry {
+        SearchEntry(
+            id: "app:\(path)",
+            kind: .application,
+            title: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
+            iconKey: path,
+            target: .application(path: path, bundleIdentifier: nil)
+        )
     }
 
     private func bitmap(_ color: NSColor) throws -> MaterializedSystemSettingsIcon {
