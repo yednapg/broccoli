@@ -19,8 +19,12 @@ struct AppearanceSettingsPane: View {
         Group {
             SpotlightSettingsCard("Appearance") {
                 SpotlightSettingsRow(title: "Launcher Design") {
-                    LauncherDesignChooser(selection: appearanceBinding(\.design))
-                        .frame(width: LauncherDesignChooserLayout.pickerWidth)
+                    LauncherDesignChooser(
+                        selection: appearanceBinding(\.design),
+                        appearance: preferences.appearance,
+                        renderer: previewRenderer
+                    )
+                    .frame(width: LauncherDesignChooserLayout.pickerWidth)
                 }
                 SpotlightSettingsRow(title: "Color Mode") {
                     Picker("Color Mode", selection: appearanceBinding(\.mode)) {

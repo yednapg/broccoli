@@ -420,29 +420,6 @@ struct ActionGroupCard: View {
 
 }
 
-enum LauncherDesignChooserLayout {
-    static let designs: [LauncherDesign] = [.liquidGlass, .minimal]
-    static let pickerWidth: CGFloat = 230
-}
-
-struct LauncherDesignChooser: View {
-    @Binding var selection: LauncherDesign
-
-    var body: some View {
-        Picker("Launcher Design", selection: $selection) {
-            ForEach(LauncherDesignChooserLayout.designs) { design in
-                Text(design.title)
-                    .tag(design)
-            }
-        }
-        .pickerStyle(.palette)
-        .labelsHidden()
-        .frame(maxWidth: .infinity)
-        .accessibilityLabel("Launcher Design")
-        .accessibilityValue(selection.title)
-    }
-}
-
 struct ShortcutRecorderRepresentable: NSViewRepresentable {
     let configuration: HotKeyConfiguration
     var recordingRequest = 0

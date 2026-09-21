@@ -16,7 +16,7 @@ Broccoli intentionally uses both AppKit and SwiftUI. AppKit is the right owner f
 
 The launcher is the heart of the app. It is keyboard-first and intentionally compact. Opening it should feel immediate. Results should not make the window twitch, jump, or leave awkward empty space.
 
-Keep its measurements in `LauncherThemeController.swift` instead of fixing spacing locally in several views. The real launcher and the preview in Settings should use the same measurements and rendering decisions. If one changes, check the other.
+Keep its measurements in `LauncherThemeController.swift` instead of fixing spacing locally in several views. The real launcher and the preview in Settings should use the same measurements and rendering decisions. If one changes, check the other. Appearance shows production mini-previews of each launcher design.
 
 The search field should stay optically aligned when the user starts typing. Result growth should happen in complete rows. Selection, focus, and inactive states should remain easy to read in Light and Dark appearances.
 

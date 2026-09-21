@@ -1768,10 +1768,54 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(detailItem.maximumThickness, SettingsShellLayout.detailMinimumWidth)
     }
 
-    func testLauncherDesignChooserUsesCompactInsetGeometry() {
+    func testLauncherDesignChooserShowsProductionMiniPreviews() {
         XCTAssertEqual(LauncherDesign.allCases, [.minimal, .liquidGlass])
         XCTAssertEqual(LauncherDesignChooserLayout.designs, [.liquidGlass, .minimal])
-        XCTAssertEqual(LauncherDesignChooserLayout.pickerWidth, 230)
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.designs.map(\.title),
+            ["Liquid Glass", "Minimal"]
+        )
+        XCTAssertEqual(LauncherDesignChooserLayout.accessibilityLabel, "Launcher Design")
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.pickerWidth,
+            LauncherDesignChooserLayout.thumbnailWidth * 2
+                + LauncherDesignChooserLayout.thumbnailSpacing,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.neighbor(of: .liquidGlass, offset: 1),
+            .minimal
+        )
+        XCTAssertNil(LauncherDesignChooserLayout.neighbor(of: .liquidGlass, offset: -1))
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.neighbor(of: .minimal, offset: -1),
+            .liquidGlass
+        )
+        XCTAssertNil(LauncherDesignChooserLayout.neighbor(of: .minimal, offset: 1))
+
+        _ = NSApplication.shared
+        var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
+        preferences.visibleResultCount = 3
+        let descriptor = LauncherThemeController().descriptor(for: preferences)
+        let productionSize = CGSize(
+            width: descriptor.width,
+            height: descriptor.panelHeight(
+                resultCount: LauncherPreviewFixture.standard.results.count
+            )
+        )
+        let fitted = LauncherDesignChooserLayout.fittedImageSize(for: productionSize)
+        XCTAssertEqual(
+            fitted.width / fitted.height,
+            productionSize.width / productionSize.height,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.thumbnailHeight,
+            fitted.height + LauncherDesignChooserLayout.thumbnailPadding * 2,
+            accuracy: 0.001
+        )
+        XCTAssertLessThan(fitted.width, productionSize.width)
+        XCTAssertLessThan(fitted.height, productionSize.height)
     }
 
     func testSettingsSidebarUsesCherryStyleFilledSymbols() {
