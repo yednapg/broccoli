@@ -26,11 +26,10 @@ struct ActionsSettingsPane: View {
                     }
                 }
             }
-            ActionGroupCard(
-                title: "Power",
-                subtitle: "These commands require a second Return within five seconds.",
-                definitions: actionDefinitions(prefixes: ["power."]),
-                preferences: preferences
+            ActionGroupCard(title: "Power", definitions: actionDefinitions(prefixes: ["power."]), preferences: preferences)
+            SettingsFootnote(
+                symbol: "exclamationmark.circle",
+                text: ActionSettingsCopy.powerWarning
             )
             SettingsFootnote(
                 symbol: "lock.shield",

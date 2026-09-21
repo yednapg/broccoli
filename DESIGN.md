@@ -71,6 +71,8 @@ Each pane has a clear job:
 
 Do not move a control to another pane as cleanup. New controls should join the pane and card that already own the behavior. If no pane clearly owns it, decide the information architecture before writing UI code.
 
+General presents one Global Shortcut row; clicking the displayed shortcut starts recording, and registration status is that row’s subtitle. Shortcut troubleshooting is an error-only path. The Calculator Supported card keeps capabilities and the example in one padded child. Grouped Settings surfaces clip to the 12-point rounded rect. The Clipboard History off banner is notice-only; enabling still uses the existing toggle and consent sheet. Power actions describe a second return in sentence case, and that warning is a footnote under the Power card. About shows identity, version, Local Only, diagnostics, and the copyright line without promotional taglines.
+
 ## Interaction and motion
 
 Everything important should work without a pointer. Keep normal macOS focus behavior and normal Return and Escape semantics. Hover may help, but it cannot be the only way to discover or use something.

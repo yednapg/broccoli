@@ -8,8 +8,8 @@ struct SettingsSearchItem: Identifiable {
     let terms: String
 
     static let all: [Self] = [
-        .init(id: "shortcut", title: "Global Shortcut", subtitle: "General", destination: .section(.general), terms: "hotkey command space conflict registered"),
-        .init(id: "shortcut-help", title: "Shortcut Troubleshooting", subtitle: "General", destination: .shortcutTroubleshooting, terms: "spotlight conflict keyboard shortcuts recover"),
+        .init(id: "shortcut", title: "Global Shortcut", subtitle: "General", destination: .section(.general), terms: "hotkey command space registered unavailable"),
+        .init(id: "shortcut-help", title: "Shortcut Troubleshooting", subtitle: "General", destination: .shortcutTroubleshooting, terms: "spotlight conflict keyboard shortcuts recover trouble invalid unavailable having shortcut"),
         .init(id: "login", title: "Launch at Login", subtitle: "General", destination: .section(.general), terms: "startup automatic sign in"),
         .init(id: "design", title: "Launcher Design", subtitle: "Appearance", destination: .section(.appearance), terms: "minimal liquid glass theme"),
         .init(id: "launcher-preview", title: "Launcher Preview", subtitle: "Appearance", destination: .launcherPreview, terms: "real screenshot fixture preview"),

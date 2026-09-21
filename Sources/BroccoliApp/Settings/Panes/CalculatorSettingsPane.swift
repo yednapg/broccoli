@@ -45,26 +45,24 @@ struct CalculatorSettingsPane: View {
                 .disabled(!preferences.calculator.enabled)
             }
             SpotlightSettingsCard("Supported") {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 210), alignment: .leading)],
-                    alignment: .leading,
-                    spacing: 2
-                ) {
-                    calculatorCapability("Arithmetic", symbol: "plus.forwardslash.minus")
-                    calculatorCapability("Scientific Functions", symbol: "function")
-                    calculatorCapability("Length & Area", symbol: "ruler")
-                    calculatorCapability("Volume & Mass", symbol: "cube")
-                    calculatorCapability("Temperature & Time", symbol: "thermometer.medium")
-                    calculatorCapability("Speed & Angle", symbol: "speedometer")
-                    calculatorCapability("Data Size", symbol: "externaldrive")
+                VStack(alignment: .leading, spacing: 8) {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 210), alignment: .leading)],
+                        alignment: .leading,
+                        spacing: 2
+                    ) {
+                        calculatorCapability("Arithmetic", symbol: "plus.forwardslash.minus")
+                        calculatorCapability("Scientific Functions", symbol: "function")
+                        calculatorCapability("Length & Area", symbol: "ruler")
+                        calculatorCapability("Volume & Mass", symbol: "cube")
+                        calculatorCapability("Temperature & Time", symbol: "thermometer.medium")
+                        calculatorCapability("Speed & Angle", symbol: "speedometer")
+                        calculatorCapability("Data Size", symbol: "externaldrive")
+                    }
+                    ExamplePill("10 km in mi", detail: "6.21371 mi")
                 }
-                HStack {
-                    Text("10 km in mi").font(.system(size: 12, design: .monospaced))
-                    Spacer()
-                    Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                    Text("6.21371 mi").font(.system(size: 12, design: .monospaced))
-                }
-                .frame(height: 44)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
             SettingsFootnote(symbol: "network.slash", text: "All calculations run offline.")
         }
