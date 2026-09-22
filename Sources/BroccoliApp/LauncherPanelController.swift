@@ -13,15 +13,22 @@ private enum SearchFieldCommand {
 }
 
 enum LauncherNumericShortcut {
-    static func row(for characters: String) -> Int? {
-        guard let number = Int(characters) else { return nil }
-        if number == 0 { return 9 }
-        return (2...9).contains(number) ? number - 1 : nil
+    /// Command-number shortcuts use the digit keys. Visible Results can be 10, but there is
+    /// no tenth digit, so the badges and the key equivalents both stop at 9.
+    static let maximum = 9
+
+    static func limit(visibleResultCount: Int) -> Int {
+        min(maximum, max(0, visibleResultCount))
     }
 
-    static func label(forRow row: Int) -> String {
-        if row == 0 { return "↩" }
-        if row == 9 { return "⌘0" }
+    static func row(for characters: String, visibleResultCount: Int) -> Int? {
+        guard let number = Int(characters),
+              (1...limit(visibleResultCount: visibleResultCount)).contains(number) else { return nil }
+        return number - 1
+    }
+
+    static func label(forRow row: Int, visibleResultCount: Int) -> String? {
+        guard (0..<limit(visibleResultCount: visibleResultCount)).contains(row) else { return nil }
         return "⌘\(row + 1)"
     }
 }
@@ -38,7 +45,7 @@ struct LauncherScrollAccumulator {
         if began { accumulatedDeltaY = 0 }
         accumulatedDeltaY += deltaY
         let threshold: CGFloat = precise ? 12 : 1
-        let maximumSteps = precise ? 3 : 1
+        let maximumSteps = 1
         var moves: [Bool] = []
         while abs(accumulatedDeltaY) >= threshold, moves.count < maximumSteps {
             let movesUp = accumulatedDeltaY > 0
@@ -48,6 +55,25 @@ struct LauncherScrollAccumulator {
         accumulatedDeltaY = min(threshold * 2, max(-threshold * 2, accumulatedDeltaY))
         if ended { accumulatedDeltaY = 0 }
         return moves
+    }
+}
+
+/// Holding an arrow walks the list. The gap is only wide enough to stop the fastest
+/// system repeat from skipping rows; a normal hold keeps the user's key-repeat pace.
+struct LauncherArrowRepeatGate {
+    private(set) var lastMove: ContinuousClock.Instant?
+    var interval: Duration = .milliseconds(40)
+
+    mutating func allow(isRepeat: Bool, now: ContinuousClock.Instant = .now) -> Bool {
+        if !isRepeat {
+            lastMove = now
+            return true
+        }
+        if let lastMove, lastMove.duration(to: now) < interval {
+            return false
+        }
+        lastMove = now
+        return true
     }
 }
 
@@ -174,6 +200,8 @@ enum LauncherPanelGeometry {
 
 private final class LauncherSearchField: NSTextField {
     var onCommand: ((SearchFieldCommand) -> Void)?
+    var numericShortcutLimit = LauncherNumericShortcut.maximum
+    private var arrowRepeatGate = LauncherArrowRepeatGate()
 
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "," {
@@ -186,13 +214,17 @@ private final class LauncherSearchField: NSTextField {
         }
         if event.modifierFlags.contains(.command),
            let characters = event.charactersIgnoringModifiers,
-           let row = LauncherNumericShortcut.row(for: characters) {
+           let row = LauncherNumericShortcut.row(
+               for: characters,
+               visibleResultCount: numericShortcutLimit
+           ) {
             onCommand?(.executeIndex(row))
             return
         }
         switch event.keyCode {
-        case 125: onCommand?(.down)
-        case 126: onCommand?(.up)
+        case 125, 126:
+            guard arrowRepeatGate.allow(isRepeat: event.isARepeat) else { return }
+            onCommand?(event.keyCode == 125 ? .down : .up)
         case 36, 76: onCommand?(.execute)
         case 53: onCommand?(.dismiss)
         default: super.keyDown(with: event)
@@ -921,6 +953,7 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
 private final class LauncherPanel: NSPanel {
     var onCommand: ((SearchFieldCommand) -> Void)?
+    var numericShortcutLimit = LauncherNumericShortcut.maximum
     /// Return `true` to consume the mouse-down and hand the move to Window Server.
     var onPotentialMove: ((NSEvent) -> Bool)?
 
@@ -948,7 +981,10 @@ private final class LauncherPanel: NSPanel {
         }
         if event.modifierFlags.contains(.command),
            let characters = event.charactersIgnoringModifiers,
-           let row = LauncherNumericShortcut.row(for: characters) {
+           let row = LauncherNumericShortcut.row(
+               for: characters,
+               visibleResultCount: numericShortcutLimit
+           ) {
             onCommand?(.executeIndex(row))
             return true
         }
@@ -956,22 +992,17 @@ private final class LauncherPanel: NSPanel {
     }
 }
 
-/// When every result already fits the viewport, physically scrolling the table only creates
-/// a few pixels of accidental travel from AppKit's clip-view bookkeeping. Consume wheel and
-/// trackpad input in that case and turn it into deterministic selection steps. A longer
-/// result set scrolls the document so matches beyond the visible rows stay reachable.
+/// Trackpad and mouse-wheel scrolling walks the selection the same way the arrow keys do.
+/// The highlight stays inside the visible rows. Once it is on the first or last visible row,
+/// another step scrolls the list so the next match takes that same slot.
 private final class LauncherResultsScrollView: NSScrollView {
     var onSelectionStep: ((Bool) -> Void)?
     private var accumulator = LauncherScrollAccumulator()
 
     override func scrollWheel(with event: NSEvent) {
-        if canScrollDocumentVertically {
-            super.scrollWheel(with: event)
-            return
-        }
-        // A single momentum event can contain hundreds of points. Processing every implied
-        // row synchronously caused long main-thread bursts (and made an edge feel like it was
-        // still moving). Bound work per event while retaining a small residual for continuity.
+        // Momentum after the fingers lift is the system fling. Walking the highlight
+        // through that fling is what made one flick race down the list.
+        guard event.momentumPhase == [] else { return }
         let moves = accumulator.consume(
             deltaY: event.scrollingDeltaY,
             precise: event.hasPreciseScrollingDeltas,
@@ -981,11 +1012,6 @@ private final class LauncherResultsScrollView: NSScrollView {
         for movesUp in moves {
             onSelectionStep?(movesUp)
         }
-    }
-
-    private var canScrollDocumentVertically: Bool {
-        guard let documentView else { return false }
-        return documentView.frame.height > contentView.bounds.height + 0.5
     }
 }
 
@@ -1288,7 +1314,8 @@ final class ResultRowView: NSTableCellView {
         confirmation: Bool,
         row: Int,
         selected: Bool,
-        theme: LauncherThemeDescriptor
+        theme: LauncherThemeDescriptor,
+        shortcutSlot: Int? = nil
     ) {
         let usesMinimalLayout = theme.design == .minimal
         let usesLiquidGlassLayout = theme.design == .liquidGlass
@@ -1366,9 +1393,13 @@ final class ResultRowView: NSTableCellView {
                 && theme.showsSubtitles
                 && !result.entry.subtitle.isEmpty
         )
-        let showsShortcut = theme.showsShortcuts && result.entry.kind != .status
+        let shortcut = LauncherNumericShortcut.label(
+            forRow: shortcutSlot ?? row,
+            visibleResultCount: theme.visibleResultCount
+        )
+        let reservesShortcutColumn = theme.showsShortcuts && result.entry.kind != .status
         subtitleLabel.isHidden = !showsSubtitle
-        shortcutLabel.isHidden = !showsShortcut
+        shortcutLabel.isHidden = !reservesShortcutColumn
         titleTopConstraint.isActive = false
         subtitleTopConstraint.isActive = false
         subtitleBottomConstraint.isActive = false
@@ -1379,11 +1410,11 @@ final class ResultRowView: NSTableCellView {
         subtitleBottomConstraint.isActive = showsSubtitle
         textGroupCenterConstraint.isActive = showsSubtitle
         titleCenterConstraint.isActive = !showsSubtitle
-        titleToShortcutConstraint.isActive = showsShortcut
-        subtitleToShortcutConstraint.isActive = showsShortcut
-        titleToEdgeConstraint.isActive = !showsShortcut
-        subtitleToEdgeConstraint.isActive = !showsShortcut
-        shortcutLabel.stringValue = LauncherNumericShortcut.label(forRow: row)
+        titleToShortcutConstraint.isActive = reservesShortcutColumn
+        subtitleToShortcutConstraint.isActive = reservesShortcutColumn
+        titleToEdgeConstraint.isActive = !reservesShortcutColumn
+        subtitleToEdgeConstraint.isActive = !reservesShortcutColumn
+        shortcutLabel.stringValue = shortcut ?? ""
         selectionColor = theme.selectionColor
         selectedTextColor = theme.selectedTextColor
         selectedShortcutTextColor = theme.selectedShortcutTextColor
@@ -1439,6 +1470,10 @@ final class ResultRowView: NSTableCellView {
         setSelected(selected)
         setAccessibilityLabel(result.entry.title)
         setAccessibilityHelp(subtitleLabel.stringValue)
+    }
+
+    func setShortcutBadge(_ text: String?) {
+        shortcutLabel.stringValue = text ?? ""
     }
 
     func setSelected(_ selected: Bool) {
@@ -1538,7 +1573,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private let environmentProvider: @MainActor () -> LauncherAppearanceEnvironment
     private var needsPresentationIconRefresh = false
     private var lastNativeIconRefreshContext: IconRenderContext?
-    private var theme: LauncherThemeDescriptor
+    private var theme: LauncherThemeDescriptor {
+        didSet {
+            panel.numericShortcutLimit = LauncherNumericShortcut.limit(
+                visibleResultCount: theme.visibleResultCount
+            )
+        }
+    }
     private var retainedContentView: NSView?
     private var results: [RankedResult] = []
     private var inlineSuggestion: RankedResult?
@@ -1557,6 +1598,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// Liquid Glass starts as one compact search capsule. Any useful match opens one stable
     /// result viewport so a single Finder/application result is never hidden in the header.
     private var liquidResultsExpanded = false
+    private var arrowRepeatGate = LauncherArrowRepeatGate()
     /// The newest committed geometry whose motion has not started yet. Result changes coalesce
     /// here so a burst of keystrokes schedules one transition instead of one per key.
     private var pendingExpansionTarget: NSRect?
@@ -1613,6 +1655,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
+        )
+        panel.numericShortcutLimit = LauncherNumericShortcut.limit(
+            visibleResultCount: theme.visibleResultCount
         )
         super.init()
         cachedExpansionAnimationDuration = effectiveExpansionAnimationDuration
@@ -2074,7 +2119,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             confirmation: confirmationEntryID == result.entry.id,
             row: row,
             selected: tableView.selectedRow == row,
-            theme: theme
+            theme: theme,
+            shortcutSlot: row - firstFullyVisibleResultRow()
         )
         return view
     }
@@ -2104,10 +2150,10 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         doCommandBy commandSelector: Selector
     ) -> Bool {
         switch commandSelector {
-        case #selector(NSResponder.moveUp(_:)):
-            handle(.up)
-        case #selector(NSResponder.moveDown(_:)):
-            handle(.down)
+        case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveDown(_:)):
+            let movingUp = commandSelector == #selector(NSResponder.moveUp(_:))
+            guard arrowRepeatGate.allow(isRepeat: NSApp.currentEvent?.isARepeat == true) else { return true }
+            handle(movingUp ? .up : .down)
         case #selector(NSResponder.insertNewline(_:)):
             handle(NSApp.currentEvent?.modifierFlags.contains(.command) == true ? .reveal : .execute)
         case #selector(NSResponder.cancelOperation(_:)):
@@ -2289,12 +2335,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
+        // Wheel and trackpad input walks the selection instead of pixel-scrolling. The scroll
+        // view still clips the result list and reveals the next row once the highlight is
+        // already on the first or last visible slot.
+        scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.verticalScrollElasticity = .none
-        scrollView.horizontalScrollElasticity = .none
         scrollView.automaticallyAdjustsContentInsets = false
         // Bottom breathing room is already part of desiredPanelHeight. Applying it here too
         // makes the document slightly taller than the viewport and causes the visible jump.
@@ -2429,8 +2474,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             onReveal?(results[row])
         case .preferences:
             onPreferences?()
-        case .executeIndex(let row):
-            guard results.indices.contains(row), results[row].entry.kind != .status else { return }
+        case .executeIndex(let slot):
+            let row = firstFullyVisibleResultRow() + slot
+            guard slot < LauncherNumericShortcut.limit(visibleResultCount: theme.visibleResultCount),
+                  results.indices.contains(row),
+                  results[row].entry.kind != .status else { return }
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             refreshSelectionAppearance()
             onExecute?(results[row])
@@ -2558,7 +2606,50 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private func scrollSelectedRowVisible() {
         let row = tableView.selectedRow
         guard results.indices.contains(row) else { return }
-        tableView.scrollRowToVisible(row)
+        let unit = theme.rowHeight + theme.rowSpacing
+        guard unit > 0 else { return }
+        let visibleCount = max(1, theme.visibleResultCount)
+        let currentFirst = alignedFirstVisibleRow(unit: unit)
+        let targetFirst: Int
+        if row < currentFirst {
+            targetFirst = row
+        } else if row > currentFirst + visibleCount - 1 {
+            targetFirst = row - visibleCount + 1
+        } else {
+            targetFirst = currentFirst
+        }
+        let maxFirst = max(0, results.count - visibleCount)
+        let originY = CGFloat(min(max(0, targetFirst), maxFirst)) * unit
+        if abs(scrollView.contentView.bounds.origin.y - originY) > 0.5 {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: originY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+        refreshShortcutBadges()
+    }
+
+    /// ⌘1 is whichever result is in the top slot. Only the badge text changes.
+    private func refreshShortcutBadges() {
+        let first = firstFullyVisibleResultRow()
+        for row in results.indices {
+            guard let view = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ResultRowView else { continue }
+            let text = results[row].entry.kind == .status
+                ? nil
+                : LauncherNumericShortcut.label(
+                    forRow: row - first,
+                    visibleResultCount: theme.visibleResultCount
+                )
+            view.setShortcutBadge(text)
+        }
+    }
+
+    private func alignedFirstVisibleRow(unit: CGFloat) -> Int {
+        Int((scrollView.contentView.bounds.origin.y / unit).rounded())
+    }
+
+    private func firstFullyVisibleResultRow() -> Int {
+        let unit = theme.rowHeight + theme.rowSpacing
+        guard unit > 0 else { return 0 }
+        return min(max(0, alignedFirstVisibleRow(unit: unit)), max(0, results.count - 1))
     }
 
     private func updateResultsGeometry() {
