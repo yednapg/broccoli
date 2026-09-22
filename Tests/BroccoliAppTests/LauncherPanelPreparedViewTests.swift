@@ -222,8 +222,8 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
             height: theme.rowHeight
         )
         XCTAssertTrue(
-            controller.resultsVisibleRect.intersects(selectedFrame.insetBy(dx: 0, dy: 1)),
-            "Arrowing past the viewport must keep the selected row visible"
+            controller.resultsVisibleRect.contains(selectedFrame),
+            "Arrowing past the viewport must keep the whole selected row visible"
         )
 
         let scrolledOffset = controller.resultsScrollOffset
@@ -235,6 +235,72 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         controller.apply(Array(fixtures.prefix(8)))
         XCTAssertEqual(controller.resultsScrollOffset, 0, accuracy: 0.5)
         XCTAssertEqual(controller.selectedResultID, "fixture:0")
+    }
+
+    func testTrackpadScrollMovesSelectionAndThenTheList() throws {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
+        var appearance = LauncherAppearancePreferences.defaults(design: .minimal)
+        appearance.visibleResultCount = 3
+        controller.applyAppearance(appearance, force: true)
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let fixtures = (0..<8).map { index in
+            RankedResult(
+                entry: SearchEntry(
+                    id: "fixture:\(index)",
+                    kind: .application,
+                    title: "Fixture \(index)",
+                    target: .none
+                ),
+                score: 8 - index
+            )
+        }
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(fixtures)
+        controller.visibilityIsolationWindow.contentView?.layoutSubtreeIfNeeded()
+        let root = try XCTUnwrap(controller.visibilityIsolationWindow.contentView)
+        let scrollView = try XCTUnwrap(descendants(root).compactMap { $0 as? NSScrollView }.first)
+        let down = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 1,
+            wheel1: -20,
+            wheel2: 0,
+            wheel3: 0
+        ).flatMap { NSEvent(cgEvent: $0) })
+
+        XCTAssertEqual(controller.selectedResultID, "fixture:0")
+        var steps = 0
+        while controller.selectedResultRow < 3, steps < 8 {
+            let before = controller.selectedResultRow
+            scrollView.scrollWheel(with: down)
+            XCTAssertGreaterThan(
+                controller.selectedResultRow,
+                before,
+                "Scrolling down must move the highlight like the Down arrow"
+            )
+            if controller.selectedResultRow < 3 {
+                XCTAssertEqual(
+                    controller.resultsScrollOffset,
+                    0,
+                    accuracy: 0.5,
+                    "The list stays still while the highlight is inside the visible rows"
+                )
+            }
+            steps += 1
+        }
+        XCTAssertGreaterThanOrEqual(controller.selectedResultRow, 3)
+        XCTAssertGreaterThan(
+            controller.resultsScrollOffset,
+            0,
+            "Once the highlight reaches the last visible row, further scrolling moves the list"
+        )
+        let shortcuts = descendants(root)
+            .compactMap { $0 as? NSTextField }
+            .map(\.stringValue)
+            .filter { $0.hasPrefix("⌘") }
+        XCTAssertEqual(shortcuts.sorted(), ["⌘1", "⌘2", "⌘3"])
     }
 
     func testLauncherSearchAndResultsExposeVoiceOverLabels() {
@@ -445,6 +511,10 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         controller.apply(Array(fixtures.prefix(1)))
         XCTAssertTrue(controller.isResultViewportVisible)
         XCTAssertEqual(controller.currentPanelHeight, oneResultHeight)
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
     }
 }
 

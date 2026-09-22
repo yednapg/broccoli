@@ -60,26 +60,32 @@ final class LauncherModeTests: XCTestCase {
         ))
     }
 
-    func testNumericShortcutsCoverTenVisibleResults() {
-        XCTAssertNil(LauncherNumericShortcut.row(for: "1"))
-        XCTAssertEqual(LauncherNumericShortcut.row(for: "2"), 1)
-        XCTAssertEqual(LauncherNumericShortcut.row(for: "9"), 8)
-        XCTAssertEqual(LauncherNumericShortcut.row(for: "0"), 9)
-        XCTAssertNil(LauncherNumericShortcut.row(for: "x"))
-        XCTAssertEqual(LauncherNumericShortcut.label(forRow: 0), "↩")
-        XCTAssertEqual(LauncherNumericShortcut.label(forRow: 8), "⌘9")
-        XCTAssertEqual(LauncherNumericShortcut.label(forRow: 9), "⌘0")
-    }
-
-    func testMomentumScrollWorkIsBoundedAndResetAtEnd() {
+    func testScrollStepsOnceAndArrowRepeatIsPaced() {
         var accumulator = LauncherScrollAccumulator()
         XCTAssertEqual(
-            accumulator.consume(deltaY: -1_000, precise: true, began: true, ended: false),
-            [false, false, false]
+            accumulator.consume(deltaY: -1_000, precise: true, began: true, ended: false).count,
+            1
         )
-        XCTAssertLessThanOrEqual(abs(accumulator.accumulatedDeltaY), 24)
-        _ = accumulator.consume(deltaY: 0, precise: true, began: false, ended: true)
-        XCTAssertEqual(accumulator.accumulatedDeltaY, 0)
+        var gate = LauncherArrowRepeatGate()
+        let start = ContinuousClock.now
+        XCTAssertTrue(gate.allow(isRepeat: false, now: start))
+        XCTAssertFalse(gate.allow(isRepeat: true, now: start))
+        XCTAssertTrue(gate.allow(isRepeat: true, now: start.advanced(by: .milliseconds(40))))
+    }
+
+    func testNumericShortcutsFollowVisibleResultsAndStopAtNine() {
+        XCTAssertEqual(LauncherNumericShortcut.limit(visibleResultCount: 7), 7)
+        XCTAssertEqual(LauncherNumericShortcut.limit(visibleResultCount: 10), 9)
+        XCTAssertEqual(LauncherNumericShortcut.row(for: "1", visibleResultCount: 7), 0)
+        XCTAssertEqual(LauncherNumericShortcut.row(for: "7", visibleResultCount: 7), 6)
+        XCTAssertNil(LauncherNumericShortcut.row(for: "8", visibleResultCount: 7))
+        XCTAssertNil(LauncherNumericShortcut.row(for: "0", visibleResultCount: 10))
+        XCTAssertEqual(LauncherNumericShortcut.row(for: "9", visibleResultCount: 10), 8)
+        XCTAssertNil(LauncherNumericShortcut.row(for: "x", visibleResultCount: 9))
+        XCTAssertEqual(LauncherNumericShortcut.label(forRow: 0, visibleResultCount: 7), "⌘1")
+        XCTAssertEqual(LauncherNumericShortcut.label(forRow: 6, visibleResultCount: 7), "⌘7")
+        XCTAssertNil(LauncherNumericShortcut.label(forRow: 7, visibleResultCount: 7))
+        XCTAssertNil(LauncherNumericShortcut.label(forRow: 9, visibleResultCount: 10))
     }
 
     func testDisruptiveActionRequiresSecondReturnWithinFiveSeconds() {

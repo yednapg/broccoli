@@ -31,7 +31,7 @@ final class LauncherSelectionAppearanceTests: XCTestCase {
         )
         let shortcut = try XCTUnwrap(row.subviews
             .compactMap { $0 as? NSTextField }
-            .first { $0.stringValue == LauncherNumericShortcut.label(forRow: 0) })
+            .first { $0.stringValue == LauncherNumericShortcut.label(forRow: 0, visibleResultCount: theme.visibleResultCount) })
 
         row.effectiveAppearance.performAsCurrentDrawingAppearance {
             XCTAssertEqual(row.layer?.backgroundColor, theme.selectionColor.cgColor)
