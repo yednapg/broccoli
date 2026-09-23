@@ -5,7 +5,7 @@ import BroccoliCore
 /// search generation.
 enum LauncherInlineSuggestionManager {
     static func suggestion(from results: [RankedResult]) -> RankedResult? {
-        results.first { $0.entry.kind == .calculator }
+        results.first { $0.entry.id == "calculator:answer" }
     }
 
     static func displayText(for result: RankedResult, query: String) -> String {

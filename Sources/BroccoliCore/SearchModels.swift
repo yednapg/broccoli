@@ -15,7 +15,7 @@ public enum ExecutableTarget: Codable, Hashable, Sendable {
     case setting(route: String?)
     case action(id: String)
     case file(path: String, isDirectory: Bool)
-    case calculator(result: String)
+    case calculator(result: String, patternKey: String? = nil)
     case clipboardCommand
     case clipboardItem(id: String)
     case none

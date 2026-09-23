@@ -68,7 +68,7 @@ Each pane has a clear job:
 - Appearance owns launcher design, color mode, display, position, result presentation, and the launcher preview. Position is set by dragging the live launcher, not a slider.
 - Search owns result sources and adaptive ranking.
 - Files owns explicit file search, its scope, and excluded locations.
-- Calculator owns offline calculator and formatting preferences.
+- Calculator owns on-device calculations and formatting preferences. Currency rates are a dated snapshot downloaded in the background; the amount being converted never leaves the Mac.
 - Clipboard owns encrypted history, retention, capture types, and ignored applications.
 - Window Management owns its enablement, shortcuts, and Accessibility status.
 - Actions owns the searchable built-in commands.

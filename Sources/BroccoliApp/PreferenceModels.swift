@@ -150,24 +150,72 @@ struct CalculatorPreferences: Codable, Equatable, Sendable {
     var enabled: Bool
     var significantDigits: Int
     var usesGroupingSeparator: Bool
+    var homeCurrencyCode: String
+    var secondaryCurrencyCode: String
+    var onlineRatesEnabled: Bool
+    var naturalPhrasingEnabled: Bool
+    var taxPercent: Double
+    var choiceMemory: [String: String]
+    var gallonChoice: String
+    var pixelsPerInch: Double
+    var baseFontPixels: Double
 
     init(
         enabled: Bool = true,
         significantDigits: Int = 12,
-        usesGroupingSeparator: Bool = false
+        usesGroupingSeparator: Bool = false,
+        homeCurrencyCode: String = "",
+        secondaryCurrencyCode: String = "",
+        onlineRatesEnabled: Bool = true,
+        naturalPhrasingEnabled: Bool = true,
+        taxPercent: Double = 0,
+        choiceMemory: [String: String] = [:],
+        gallonChoice: String = "",
+        pixelsPerInch: Double = 72,
+        baseFontPixels: Double = 16
     ) {
         self.enabled = enabled
         self.significantDigits = significantDigits
         self.usesGroupingSeparator = usesGroupingSeparator
+        self.homeCurrencyCode = homeCurrencyCode
+        self.secondaryCurrencyCode = secondaryCurrencyCode
+        self.onlineRatesEnabled = onlineRatesEnabled
+        self.naturalPhrasingEnabled = naturalPhrasingEnabled
+        self.taxPercent = taxPercent
+        self.choiceMemory = choiceMemory
+        self.gallonChoice = gallonChoice
+        self.pixelsPerInch = pixelsPerInch
+        self.baseFontPixels = baseFontPixels
         sanitize()
     }
 
     mutating func sanitize() {
         significantDigits = [6, 9, 12].contains(significantDigits) ? significantDigits : 12
+        homeCurrencyCode = Self.currencyCode(homeCurrencyCode)
+        secondaryCurrencyCode = Self.currencyCode(secondaryCurrencyCode)
+        if !taxPercent.isFinite || taxPercent < 0 || taxPercent > 100 { taxPercent = 0 }
+        choiceMemory = choiceMemory.filter { $0.key == "percent-pair" && ($0.value == "of" || $0.value == "add") }
+        if !["", "us", "imperial"].contains(gallonChoice) { gallonChoice = "" }
+        if !pixelsPerInch.isFinite || pixelsPerInch < 36 || pixelsPerInch > 600 { pixelsPerInch = 72 }
+        if !baseFontPixels.isFinite || baseFontPixels < 8 || baseFontPixels > 72 { baseFontPixels = 16 }
+    }
+
+    mutating func rememberChoice(_ key: String, _ value: String) {
+        choiceMemory[key] = value
+        sanitize()
+    }
+
+    private static func currencyCode(_ value: String) -> String {
+        let code = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard code.count == 3, code.allSatisfy(\.isLetter) else { return "" }
+        return code
     }
 
     private enum CodingKeys: String, CodingKey {
         case enabled, significantDigits, usesGroupingSeparator
+        case homeCurrencyCode, secondaryCurrencyCode, onlineRatesEnabled
+        case naturalPhrasingEnabled, taxPercent, choiceMemory
+        case gallonChoice, pixelsPerInch, baseFontPixels
     }
 
     init(from decoder: Decoder) throws {
@@ -178,6 +226,15 @@ struct CalculatorPreferences: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .usesGroupingSeparator
         ) ?? false
+        homeCurrencyCode = try container.decodeIfPresent(String.self, forKey: .homeCurrencyCode) ?? ""
+        secondaryCurrencyCode = try container.decodeIfPresent(String.self, forKey: .secondaryCurrencyCode) ?? ""
+        onlineRatesEnabled = try container.decodeIfPresent(Bool.self, forKey: .onlineRatesEnabled) ?? true
+        naturalPhrasingEnabled = try container.decodeIfPresent(Bool.self, forKey: .naturalPhrasingEnabled) ?? true
+        taxPercent = try container.decodeIfPresent(Double.self, forKey: .taxPercent) ?? 0
+        choiceMemory = try container.decodeIfPresent([String: String].self, forKey: .choiceMemory) ?? [:]
+        gallonChoice = try container.decodeIfPresent(String.self, forKey: .gallonChoice) ?? ""
+        pixelsPerInch = try container.decodeIfPresent(Double.self, forKey: .pixelsPerInch) ?? 72
+        baseFontPixels = try container.decodeIfPresent(Double.self, forKey: .baseFontPixels) ?? 16
         sanitize()
     }
 }

@@ -20,7 +20,7 @@ struct SettingsSearchItem: Identifiable {
         .init(id: "file-search", title: "File Search", subtitle: "Files", destination: .section(.files), terms: "find spotlight metadata filename folder"),
         .init(id: "file-scope", title: "Search Locations", subtitle: "Files", destination: .section(.files), terms: "home mounted volumes hidden library"),
         .init(id: "excluded-locations", title: "Excluded Locations", subtitle: "Files", destination: .excludedLocations, terms: "hidden library system inaccessible application bundles"),
-        .init(id: "calculator", title: "Offline Calculator", subtitle: "Calculator", destination: .section(.calculator), terms: "math expression scientific conversion units"),
+        .init(id: "calculator", title: "Calculator", subtitle: "Calculator", destination: .section(.calculator), terms: "math expression scientific conversion units currency time zone date percent rates"),
         .init(id: "clipboard", title: "Clipboard History", subtitle: "Clipboard", destination: .section(.clipboard), terms: "copy paste encrypted retention"),
         .init(id: "ignored-apps", title: "Ignored Applications", subtitle: "Clipboard", destination: .ignoredApplications, terms: "password concealed sensitive apps"),
         .init(id: "window-management", title: "Window Management", subtitle: "Window Management", destination: .section(.windows), terms: "rectangle snap tile resize move window shortcut monitor display"),
