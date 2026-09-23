@@ -281,6 +281,37 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         XCTAssertEqual(window.frame.height, theme.searchHeight, accuracy: 0.5)
     }
 
+    func testEveryMotionStepKeepsTheContentFlushWithTheFixedTopEdge() throws {
+        _ = NSApplication.shared
+        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let root = try XCTUnwrap(window.contentView)
+        let top = window.frame.maxY
+        var steps = 0
+
+        func sampleMotion(over duration: TimeInterval) {
+            let deadline = Date().addingTimeInterval(duration)
+            while Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.001))
+                steps += 1
+                XCTAssertEqual(window.frame.maxY, top, "The top edge must not move during the motion")
+                XCTAssertEqual(root.frame.size, window.frame.size,
+                               "Content shorter than its window sits below the window's top edge")
+            }
+        }
+
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(LauncherPreviewFixture.standard.results)
+        sampleMotion(over: 0.4)
+        controller.setMode(.main, initialQuery: "")
+        controller.apply([])
+        sampleMotion(over: 0.5)
+        XCTAssertGreaterThan(steps, 0)
+    }
+
     func testShrinkWaitsBrieflyAndANewerGrowKeepsThePanelOpen() async throws {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
