@@ -2749,7 +2749,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         stopResizeAnimation()
         let startHeight = panel.frame.height
         let targetHeight = target.height
-        let scale = panel.backingScaleFactor
         // `setFrame(_:display:animate: true)` runs a blocking animation that holds every
         // keystroke until it finishes. A nonblocking animation steps the same window-server
         // frame between events, and a newer target restarts from the interpolated height.
@@ -2758,10 +2757,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             step: { [weak self] progress in
                 guard let self else { return }
                 let height = startHeight + (targetHeight - startHeight) * progress
+                // AppKit widens a half-point window height to a whole point, while the
+                // content keeps the requested height and drops half a point below the top.
                 self.applyPanelGeometry(
                     LauncherPanelGeometry.resizing(
                         self.panel.frame,
-                        toHeight: (height * scale).rounded() / scale
+                        toHeight: height.rounded()
                     ),
                     display: true
                 )
@@ -2819,7 +2820,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             // setFrame(display: true) draws immediately, before our glass layout finishes.
             // Commit the new geometry first; draw and refresh the native shadow afterward.
             if frame != panel.frame { panel.setFrame(frame, display: false, animate: false) }
-            let contentFrame = NSRect(origin: .zero, size: frame.size)
+            let contentFrame = NSRect(origin: .zero, size: panel.frame.size)
             retainedContentView?.frame = contentFrame
             // Autoresizing only fires when the superview frame actually changes. Force
             // every full-bleed surface to the committed bounds so window clip, frost, and
