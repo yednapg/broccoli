@@ -750,6 +750,72 @@ final class IconCacheTests: XCTestCase {
         XCTAssertFalse(iconView.allowsVibrancy)
     }
 
+    func testFileArtworkAndSymbolRowsUseTheMatchingCompositingPath() throws {
+        _ = NSApplication.shared
+        let cache = IconCache(startsNativeIconResolution: false)
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .liquidGlass),
+            reducedTransparency: false,
+            increasedContrast: false,
+            resolvedSystemDark: true
+        )
+        let row = ResultRowView()
+        row.appearance = theme.appearance
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+
+        let file = SearchEntry(
+            id: "file:/System/Library/CoreServices/Finder.app",
+            kind: .file,
+            title: "Finder",
+            iconKey: "/System/Library/CoreServices/Finder.app",
+            target: .file(path: "/System/Library/CoreServices/Finder.app", isDirectory: true)
+        )
+        let fileIcon = cache.image(for: file)
+        XCTAssertFalse(fileIcon.isTemplate)
+        XCTAssertGreaterThan(fileIcon.size.width, 0)
+        row.configure(
+            result: RankedResult(entry: file, score: 1),
+            icon: fileIcon,
+            confirmation: false,
+            row: 1,
+            selected: false,
+            theme: theme
+        )
+        XCTAssertTrue(iconView.wantsLayer)
+        XCTAssertFalse(iconView.allowsVibrancy)
+
+        for kind in [SearchKind.action, .calculator, .clipboard, .status] {
+            let entry = symbolEntry(kind)
+            let icon = cache.image(for: entry)
+            XCTAssertTrue(icon.isTemplate, "\(kind) must stay a template so it remains visible on the HUD")
+            row.configure(
+                result: RankedResult(entry: entry, score: 1),
+                icon: icon,
+                confirmation: false,
+                row: 0,
+                selected: false,
+                theme: theme
+            )
+            XCTAssertTrue(iconView.allowsVibrancy, "\(kind) icons must stay on the vibrancy path")
+            XCTAssertFalse(iconView.wantsLayer)
+        }
+    }
+
+    private func symbolEntry(_ kind: SearchKind) -> SearchEntry {
+        switch kind {
+        case .action:
+            ActionRegistry.definition(id: "audio.volumeUp")!.searchEntry
+        case .calculator:
+            SearchEntry(id: "calculator", kind: .calculator, title: "Calculator", iconKey: "calculator", target: .none)
+        case .clipboard:
+            SearchEntry(id: "clipboard", kind: .clipboard, title: "Clipboard", iconKey: "clipboard", target: .none)
+        case .status:
+            SearchEntry(id: "status", kind: .status, title: "Searching", iconKey: "status:searching", target: .none)
+        default:
+            fatalError("not a symbol kind")
+        }
+    }
+
     func testSelectedSettingsRowKeepsNativePaneArtInsteadOfWhiteSymbol() throws {
         _ = NSApplication.shared
         let entry = SearchEntry(

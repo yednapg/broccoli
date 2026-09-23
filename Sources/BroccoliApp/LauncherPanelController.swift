@@ -1345,6 +1345,7 @@ final class ResultRowView: NSTableCellView {
         }
         let usesNativeArtwork = result.entry.kind == .application
             || result.entry.kind == .systemSetting
+            || result.entry.kind == .file
         let configuredIcon = sourceIcon.isTemplate && !usesNativeArtwork
             ? (sourceIcon.withSymbolConfiguration(.init(
                 pointSize: templatePointSize,
