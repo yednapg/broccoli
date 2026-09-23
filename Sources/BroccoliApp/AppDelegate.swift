@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var distributedObservers: [NSObjectProtocol] = []
     private var diagnosticsStore: DiagnosticsStore!
     private var clipboardMonitor: ClipboardMonitor?
+    private var currencyRateService: CurrencyRateService?
     private var supportDirectory: URL!
     private var shortcutRegistrationError: String?
     private var windowShortcutRegistrationError: String?
@@ -115,6 +116,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         coordinator.onResolveWindowTarget = { [weak self] preferredApplication in
             self?.resolveWindowActionTarget(preferredApplication: preferredApplication)
         }
+        let rateStore = CurrencyRateStore(
+            fileURL: resolvedSupportDirectory.appendingPathComponent("currency-rates.json")
+        )
+        currencyRateService = CurrencyRateService(
+            store: rateStore,
+            isEnabled: { [weak self] in
+                self?.preferences.calculator.onlineRatesEnabled ?? false
+            },
+            onUpdate: { [weak self] snapshot in
+                self?.coordinator.updateCurrencyRates(snapshot)
+            }
+        )
+        currencyRateService?.start()
         catalogService = ApplicationCatalogService(store: catalogStore)
         catalogService.onCatalogChanged = { [weak self] applications in
             self?.coordinator.setApplications(applications)

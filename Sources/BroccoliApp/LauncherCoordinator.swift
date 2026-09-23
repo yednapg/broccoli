@@ -84,15 +84,35 @@ enum LauncherMainSearchResultComposer {
         let resolved: [RankedResult]
         switch calculatorEvaluation {
         case .value(let calculation):
-            let entry = SearchEntry(
-                id: "calculator:answer",
-                kind: .calculator,
-                title: calculation.displayText,
-                subtitle: "Calculator · Return to copy",
-                iconKey: "calculator",
-                target: .calculator(result: calculation.copyText)
-            )
-            resolved = [RankedResult(entry: entry, score: Int.max)]
+            resolved = calculatorRows(calculation)
+        case .choices(let options):
+            resolved = options.enumerated().map { index, option in
+                RankedResult(
+                    entry: SearchEntry(
+                        id: "calculator:choice:\(index)",
+                        kind: .calculator,
+                        title: option.displayText,
+                        subtitle: index == 0 ? "Which did you mean?" : (option.context ?? ""),
+                        iconKey: "calculator",
+                        target: .calculator(result: option.copyText, patternKey: option.patternKey)
+                    ),
+                    score: Int.max - index
+                )
+            }
+        case .hint(let message):
+            resolved = hasVisibleQuery ? [statusResult(
+                id: "status:calculator-hint",
+                title: message,
+                subtitle: "Calculator",
+                iconKey: "calculator"
+            )] : []
+        case .unavailable(let message):
+            resolved = hasVisibleQuery ? [statusResult(
+                id: "status:calculator-unavailable",
+                title: message,
+                subtitle: "Calculator",
+                iconKey: "calculator"
+            )] : []
         case .incomplete:
             resolved = hasVisibleQuery ? [statusResult(
                 id: "status:calculator-incomplete",
@@ -110,6 +130,50 @@ enum LauncherMainSearchResultComposer {
                 : catalogResults
         }
         return Array(resolved.prefix(max(0, limit)))
+    }
+
+    private static func calculatorRows(_ calculation: CalculatorResult) -> [RankedResult] {
+        var rows: [RankedResult] = []
+        if calculation.presentsInline {
+            rows.append(RankedResult(
+                entry: SearchEntry(
+                    id: "calculator:answer",
+                    kind: .calculator,
+                    title: calculation.displayText,
+                    subtitle: "Calculator · Return to copy",
+                    iconKey: "calculator",
+                    target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
+                ),
+                score: Int.max
+            ))
+        }
+        if let context = calculation.context, !context.isEmpty {
+            rows.append(RankedResult(
+                entry: SearchEntry(
+                    id: "calculator:detail",
+                    kind: .calculator,
+                    title: calculation.displayText,
+                    subtitle: context,
+                    iconKey: "calculator",
+                    target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
+                ),
+                score: Int.max - 1
+            ))
+        }
+        if rows.isEmpty {
+            rows.append(RankedResult(
+                entry: SearchEntry(
+                    id: "calculator:answer",
+                    kind: .calculator,
+                    title: calculation.displayText,
+                    subtitle: "Calculator · Return to copy",
+                    iconKey: "calculator",
+                    target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
+                ),
+                score: Int.max
+            ))
+        }
+        return rows
     }
 
     private static var noResultsResult: RankedResult {
@@ -231,6 +295,10 @@ final class LauncherCoordinator {
     private var applications: [CachedApplication] = []
     private var systemSettings: [SearchEntry] = []
     private var usage: [String: UsageRecord] = [:]
+    private var currencyRates: CurrencyRateSnapshot?
+    private var lastCalculatorAnswer: Double?
+    private var interpretationTask: Task<Void, Never>?
+    private var displayedResults: [RankedResult] = []
     private var queryGeneration = 0
     private var searchCancellationToken: SearchCancellationToken?
     private var snapshotBuildGeneration = 0
@@ -506,10 +574,12 @@ final class LauncherCoordinator {
         let usage = usage
         let searchPreferences = preferences.searchPreferences
         let calculatorPreferences = preferences.calculator
+        let calculatorContext = makeCalculatorContext()
         let resultLimit = LauncherSearchLimits.resultSetCap
         let hasVisibleQuery = !SearchNormalizer.normalize(query).isEmpty
         let state = signposter.beginInterval("QueryToResults")
         let start = ContinuousClock.now
+        interpretationTask?.cancel()
         searchQueue.async { [weak self, searchEngine, calculatorEngine] in
             guard !cancellationToken.isCancelled else {
                 Task { @MainActor [weak self] in
@@ -518,11 +588,8 @@ final class LauncherCoordinator {
                 return
             }
             let calculatorEvaluation: CalculatorEvaluation = calculatorPreferences.enabled
-                ? calculatorEngine.classify(
-                    query,
-                    maximumSignificantDigits: calculatorPreferences.significantDigits,
-                    usesGroupingSeparator: calculatorPreferences.usesGroupingSeparator
-                ) : .notExpression
+                ? calculatorEngine.classify(query, context: calculatorContext)
+                : .notExpression
             // Calculator classification is substantially cheaper than a 10,000-entry search
             // and decides whether catalog matching is semantically applicable at all.
             let catalogResults: [RankedResult] = if calculatorEvaluation == .notExpression {
@@ -547,10 +614,11 @@ final class LauncherCoordinator {
                 self.signposter.endInterval("QueryToResults", state)
                 guard !cancellationToken.isCancelled,
                       generation == self.queryGeneration else { return }
-                self.panel.apply(
-                    ActionRegistry.resolvingSystemAppearance(in: results, isDarkMode: self.systemIsDarkMode),
-                    preservingSelection: true
-                )
+                let resolved = ActionRegistry.resolvingSystemAppearance(in: results, isDarkMode: self.systemIsDarkMode)
+                self.displayedResults = resolved
+                self.rememberCalculatorAnswer(in: resolved)
+                self.panel.apply(resolved, preservingSelection: true)
+                self.scheduleInterpretation(query: query, generation: generation, evaluation: calculatorEvaluation)
                 self.recordDuration(from: start, metric: .queryToResults)
             }
         }
@@ -591,7 +659,10 @@ final class LauncherCoordinator {
             dismissForExternalDispatch()
             _ = NSWorkspace.shared.open(URL(fileURLWithPath: path))
             finishExternalDispatchAfterActivation()
-        case .calculator(let result):
+        case .calculator(let result, let patternKey):
+            if let patternKey {
+                rememberCalculatorChoice(patternKey)
+            }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(result, forType: .string)
@@ -1029,6 +1100,94 @@ final class LauncherCoordinator {
                 DiagnosticSample(metric: metric, durationMilliseconds: milliseconds)
             )
         }
+    }
+}
+
+extension LauncherCoordinator {
+    func updateCurrencyRates(_ snapshot: CurrencyRateSnapshot?) {
+        currencyRates = snapshot
+    }
+
+    private func makeCalculatorContext() -> CalculatorContext {
+        let calculator = preferences.calculator
+        let locale = Locale.current
+        let home = calculator.homeCurrencyCode.isEmpty
+            ? locale.currency?.identifier
+            : calculator.homeCurrencyCode
+        let secondary = calculator.secondaryCurrencyCode.isEmpty
+            ? (home == "USD" ? "EUR" : "USD")
+            : calculator.secondaryCurrencyCode
+        return CalculatorContext(
+            locale: locale,
+            homeCurrencyCode: calculator.onlineRatesEnabled ? home : nil,
+            secondaryCurrencyCode: calculator.onlineRatesEnabled ? secondary : nil,
+            taxPercent: calculator.taxPercent,
+            rates: calculator.onlineRatesEnabled ? currencyRates : nil,
+            choiceMemory: calculator.choiceMemory,
+            lastAnswer: lastCalculatorAnswer,
+            gallonChoice: CalculatorGallonChoice(rawValue: calculator.gallonChoice) ?? .automatic,
+            pixelsPerInch: calculator.pixelsPerInch,
+            baseFontPixels: calculator.baseFontPixels
+        )
+    }
+
+    private func rememberCalculatorAnswer(in results: [RankedResult]) {
+        guard let answer = results.first(where: { $0.entry.id == "calculator:answer" }),
+              case .calculator(let text, _) = answer.entry.target,
+              let value = Double(text) else { return }
+        lastCalculatorAnswer = value
+    }
+
+    private func rememberCalculatorChoice(_ patternKey: String) {
+        let parts = patternKey.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        var calculator = preferences.calculator
+        calculator.rememberChoice(parts[0], parts[1])
+        preferences.calculator = calculator
+    }
+
+    private func scheduleInterpretation(query: String, generation: Int, evaluation: CalculatorEvaluation) {
+        interpretationTask?.cancel()
+        guard evaluation == .notExpression,
+              preferences.calculator.enabled,
+              preferences.calculator.naturalPhrasingEnabled,
+              Self.shouldInterpret(query) else { return }
+        interpretationTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let self, generation == self.queryGeneration else { return }
+            guard let canonical = await CalculatorIntentInterpreter.interpret(query) else { return }
+            guard generation == self.queryGeneration else { return }
+            guard case .value(let result) = self.calculatorEngine.classify(
+                canonical,
+                context: self.makeCalculatorContext()
+            ) else { return }
+            guard generation == self.queryGeneration else { return }
+            var results = self.displayedResults
+            results.append(RankedResult(
+                entry: SearchEntry(
+                    id: "calculator:interpreted",
+                    kind: .calculator,
+                    title: result.displayText,
+                    subtitle: "Interpreted as \(canonical)",
+                    iconKey: "calculator",
+                    target: .calculator(result: result.copyText)
+                ),
+                score: 1
+            ))
+            self.displayedResults = results
+            self.panel.apply(results, preservingSelection: true)
+        }
+    }
+
+    private static func shouldInterpret(_ query: String) -> Bool {
+        let lowered = query.lowercased()
+        guard lowered.contains(where: \.isNumber) else { return false }
+        let hints = [
+            "percent", "%", " of ", "until", "tomorrow", "yesterday", "square", "root",
+            "convert", " into ", " plus ", " minus ", "times", "divided", "half", "quarter",
+            "dozen", "degrees"
+        ]
+        return hints.contains { lowered.contains($0) }
     }
 }
 

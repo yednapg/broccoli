@@ -47,7 +47,7 @@ if p95 > 10 {
 }
 
 let calculator = CalculatorEngine()
-let expressions = ["2 + 2", "sqrt(144)", "10 km in mi", "32 f in c", "sin(pi / 2)"]
+let expressions = ["2 + 2", "sqrt(144)", "10 km in mi", "10cm", "18% of 2400", "32 f in c", "sin(pi / 2)", "photos"]
 var calculatorDurations: [Double] = []
 for iteration in 0..<1_000 {
     let start = ContinuousClock.now
