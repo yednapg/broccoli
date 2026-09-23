@@ -117,9 +117,9 @@ enum LauncherLiquidGlassMetrics {
 /// shared by every design and mode; Reduce Motion replaces them with the instant commit.
 enum LauncherMotionMetrics {
     static let expansionAnimationDuration: TimeInterval = 0.18
-    /// The window-server resize animation has no completion callback; this is how long the
-    /// controller waits before settling post-motion state (viewport visibility, shadow).
-    static let nativeResizeSettlement: TimeInterval = 0.3
+    /// A shrink waits this long so a quick burst of keystrokes that briefly narrows the
+    /// results does not collapse the panel and grow it again a moment later.
+    static let shrinkDelay: TimeInterval = 0.1
 }
 
 /// Search retains more matches than the Appearance viewport can show at once.

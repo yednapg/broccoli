@@ -41,9 +41,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         XCTAssertTrue(controller.isExpansionAnimationInFlight)
         // The in-flight token is the deterministic discriminator that the sanctioned
         // motion branch ran instead of the instant commit; the animated branch clears it
-        // only from its completion handler. Actual interpolation is verified visually on
-        // the running app, because this test host does not step window-frame animations
-        // on a reliable clock.
+        // only from its completion handler.
 
         try await waitForExpansionToSettle(controller)
 
@@ -225,5 +223,139 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         XCTAssertEqual(window.frame.height, theme.panelHeight(resultCount: full.count),
                        accuracy: 0.5)
         XCTAssertTrue(controller.isResultViewportVisible)
+    }
+
+    /// Runs the main loop for `duration` in short turns and returns the longest single turn.
+    /// A keystroke queued behind a turn waits at least that long to be handled.
+    private func longestMainLoopTurn(
+        over duration: TimeInterval,
+        sampling window: NSWindow,
+        heights: inout Set<CGFloat>
+    ) -> TimeInterval {
+        var longest: TimeInterval = 0
+        let deadline = Date().addingTimeInterval(duration)
+        while Date() < deadline {
+            let start = Date()
+            RunLoop.current.run(until: start.addingTimeInterval(0.001))
+            longest = max(longest, Date().timeIntervalSince(start))
+            heights.insert(window.frame.height)
+        }
+        return longest
+    }
+
+    func testHeightMotionStepsBetweenEventsInsteadOfHoldingTheMainLoop() throws {
+        _ = NSApplication.shared
+        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))
+        let full = LauncherPreviewFixture.standard.results
+        var heights = Set<CGFloat>()
+
+        // The first expansion of a new panel also pays AppKit's one-time table display.
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(full)
+        _ = longestMainLoopTurn(over: 0.4, sampling: window, heights: &heights)
+        controller.setMode(.main, initialQuery: "")
+        controller.apply([])
+        _ = longestMainLoopTurn(over: 0.5, sampling: window, heights: &heights)
+        heights.removeAll()
+
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(full)
+        let growTurn = longestMainLoopTurn(over: 0.4, sampling: window, heights: &heights)
+        controller.setMode(.main, initialQuery: "")
+        controller.apply([])
+        let shrinkTurn = longestMainLoopTurn(over: 0.5, sampling: window, heights: &heights)
+
+        // AppKit's blocking `setFrame(_:display:animate: true)` held this loop for ~350 ms.
+        XCTAssertLessThan(growTurn, 0.1, "Growing the panel must not hold queued keystrokes")
+        XCTAssertLessThan(shrinkTurn, 0.1, "Shrinking the panel must not hold queued keystrokes")
+        let intermediate = heights.filter {
+            $0 > theme.searchHeight + 1 && $0 < theme.panelHeight(resultCount: full.count) - 1
+        }
+        XCTAssertGreaterThan(intermediate.count, 2, "The height must step through the motion")
+        XCTAssertFalse(controller.isExpansionAnimationInFlight)
+        XCTAssertEqual(window.frame.height, theme.searchHeight, accuracy: 0.5)
+    }
+
+    func testShrinkWaitsBrieflyAndANewerGrowKeepsThePanelOpen() async throws {
+        _ = NSApplication.shared
+        let controller = makeController(duration: 0.05)
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))
+        let full = LauncherPreviewFixture.standard.results
+        let expandedHeight = theme.panelHeight(resultCount: full.count)
+
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(full)
+        try await waitForExpansionToSettle(controller)
+
+        // A keystroke briefly narrows the results, and the next one restores them.
+        controller.apply(Array(full.prefix(1)))
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(window.frame.height, expandedHeight, accuracy: 0.5,
+                       "A shrink must wait before moving the panel")
+        controller.apply(full)
+        try await waitForExpansionToSettle(controller)
+        XCTAssertEqual(window.frame.height, expandedHeight, accuracy: 0.5)
+
+        // A narrowed result set that stays narrowed still shrinks the panel.
+        controller.apply(Array(full.prefix(1)))
+        try await waitForExpansionToSettle(controller)
+        XCTAssertEqual(window.frame.height, theme.panelHeight(resultCount: 1), accuracy: 0.5)
+    }
+
+    func testNativeRowIconsSurviveTheHeightMotion() async throws {
+        _ = NSApplication.shared
+        let controller = makeController(duration: 0.05)
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let finder = "/System/Library/CoreServices/Finder.app"
+        let results = (0..<5).map { index in
+            RankedResult(
+                entry: SearchEntry(
+                    id: "application:\(finder)#\(index)",
+                    kind: .application,
+                    title: "Finder \(index)",
+                    iconKey: finder,
+                    target: .application(path: finder, bundleIdentifier: "com.apple.finder")
+                ),
+                score: 100 - index
+            )
+        }
+
+        controller.setMode(.main, initialQuery: "fi")
+        controller.apply(results)
+        try await waitForExpansionToSettle(controller)
+        controller.apply(Array(results.prefix(2)))
+        try await waitForExpansionToSettle(controller)
+
+        let rows = resultRows(in: try XCTUnwrap(window.contentView))
+        XCTAssertEqual(rows.count, 2)
+        for row in rows {
+            let icon = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+            let image = try XCTUnwrap(icon.image, "A native row must keep its artwork after motion")
+            XCTAssertGreaterThan(image.size.width, 0)
+            XCTAssertFalse(image.isTemplate)
+            XCTAssertTrue(icon.wantsLayer, "Native artwork must stay on its own layer over the glass")
+            XCTAssertFalse(icon.allowsVibrancy)
+        }
+    }
+
+    private func resultRows(in view: NSView) -> [ResultRowView] {
+        view.subviews.flatMap { subview -> [ResultRowView] in
+            if let row = subview as? ResultRowView, !row.isHidden, row.superview != nil {
+                return [row]
+            }
+            return resultRows(in: subview)
+        }
     }
 }
