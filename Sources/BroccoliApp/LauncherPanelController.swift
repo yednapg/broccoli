@@ -1554,6 +1554,45 @@ private final class ResultIconView: NSImageView {
     }
 }
 
+/// A nonblocking eased progress driver for the launcher's height motion. `step` receives the
+/// curved progress on the main run loop between events; `completion` runs only when the
+/// motion finishes on its own, never after `stop()`.
+final class LauncherPanelResizeAnimation: NSAnimation {
+    private let step: @MainActor (CGFloat) -> Void
+    private let completion: @MainActor () -> Void
+    private var hasCompleted = false
+
+    init(
+        duration: TimeInterval,
+        step: @escaping @MainActor (CGFloat) -> Void,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        self.step = step
+        self.completion = completion
+        super.init(duration: duration, animationCurve: .easeInOut)
+        animationBlockingMode = .nonblocking
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    // A `.nonblocking` animation advances on the main run loop.
+    override var currentProgress: NSAnimation.Progress {
+        didSet {
+            let value = CGFloat(currentValue)
+            // NSAnimation ends itself when progress reaches 1; `stop()` never gets here.
+            let finished = currentProgress >= 1 && !hasCompleted
+            if finished { hasCompleted = true }
+            let step = step
+            let completion = completion
+            MainActor.assumeIsolated {
+                step(value)
+                if finished { completion() }
+            }
+        }
+    }
+}
+
 @MainActor
 final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSTextFieldDelegate {
     private static let panelWidth = LauncherMinimalMetrics.width
@@ -1603,9 +1642,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// The newest committed geometry whose motion has not started yet. Result changes coalesce
     /// here so a burst of keystrokes schedules one transition instead of one per key.
     private var pendingExpansionTarget: NSRect?
-    private var expansionFlushScheduled = false
-    private var expansionAnimationGeneration: UInt64 = 0
-    private var expansionMotionInProgress = false
+    private var expansionFlush: DispatchWorkItem?
+    private var resizeAnimation: LauncherPanelResizeAnimation?
     private let expansionAnimationDuration: (@MainActor () -> TimeInterval)?
     /// Last sampled motion duration. apply() must not sample the environment on every
     /// keystroke; this refreshes wherever the environment is already being read.
@@ -1683,7 +1721,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     var isResultViewportVisible: Bool { !scrollView.isHidden }
     /// True while a sanctioned height transition is scheduled, coalescing, or in flight.
     var isExpansionAnimationInFlight: Bool {
-        expansionMotionInProgress || pendingExpansionTarget != nil
+        resizeAnimation != nil || pendingExpansionTarget != nil
     }
     var listedResultIDs: [String] { results.map(\.entry.id) }
     var selectedResultRow: Int { tableView.selectedRow }
@@ -2675,60 +2713,74 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             && max(0, cachedExpansionAnimationDuration) > 0
         if shouldAnimate {
             // Rows and text have already committed synchronously above this call. Only the
-            // surface motion is deferred, to the next main-loop turn, so input and result
-            // delivery never wait for animation work.
+            // surface motion is deferred, so input and result delivery never wait for it.
+            // Growth starts on the next main-loop turn; a shrink waits briefly so a newer
+            // keystroke can keep the panel open instead of collapsing and regrowing it.
+            let isShrinking = frame.height < panel.frame.height
+            if isShrinking {
+                // Keep the rows mounted and let the rising bottom edge clip them. Hiding the
+                // viewport up front produced the "empty glass that collapses" flash.
+                // Visibility settles when the motion ends.
+                scrollView.isHidden = false
+            }
             pendingExpansionTarget = frame
-            scheduleExpansionFlush()
+            scheduleExpansionFlush(after: isShrinking ? LauncherMotionMetrics.shrinkDelay : 0)
         } else {
             cancelPendingPanelMotion()
             commitPanelFrame(frame, display: display)
         }
     }
 
-    private func scheduleExpansionFlush() {
-        guard !expansionFlushScheduled else { return }
-        expansionFlushScheduled = true
-        expansionAnimationGeneration &+= 1
-        let generation = expansionAnimationGeneration
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                self?.flushPendingExpansion(generation: generation)
-            }
+    private func scheduleExpansionFlush(after delay: TimeInterval) {
+        expansionFlush?.cancel()
+        let flush = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.flushPendingExpansion() }
         }
+        expansionFlush = flush
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: flush)
     }
 
-    private func flushPendingExpansion(generation: UInt64) {
-        expansionFlushScheduled = false
-        guard expansionAnimationGeneration == generation,
-              let target = pendingExpansionTarget
-        else { return }
+    private func flushPendingExpansion() {
+        expansionFlush = nil
+        // Window Server owns the frame while the pointer drags the chrome; the drag's end
+        // retargets from the dropped position.
+        guard !isNativeWindowDragActive, let target = pendingExpansionTarget else { return }
         pendingExpansionTarget = nil
-        expansionMotionInProgress = true
-        if target.height < panel.frame.height {
-            // While shrinking, keep the rows mounted and let the rising bottom edge clip
-            // them. Hiding the viewport up front is what produced the "empty glass that
-            // collapses" flash. Visibility settles when the motion ends.
-            scrollView.isHidden = false
-        }
-        expansionAnimationGeneration &+= 1
-        let motionGeneration = expansionAnimationGeneration
-        // The native window-server resize lets the material surface track every step, and a
-        // newer resize restarts from the interpolated frame by itself. CA-driven frame
-        // animation instead desynchronizes the surface from its content, which read as
-        // doubled text and a collapsing ghost panel.
-        panel.setFrame(target, display: true, animate: true)
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + LauncherMotionMetrics.nativeResizeSettlement,
-            execute: { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self,
-                          self.expansionAnimationGeneration == motionGeneration
-                    else { return }
-                    self.expansionMotionInProgress = false
-                    self.finishPanelMotion()
-                }
+        stopResizeAnimation()
+        let startHeight = panel.frame.height
+        let targetHeight = target.height
+        let scale = panel.backingScaleFactor
+        // `setFrame(_:display:animate: true)` runs a blocking animation that holds every
+        // keystroke until it finishes. A nonblocking animation steps the same window-server
+        // frame between events, and a newer target restarts from the interpolated height.
+        let animation = LauncherPanelResizeAnimation(
+            duration: cachedExpansionAnimationDuration,
+            step: { [weak self] progress in
+                guard let self else { return }
+                let height = startHeight + (targetHeight - startHeight) * progress
+                self.applyPanelGeometry(
+                    LauncherPanelGeometry.resizing(
+                        self.panel.frame,
+                        toHeight: (height * scale).rounded() / scale
+                    ),
+                    display: true
+                )
+            },
+            completion: { [weak self] in
+                guard let self else { return }
+                self.resizeAnimation = nil
+                self.finishPanelMotion()
             }
         )
+        animation.frameRate = Float(panel.screen?.maximumFramesPerSecond ?? 60)
+        resizeAnimation = animation
+        animation.start()
+    }
+
+    private func stopResizeAnimation() {
+        guard let animation = resizeAnimation else { return }
+        resizeAnimation = nil
+        animation.stop()
     }
 
     /// Reduce Motion (sampled through the controller's environment) collapses the motion to
@@ -2744,6 +2796,20 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// and any nonanimated resize. Nothing in this transaction may animate.
     private func commitPanelFrame(_ frame: NSRect, display: Bool) {
         let shapeChanged = frame.size != panel.frame.size
+        applyPanelGeometry(frame, display: display) {
+            scrollView.alphaValue = 1
+            scrollView.isHidden = !presentsResultViewport
+        }
+        if shapeChanged && panel.hasShadow { panel.invalidateShadow() }
+    }
+
+    /// One nonanimated geometry transaction, shared by the instant commit and every step of
+    /// the height motion so the window, its full-bleed surfaces, and the rows never diverge.
+    private func applyPanelGeometry(
+        _ frame: NSRect,
+        display: Bool,
+        beforeDisplay: () -> Void = {}
+    ) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
@@ -2764,10 +2830,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 }
             }
             panel.contentView?.layoutSubtreeIfNeeded()
-            scrollView.alphaValue = 1
-            scrollView.isHidden = !presentsResultViewport
+            beforeDisplay()
             if display && panel.isVisible { panel.displayIfNeeded() }
-            if shapeChanged && panel.hasShadow { panel.invalidateShadow() }
         }
     }
 
@@ -2776,14 +2840,16 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private func finishPanelMotion() {
         let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: desiredPanelHeight)
         commitPanelFrame(frame, display: panel.isVisible)
+        if panel.hasShadow { panel.invalidateShadow() }
     }
 
-    /// Drops any not-yet-started transition and settles motion state without touching the
-    /// window frame. Callers that need a specific frame commit it themselves.
+    /// Drops any scheduled or in-flight transition, leaving the window frame where it is.
+    /// Callers that need a specific frame commit it themselves.
     private func cancelPendingPanelMotion() {
-        expansionAnimationGeneration &+= 1
+        expansionFlush?.cancel()
+        expansionFlush = nil
         pendingExpansionTarget = nil
-        expansionMotionInProgress = false
+        stopResizeAnimation()
     }
 
     private func refreshSelectionAppearance() {
@@ -2837,6 +2903,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private func beginNativeWindowDrag(with event: NSEvent) {
         guard !isNativeWindowDragActive else { return }
         isNativeWindowDragActive = true
+        stopResizeAnimation()
         installNativeDragEndObservers()
         panel.performDrag(with: event)
         if NSEvent.pressedMouseButtons & 1 == 0 {
@@ -2890,6 +2957,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         isNativeWindowDragActive = false
         removeNativeDragEndObservers()
         commitMove()
+        if panel.isVisible { resizePanel(to: desiredPanelHeight, display: true) }
     }
 
     private func commitMove() {
