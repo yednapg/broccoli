@@ -65,14 +65,6 @@ final class IconCache {
         canvas.isTemplate = false
         return canvas
     }()
-    private let genericFile = NSImage(
-        systemSymbolName: "doc",
-        accessibilityDescription: "File"
-    ) ?? NSImage(size: NSSize(width: 40, height: 40))
-    private let genericFolder = NSImage(
-        systemSymbolName: "folder.fill",
-        accessibilityDescription: "Folder"
-    ) ?? NSImage(size: NSSize(width: 40, height: 40))
 
     var onIconLoaded: ((String) -> Void)?
     var onNativeIconLoaded: ((String, IconRenderContext) -> Void)?
@@ -158,15 +150,26 @@ final class IconCache {
             let isDirectory: Bool
             if case .file(_, let directory) = entry.target { isDirectory = directory }
             else { isDirectory = false }
+            if readsPersistedApplicationIcons,
+               let persisted = Self.persistedIcon(
+                at: URL(fileURLWithPath: entry.iconKey),
+                context: context
+               ) {
+                _ = nativeCache.insert(persisted, for: key)
+                previousNativeKeys[entry.iconKey] = key
+                return persisted.image
+            }
             loadFileIcon(path: entry.iconKey, isDirectory: isDirectory, context: context)
-            return isDirectory ? genericFolder : genericFile
+            return immediateApplicationArtwork(path: entry.iconKey)
         case .calculator:
-            return NSImage(systemSymbolName: "function", accessibilityDescription: "Calculator") ?? genericApplication
+            return Self.templateSymbol("function", description: "Calculator")
         case .clipboard:
-            return NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard") ?? genericApplication
+            return Self.templateSymbol("clipboard", description: "Clipboard")
         case .status:
-            return NSImage(systemSymbolName: entry.iconKey == "status:no-results" ? "questionmark" : "magnifyingglass",
-                accessibilityDescription: entry.iconKey == "status:no-results" ? "No results" : "Status") ?? genericApplication
+            return Self.templateSymbol(
+                entry.iconKey == "status:no-results" ? "questionmark" : "magnifyingglass",
+                description: entry.iconKey == "status:no-results" ? "No results" : "Status"
+            )
         case .systemSetting, .action:
             return pendingNativeIcon
         }
@@ -348,6 +351,13 @@ final class IconCache {
         return nil
     }
 
+    private static func templateSymbol(_ name: String, description: String) -> NSImage {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: description)
+            ?? NSImage(size: NSSize(width: 40, height: 40))
+        image.isTemplate = true
+        return image
+    }
+
     /// Apple's current file icon, not an SF Symbol or Broccoli tile. Used only while the
     /// materialized bitmap is still in flight so a disk miss cannot leave a hole.
     private static func immediateWorkspaceIcon(at path: String) -> NSImage? {
@@ -511,7 +521,9 @@ final class IconCache {
                 Task { @MainActor [weak self] in self?.thumbnailLoading.remove(key) }
                 return
             }
-            let box = SendableImage(representation.nsImage)
+            let image = representation.nsImage
+            image.isTemplate = false
+            let box = SendableImage(image)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.cache.setObject(box.image, forKey: key.thumbnailKey, cost: Self.boundedImageCost(box.image))
