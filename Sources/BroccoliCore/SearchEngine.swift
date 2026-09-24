@@ -81,9 +81,20 @@ public struct SearchEngine: Sendable {
                   titlePrefixes.count >= limit {
             var focused = Array(titlePrefixes.prefix(limit))
             var seen = Set(focused)
+            // The alphabetical window can fill with panes. Applications are a launcher's
+            // primary short-query targets, so up to `limit` more of them stay candidates;
+            // used and running entries are added below regardless of this bound.
+            var addedApplications = 0
+            for index in titlePrefixes.dropFirst(limit) {
+                guard addedApplications < limit else { break }
+                guard snapshot.entries[index].kind == .application,
+                      seen.insert(index).inserted else { continue }
+                focused.append(index)
+                addedApplications += 1
+            }
             for id in usage.keys {
                 guard let index = snapshot.indexByID[id],
-                      snapshot.entries[index].normalizedTitle.hasPrefix(normalizedQuery),
+                      Self.hasWordPrefix(snapshot.entries[index], normalizedQuery),
                       seen.insert(index).inserted else { continue }
                 focused.append(index)
             }
@@ -100,6 +111,11 @@ public struct SearchEngine: Sendable {
             candidateIndices = snapshot.entries.indices
         }
 
+        // One character says little about which word the user means, so what they actually
+        // choose leads: every previously selected match ranks ahead of unselected ones,
+        // ordered by how often and how recently it was chosen. Longer queries keep match
+        // class ahead of usage.
+        let selectionLeads = normalizedQuery.count == 1
         for index in candidateIndices {
             let entry = snapshot.entries[index]
             guard preferences.includes(entry) else { continue }
@@ -113,11 +129,14 @@ public struct SearchEngine: Sendable {
             let adaptive = usage[entry.id].map {
                 usageBoost($0, now: now, enabled: preferences.adaptiveRankingEnabled)
             } ?? 0
+            let selectionPriority = selectionLeads && adaptive > 0
+                ? Self.singleCharacterSelectionPriority
+                : 0
             insert(
                 Candidate(
                     result: RankedResult(
                         entry: entry,
-                        score: baseScore + runningBonus + adaptive
+                        score: baseScore + runningBonus + adaptive + selectionPriority
                     ),
                     localizedSortRank: snapshot.localizedSortRanks[index]
                 ),
@@ -172,6 +191,9 @@ public struct SearchEngine: Sendable {
             return entry.kind == .application ? 800 : 650
         }
         if entry.acronym.hasPrefix(query) { return 600 }
+        // A single character is the start of a word, as in Spotlight. Letters buried inside
+        // words (“emoji” for j) and metadata keywords would otherwise flood the list.
+        if query.count == 1 { return nil }
         if entry.normalizedTitle.contains(query) { return 450 }
         if !compactQuery.isEmpty, entry.compactTitle.contains(compactQuery) { return 450 }
         for keyword in entry.keywords where keyword.hasPrefix(query) { return 350 }
@@ -241,6 +263,14 @@ public struct SearchEngine: Sendable {
         candidates.formUnion(snapshot.runningIndices)
     }
 
+    /// Larger than the spread between any two match classes, so selection history orders
+    /// single-character results without letting an unmatched entry in.
+    private static let singleCharacterSelectionPriority = 1_000
+
+    private static func hasWordPrefix(_ entry: SearchEntry, _ query: String) -> Bool {
+        entry.normalizedTitle.hasPrefix(query) || entry.tokens.contains { $0.hasPrefix(query) }
+    }
+
     private func usageBoost(_ record: UsageRecord, now: Date, enabled: Bool) -> Int {
         guard enabled else { return 0 }
         let frequency = min(80, Int(log2(Double(record.selectionCount + 1)) * 20))
@@ -270,7 +300,7 @@ public struct SearchEngine: Sendable {
         case .application: 0
         case .systemSetting: 1
         case .action: 2
-        case .file, .calculator, .clipboard, .status: 3
+        case .file, .calculator, .clipboard, .webSearch, .status: 3
         }
     }
 }
