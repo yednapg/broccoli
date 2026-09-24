@@ -38,7 +38,7 @@ final class ActionExecutor: @unchecked Sendable {
         guard let definition = ActionRegistry.definition(id: id) else {
             throw ActionExecutionError.unknownAction
         }
-        if let action = WindowAction.allCases.first(where: { $0.actionID == id }) {
+        if let action = WindowAction(actionID: id) {
             try await windowManager.perform(action, targetPID: targetPID)
             return definition.keepsPanelOpen ? .keepPanelOpen : .completed
         }

@@ -101,8 +101,64 @@ final class ShortcutRecorderControlTests: XCTestCase {
                 modifiers: UInt32(cmdKey)
             )
         )
-        XCTAssertEqual(recorder.configuration.displayName, "⌘ + ←")
+        XCTAssertEqual(recorder.configuration?.displayName, "⌘ + ←")
         XCTAssertFalse(recorder.isRecording)
+    }
+
+    func testDeleteRemovesAShortcutWhenRemovalIsAllowed() throws {
+        let recorder = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 132, height: 30))
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 320, height: 160),
+            styleMask: [.titled]
+        )
+        window.contentView?.addSubview(recorder)
+        var cleared = false
+        recorder.onClear = {
+            cleared = true
+            return true
+        }
+        XCTAssertTrue(recorder.beginRecording())
+
+        recorder.keyDown(with: try deleteKeyEvent(windowNumber: window.windowNumber))
+
+        XCTAssertTrue(cleared)
+        XCTAssertNil(recorder.configuration)
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertEqual(recorder.accessibilityValue() as? String, "None")
+    }
+
+    func testDeleteCannotRemoveARequiredShortcut() throws {
+        let recorder = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 132, height: 30))
+        let window = BroccoliAppTestWindows.window(
+            size: NSSize(width: 320, height: 160),
+            styleMask: [.titled]
+        )
+        window.contentView?.addSubview(recorder)
+        recorder.onChange = { _ in
+            XCTFail("Delete without a modifier is not a shortcut")
+            return true
+        }
+        XCTAssertTrue(recorder.beginRecording())
+
+        recorder.keyDown(with: try deleteKeyEvent(windowNumber: window.windowNumber))
+
+        XCTAssertEqual(recorder.configuration, .commandSpace)
+        XCTAssertTrue(recorder.isRecording)
+    }
+
+    private func deleteKeyEvent(windowNumber: Int) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: windowNumber,
+            context: nil,
+            characters: "\u{7F}",
+            charactersIgnoringModifiers: "\u{7F}",
+            isARepeat: false,
+            keyCode: UInt16(kVK_Delete)
+        ))
     }
 
     func testClickingTheControlBeginsRecording() throws {

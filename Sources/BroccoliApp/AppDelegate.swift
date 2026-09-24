@@ -77,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var shortcutRegistrationError: String?
     private var windowShortcutRegistrationError: String?
     private var windowActionTask: Task<Void, Never>?
+    private lazy var dragSnapController = WindowDragSnapController(windowManager: windowManager)
+    private lazy var tilingController = WindowTilingController(windowManager: windowManager)
+    private var registeredWindowBindingIDs: Set<String> = []
+    private var windowShortcutsPausedForIgnoredApp = false
+    private var windowPreferenceObservation: AnyCancellable?
     private var lifecycleState = ApplicationLifecycleState()
     private let applicationIconController = ApplicationIconController()
     private var lastExternalApplication: NSRunningApplication?
@@ -116,6 +121,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         coordinator.onResolveWindowTarget = { [weak self] preferredApplication in
             self?.resolveWindowActionTarget(preferredApplication: preferredApplication)
         }
+        windowManager.layoutOptionsProvider = { [weak self] in
+            self?.preferences.windowManagement.layoutOptions ?? .standard
+        }
+        windowManager.customLayoutProvider = { [weak self] id in
+            self?.preferences.windowManagement.customLayouts.first { $0.id == id }
+        }
+        windowManager.workspaceProvider = { [weak self] id in
+            self?.preferences.windowManagement.workspaces.first { $0.id == id }
+        }
         let rateStore = CurrencyRateStore(
             fileURL: resolvedSupportDirectory.appendingPathComponent("currency-rates.json")
         )
@@ -154,11 +168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self?.registerShortcut(configuration)
             },
             initialWindowShortcutError: windowShortcutRegistrationError,
-            onWindowShortcutChanged: { [weak self] action, configuration in
-                self?.changeWindowShortcut(action, to: configuration)
+            onWindowShortcutChanged: { [weak self] target, configuration in
+                self?.changeWindowShortcut(target, to: configuration)
+                    ?? .rejected("Broccoli is shutting down.")
             },
             onWindowShortcutsEnabledChanged: { [weak self] enabled in
                 self?.setWindowShortcutsEnabled(enabled)
+            },
+            onCaptureWorkspace: { [weak self] name in
+                await self?.captureWorkspace(named: name)
             },
             onClearUsage: { [weak self] in self?.coordinator.clearUsage() },
             onClearClipboard: { [weak self] in self?.clipboardMonitor?.clear() },
@@ -301,6 +319,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self.coordinator.updatePreferences()
             }
         }
+        // `$windowManagement` publishes before the new value is stored; apply it on the next
+        // turn so registration reads the saved preferences.
+        windowPreferenceObservation = preferences.$windowManagement
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.applyWindowManagementPreferences(self.preferences.windowManagement)
+                }
+            }
+        applyWindowManagementPreferences(preferences.windowManagement)
     }
 
     private func configureClipboardIfNeeded() {
@@ -345,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 MainActor.assumeIsolated {
                     if name == NSWorkspace.didTerminateApplicationNotification {
                         self?.forgetExternalApplication(application)
+                        if let application { self?.windowManager.forgetApplication(application.processIdentifier) }
                     }
                     self?.coordinator.refreshRunningApplications(
                         bundleIdentifier: bundleIdentifier
@@ -361,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 as? NSRunningApplication
             MainActor.assumeIsolated {
                 self?.rememberExternalApplication(application)
+                self?.updateWindowShortcutPause(for: application)
             }
         })
     }
@@ -415,35 +447,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func registerWindowShortcutsIfEnabled() -> String? {
-        guard preferences.windowManagement.shortcutsEnabled else {
+        guard preferences.windowManagement.shortcutsEnabled, !windowShortcutsPausedForIgnoredApp else {
             unregisterWindowShortcuts()
             return nil
         }
-        do {
-            for action in WindowAction.allCases {
-                try registerWindowShortcut(
-                    action,
-                    configuration: preferences.windowManagement.shortcut(for: action)
-                )
+        return registerWindowShortcuts()
+    }
+
+    /// Registers every assigned window shortcut independently. One conflicting shortcut must
+    /// not take the others down with it; the returned message names the ones that failed.
+    private func registerWindowShortcuts() -> String? {
+        let windowPreferences = preferences.windowManagement
+        let targets = windowPreferences.shortcutTargets
+        let currentBindingIDs = Set(targets.map(\.bindingID))
+        for staleBindingID in registeredWindowBindingIDs.subtracting(currentBindingIDs) {
+            hotKey.unregister(staleBindingID)
+        }
+        registeredWindowBindingIDs = []
+        var failedTitles: [String] = []
+        for target in targets {
+            guard let configuration = windowPreferences.shortcut(for: target) else {
+                hotKey.unregister(target.bindingID)
+                continue
             }
-            return nil
-        } catch {
-            unregisterWindowShortcuts()
-            return error.localizedDescription
+            do {
+                try registerWindowShortcut(target, configuration: configuration)
+                registeredWindowBindingIDs.insert(target.bindingID)
+            } catch {
+                hotKey.unregister(target.bindingID)
+                failedTitles.append(windowPreferences.title(for: target))
+            }
         }
+        return WindowShortcutRegistrationSummary.message(failedTitles: failedTitles)
     }
 
     private func registerWindowShortcut(
-        _ action: WindowAction,
+        _ target: WindowShortcutTarget,
         configuration: HotKeyConfiguration
     ) throws {
-        try hotKey.register(configuration, for: action.hotKeyBindingID) { [weak self] in
-            self?.performWindowAction(action)
+        try hotKey.register(configuration, for: target.bindingID) { [weak self] in
+            self?.performWindowTarget(target)
         }
     }
 
     private func unregisterWindowShortcuts() {
+        for bindingID in registeredWindowBindingIDs { hotKey.unregister(bindingID) }
         for action in WindowAction.allCases { hotKey.unregister(action.hotKeyBindingID) }
+        registeredWindowBindingIDs = []
+    }
+
+    /// An ignored application receives window shortcut keystrokes itself, so the shortcuts
+    /// are released while it is frontmost and registered again once it is not.
+    private func updateWindowShortcutPause(for application: NSRunningApplication?) {
+        let paused = application?.bundleIdentifier.map {
+            preferences.windowManagement.ignoredBundleIdentifiers.contains($0)
+        } ?? false
+        guard paused != windowShortcutsPausedForIgnoredApp else { return }
+        windowShortcutsPausedForIgnoredApp = paused
+        windowShortcutRegistrationError = registerWindowShortcutsIfEnabled()
+    }
+
+    /// Brings the always-running window features in line with the saved preferences.
+    private func applyWindowManagementPreferences(_ windowPreferences: WindowManagementPreferences) {
+        dragSnapController.ignoredBundleIdentifiers = windowPreferences.ignoredBundleIdentifiers
+        dragSnapController.isEnabled = windowPreferences.dragToSnapEnabled
+            && AccessibilityPermissionChecker.isTrusted
+        tilingController.isEnabled = windowPreferences.automaticTilingEnabled
+            && AccessibilityPermissionChecker.isTrusted
+        tilingController.scheduleRetile()
+        updateWindowShortcutPause(for: NSWorkspace.shared.frontmostApplication)
+        windowShortcutRegistrationError = registerWindowShortcutsIfEnabled()
     }
 
     private func setWindowShortcutsEnabled(_ enabled: Bool) -> String? {
@@ -455,66 +528,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             windowShortcutRegistrationError = nil
             return nil
         }
-        do {
-            for action in WindowAction.allCases {
-                try registerWindowShortcut(
-                    action,
-                    configuration: preferences.windowManagement.shortcut(for: action)
-                )
-            }
-            var value = preferences.windowManagement
-            value.shortcutsEnabled = true
-            preferences.windowManagement = value
-            windowShortcutRegistrationError = nil
-            return nil
-        } catch {
-            unregisterWindowShortcuts()
-            let message = error.localizedDescription
-            windowShortcutRegistrationError = message
-            return message
-        }
+        var value = preferences.windowManagement
+        value.shortcutsEnabled = true
+        preferences.windowManagement = value
+        let message = registerWindowShortcuts()
+        windowShortcutRegistrationError = message
+        return message
     }
 
     private func changeWindowShortcut(
-        _ action: WindowAction,
-        to configuration: HotKeyConfiguration
-    ) -> String? {
-        if preferences.windowManagement.shortcutsEnabled {
-            do {
-                try registerWindowShortcut(action, configuration: configuration)
-            } catch {
-                let message = error.localizedDescription
-                windowShortcutRegistrationError = message
-                return message
+        _ target: WindowShortcutTarget,
+        to configuration: HotKeyConfiguration?
+    ) -> WindowShortcutChangeResult {
+        if let configuration {
+            if configuration == preferences.hotKey {
+                return .rejected("That shortcut already opens Broccoli.")
+            }
+            if let owner = preferences.windowManagement.owner(of: configuration, excluding: target) {
+                return .rejected("That shortcut is already used by \(owner).")
+            }
+        }
+        if preferences.windowManagement.shortcutsEnabled, !windowShortcutsPausedForIgnoredApp {
+            if let configuration {
+                do {
+                    try registerWindowShortcut(target, configuration: configuration)
+                } catch {
+                    return .rejected(error.localizedDescription)
+                }
+            } else {
+                hotKey.unregister(target.bindingID)
             }
         }
         var value = preferences.windowManagement
-        value.shortcuts[action] = configuration
+        value.setShortcut(configuration, for: target)
         preferences.windowManagement = value
-        windowShortcutRegistrationError = nil
-        return nil
+        let message = registerWindowShortcutsIfEnabled()
+        windowShortcutRegistrationError = message
+        return .applied(registrationError: message)
     }
 
-    private func performWindowAction(_ action: WindowAction) {
+    /// Runs a window shortcut against the frontmost application's focused window.
+    private func performWindowTarget(_ target: WindowShortcutTarget) {
         let frontmost = NSWorkspace.shared.frontmostApplication
         rememberExternalApplication(frontmost)
         guard AccessibilityPermissionChecker.isTrusted else {
             showWindowManagementPermissionAlert()
             return
         }
+        guard let request = windowManager.request(for: target) else {
+            NSSound.beep()
+            return
+        }
         let targetPID = resolveWindowActionTarget(preferredApplication: frontmost)
-        // The shared Accessibility worker is latest-request-wins. Cancel the awaiting task as
-        // well so an older hot-key action cannot report or restore state after a newer layout.
-        windowActionTask?.cancel()
+        // A layout is latest-request-wins in the shared Accessibility worker. Cancel the
+        // awaiting task as well so an older hot-key action cannot report or restore state after
+        // a newer layout. Step actions queue instead, so each repeated press still applies.
+        if !request.isIncremental {
+            windowActionTask?.cancel()
+        }
         windowActionTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await self.windowManager.perform(action, targetPID: targetPID)
+                try await self.windowManager.perform(request, targetPID: targetPID)
             } catch is CancellationError {
                 return
             } catch {
                 NSSound.beep()
             }
+        }
+    }
+
+    private func captureWorkspace(named name: String) async -> String? {
+        do {
+            let entries = try await windowManager.captureWorkspace()
+            var workspace = WindowWorkspace(name: name, entries: entries)
+            workspace.sanitize()
+            var value = preferences.windowManagement
+            guard value.workspaces.count < WindowManagementPreferences.maximumWorkspaces else {
+                return "Broccoli can keep up to \(WindowManagementPreferences.maximumWorkspaces) workspaces."
+            }
+            value.workspaces.append(workspace)
+            preferences.windowManagement = value
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
 

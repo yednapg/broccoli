@@ -1,163 +1,8 @@
 @preconcurrency import AppKit
 import ApplicationServices
-import Carbon
+import BroccoliCore
 import Foundation
 import OSLog
-
-enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
-    case leftHalf
-    case rightHalf
-    case topHalf
-    case bottomHalf
-    case maximize
-    case minimized
-    case center
-    case nextDisplay
-    case previousDisplay
-
-    var actionID: String { "window.\(rawValue)" }
-    var hotKeyBindingID: String { actionID }
-
-    var title: String {
-        switch self {
-        case .leftHalf: "Left Half"
-        case .rightHalf: "Right Half"
-        case .topHalf: "Top Half"
-        case .bottomHalf: "Bottom Half"
-        case .maximize: "Maximize Window"
-        case .minimized: "Minimized"
-        case .center: "Center Window"
-        case .nextDisplay: "Move to Next Display"
-        case .previousDisplay: "Move to Previous Display"
-        }
-    }
-
-    var aliases: [String] {
-        switch self {
-        case .leftHalf: ["window left", "snap left", "tile left"]
-        case .rightHalf: ["window right", "snap right", "tile right"]
-        case .topHalf: ["window top", "snap top", "tile top"]
-        case .bottomHalf: ["window bottom", "snap bottom", "tile bottom"]
-        case .maximize: ["window full", "fill screen", "zoom window"]
-        case .minimized: ["window minimized", "minimize window", "shrink window", "restore down"]
-        case .center: ["window center", "recenter"]
-        case .nextDisplay: ["window next monitor", "move display", "next screen"]
-        case .previousDisplay: ["window previous monitor", "previous screen"]
-        }
-    }
-
-    var defaultShortcut: HotKeyConfiguration {
-        let command = UInt32(cmdKey)
-        let commandOption = UInt32(cmdKey | optionKey)
-        switch self {
-        case .leftHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: command)
-        case .rightHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_RightArrow), modifiers: command)
-        case .topHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: commandOption)
-        case .bottomHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: commandOption)
-        case .maximize:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: command)
-        case .minimized:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: command)
-        case .center:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_C), modifiers: commandOption)
-        case .nextDisplay:
-            return HotKeyConfiguration(
-                keyCode: UInt32(kVK_RightArrow),
-                modifiers: commandOption
-            )
-        case .previousDisplay:
-            return HotKeyConfiguration(
-                keyCode: UInt32(kVK_LeftArrow),
-                modifiers: commandOption
-            )
-        }
-    }
-}
-
-struct WindowManagementPreferences: Codable, Equatable, Sendable {
-    var shortcutsEnabled: Bool
-    var shortcuts: [WindowAction: HotKeyConfiguration]
-
-    init(
-        shortcutsEnabled: Bool = false,
-        shortcuts: [WindowAction: HotKeyConfiguration] = [:]
-    ) {
-        self.shortcutsEnabled = shortcutsEnabled
-        self.shortcuts = shortcuts
-        for action in WindowAction.allCases where self.shortcuts[action] == nil {
-            self.shortcuts[action] = action.defaultShortcut
-        }
-    }
-
-    func shortcut(for action: WindowAction) -> HotKeyConfiguration {
-        shortcuts[action] ?? action.defaultShortcut
-    }
-
-    mutating func migrateInterimDefaultShortcuts() {
-        guard shortcuts == Self.interimDefaultShortcuts else { return }
-        shortcuts = Dictionary(uniqueKeysWithValues: WindowAction.allCases.map {
-            ($0, $0.defaultShortcut)
-        })
-    }
-
-    // These defaults shipped briefly during development. Migrate only an exact match so
-    // user-customized shortcuts are never overwritten.
-    private static let interimDefaultShortcuts: [WindowAction: HotKeyConfiguration] = [
-        .leftHalf: HotKeyConfiguration(
-            keyCode: UInt32(kVK_LeftArrow),
-            modifiers: UInt32(controlKey | optionKey)
-        ),
-        .rightHalf: HotKeyConfiguration(
-            keyCode: UInt32(kVK_RightArrow),
-            modifiers: UInt32(controlKey | optionKey)
-        ),
-        .topHalf: HotKeyConfiguration(
-            keyCode: UInt32(kVK_UpArrow),
-            modifiers: UInt32(controlKey | optionKey)
-        ),
-        .bottomHalf: HotKeyConfiguration(
-            keyCode: UInt32(kVK_DownArrow),
-            modifiers: UInt32(controlKey | optionKey)
-        ),
-        .maximize: HotKeyConfiguration(
-            keyCode: UInt32(kVK_Return),
-            modifiers: UInt32(controlKey | optionKey)
-        ),
-        .minimized: HotKeyConfiguration(
-            keyCode: UInt32(kVK_DownArrow),
-            modifiers: UInt32(cmdKey)
-        ),
-        .center: HotKeyConfiguration(
-            keyCode: UInt32(kVK_ANSI_C),
-            modifiers: UInt32(controlKey | optionKey)
-        ),
-        .nextDisplay: HotKeyConfiguration(
-            keyCode: UInt32(kVK_RightArrow),
-            modifiers: UInt32(controlKey | optionKey | cmdKey)
-        ),
-        .previousDisplay: HotKeyConfiguration(
-            keyCode: UInt32(kVK_LeftArrow),
-            modifiers: UInt32(controlKey | optionKey | cmdKey)
-        ),
-    ]
-
-    private enum CodingKeys: String, CodingKey { case shortcutsEnabled, shortcuts }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            shortcutsEnabled: try container.decodeIfPresent(Bool.self, forKey: .shortcutsEnabled) ?? false,
-            shortcuts: try container.decodeIfPresent(
-                [WindowAction: HotKeyConfiguration].self,
-                forKey: .shortcuts
-            ) ?? [:]
-        )
-    }
-}
 
 enum WindowManagementPermissionPresentation {
     static var settingsName: String {
@@ -257,65 +102,6 @@ enum WindowManagementError: LocalizedError {
         case .operationFailed(let error):
             "macOS could not update this window (Accessibility error \(error.rawValue))."
         }
-    }
-}
-
-enum WindowGeometry {
-    static func frame(for action: WindowAction, window: CGRect, screen: CGRect) -> CGRect {
-        switch action {
-        case .leftHalf:
-            return CGRect(x: screen.minX, y: screen.minY, width: screen.width / 2, height: screen.height)
-        case .rightHalf:
-            return CGRect(x: screen.midX, y: screen.minY, width: screen.width / 2, height: screen.height)
-        case .topHalf:
-            return CGRect(x: screen.minX, y: screen.minY, width: screen.width, height: screen.height / 2)
-        case .bottomHalf:
-            return CGRect(x: screen.minX, y: screen.midY, width: screen.width, height: screen.height / 2)
-        case .maximize:
-            return screen
-        case .minimized:
-            // “Minimized” is a restore-down layout, not Dock minimization. Match the supplied
-            // browser reference with a centered window that retains a comfortable desktop
-            // margin on every edge while remaining large enough for productive work.
-            let width = screen.width * 0.9
-            let height = screen.height * 0.9
-            return CGRect(
-                x: screen.midX - width / 2,
-                y: screen.midY - height / 2,
-                width: width,
-                height: height
-            )
-        case .center:
-            let width = min(window.width, screen.width)
-            let height = min(window.height, screen.height)
-            return CGRect(
-                x: screen.midX - width / 2,
-                y: screen.midY - height / 2,
-                width: width,
-                height: height
-            )
-        case .nextDisplay, .previousDisplay:
-            return window
-        }
-    }
-
-    static func movedFrame(window: CGRect, from source: CGRect, to destination: CGRect) -> CGRect {
-        let widthRatio = source.width > 0 ? window.width / source.width : 1
-        let heightRatio = source.height > 0 ? window.height / source.height : 1
-        let xRatio = source.width > window.width
-            ? (window.minX - source.minX) / (source.width - window.width)
-            : 0.5
-        let yRatio = source.height > window.height
-            ? (window.minY - source.minY) / (source.height - window.height)
-            : 0.5
-        let width = min(destination.width, destination.width * widthRatio)
-        let height = min(destination.height, destination.height * heightRatio)
-        return CGRect(
-            x: destination.minX + max(0, destination.width - width) * min(1, max(0, xRatio)),
-            y: destination.minY + max(0, destination.height - height) * min(1, max(0, yRatio)),
-            width: width,
-            height: height
-        )
     }
 }
 
@@ -486,20 +272,30 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     private static let frameSizeTolerance: CGFloat = 24
     private static let frameStabilityTolerance: CGFloat = 1
 
-    private enum WindowCandidateResolution {
+    enum WindowCandidateResolution {
         case accepted
         case rejected
         case failed(AXError)
     }
 
-    private let attributeReader: AttributeReader
-    private let attributeWriter: AttributeWriter
-    private let messagingTimeoutSetter: MessagingTimeoutSetter
+    typealias OnScreenWindowProvider = () -> [OnScreenWindow]
+    typealias ActionPerformer = (AXUIElement, CFString) -> AXError
+    typealias SettableChecker = (AXUIElement, CFString) -> Bool
+
+    let attributeReader: AttributeReader
+    let attributeWriter: AttributeWriter
+    let messagingTimeoutSetter: MessagingTimeoutSetter
     private let retryWaiter: RetryWaiter
-    private let frameSettlementWaiter: FrameSettlementWaiter
-    private let uptimeProvider: UptimeProvider
-    private let messagingTimeout: Float
-    private let actionTimeout: TimeInterval
+    let frameSettlementWaiter: FrameSettlementWaiter
+    let uptimeProvider: UptimeProvider
+    let messagingTimeout: Float
+    let actionTimeout: TimeInterval
+    let onScreenWindows: OnScreenWindowProvider
+    let actionPerformer: ActionPerformer
+    let settableChecker: SettableChecker
+    /// Only touched on the worker's serial queue.
+    let history = WindowHistory()
+    let tiling = TilingState()
 
     init(
         attributeReader: @escaping AttributeReader = { element, attribute in
@@ -521,7 +317,15 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         },
         uptimeProvider: @escaping UptimeProvider = { ProcessInfo.processInfo.systemUptime },
         messagingTimeout: Float = 0.75,
-        actionTimeout: TimeInterval = 4
+        actionTimeout: TimeInterval = 4,
+        onScreenWindows: @escaping OnScreenWindowProvider = OnScreenWindow.current,
+        actionPerformer: @escaping ActionPerformer = { element, action in
+            AXUIElementPerformAction(element, action)
+        },
+        settableChecker: @escaping SettableChecker = { element, attribute in
+            var settable = DarwinBoolean(false)
+            return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success && settable.boolValue
+        }
     ) {
         self.attributeReader = attributeReader
         self.attributeWriter = attributeWriter
@@ -531,25 +335,73 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         self.uptimeProvider = uptimeProvider
         self.messagingTimeout = messagingTimeout
         self.actionTimeout = actionTimeout
+        self.onScreenWindows = onScreenWindows
+        self.actionPerformer = actionPerformer
+        self.settableChecker = settableChecker
     }
 
     func perform(
         _ action: WindowAction,
         targetPID: pid_t?,
         screens: [CGRect],
+        options: WindowLayoutOptions = .standard,
         checkCancellation: () throws -> Void
     ) throws {
-        let deadline = uptimeProvider() + actionTimeout
-        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
-        let system = AXUIElementCreateSystemWide()
-        let timeoutError = messagingTimeoutSetter(system, messagingTimeout)
-        guard timeoutError == .success else {
-            throw WindowManagementError.operationFailed(timeoutError)
+        try perform(
+            .action(action),
+            targetPID: targetPID,
+            screens: screens,
+            options: options,
+            pointerScreenIndex: nil,
+            checkCancellation: checkCancellation
+        )
+    }
+
+    func perform(
+        _ request: WindowRequest,
+        targetPID: pid_t?,
+        screens: [CGRect],
+        options: WindowLayoutOptions,
+        pointerScreenIndex: Int?,
+        checkCancellation: () throws -> Void
+    ) throws {
+        guard !screens.isEmpty else { throw WindowManagementError.unsupported }
+        switch request {
+        case .workspace(let workspace):
+            try applyWorkspace(workspace, screens: screens, checkCancellation: checkCancellation)
+            return
+        case .action(let action):
+            switch action.group {
+            case .arrange:
+                try arrange(
+                    action,
+                    targetPID: targetPID,
+                    screens: screens,
+                    options: options,
+                    pointerScreenIndex: pointerScreenIndex,
+                    checkCancellation: checkCancellation
+                )
+                return
+            case .tiling:
+                try performTilingCommand(
+                    action,
+                    targetPID: targetPID,
+                    screens: screens,
+                    options: options,
+                    checkCancellation: checkCancellation
+                )
+                return
+            case .halvesAndQuarters, .thirds, .fillAndCenter,
+                 .resize, .displays:
+                break
+            }
+        case .frame:
+            break
         }
 
+        let deadline = uptimeProvider() + actionTimeout
         let window = try focusedWindow(
             targetPID: targetPID,
-            systemElement: system,
             deadline: deadline,
             checkCancellation: checkCancellation
         )
@@ -558,36 +410,109 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             deadline: deadline,
             checkCancellation: checkCancellation
         )
-        guard !screens.isEmpty else { throw WindowManagementError.unsupported }
-        let currentScreenIndex = screens.indices.max { left, right in
-            currentFrame.intersection(screens[left]).area < currentFrame.intersection(screens[right]).area
-        } ?? 0
+        let currentScreenIndex = Self.screenIndex(containing: currentFrame, in: screens)
+        let key = WindowKey(window)
+        let stored = history.entry(for: key)
+        // A window the user moved by hand since Broccoli last placed it starts a new history,
+        // so a repeated press or Restore never acts on a stale frame.
+        let continuing = stored.map {
+            Self.framesMatch($0.lastApplied, currentFrame, originTolerance: 2, sizeTolerance: 2)
+        } ?? false
 
-        let targetFrame: CGRect
-        let layoutScreen: CGRect
-        switch action {
-        case .nextDisplay, .previousDisplay:
-            guard screens.count > 1 else { return }
-            let offset = action == .nextDisplay ? 1 : -1
-            let destinationIndex = (currentScreenIndex + offset + screens.count) % screens.count
-            layoutScreen = screens[destinationIndex]
-            targetFrame = WindowGeometry.movedFrame(
-                window: currentFrame,
-                from: screens[currentScreenIndex],
-                to: layoutScreen
-            )
-        default:
-            layoutScreen = screens[currentScreenIndex]
-            targetFrame = WindowGeometry.frame(
-                for: action,
-                window: currentFrame,
-                screen: layoutScreen
-            )
+        var targetFrame: CGRect
+        var layoutScreen = screens[currentScreenIndex]
+        var appliedAction: WindowAction?
+        var cycleIndex = 0
+        switch request {
+        case .frame(let spec):
+            targetFrame = WindowGeometry.frame(for: spec, window: currentFrame, screen: layoutScreen, options: options)
+        case .workspace:
+            return
+        case .action(let action):
+            appliedAction = action
+            switch action {
+            case .restore:
+                guard let stored else { return }
+                targetFrame = stored.restoreFrame
+                layoutScreen = screens[Self.screenIndex(containing: targetFrame, in: screens)]
+            case .nextDisplay, .previousDisplay:
+                guard screens.count > 1 else { return }
+                let offset = action == .nextDisplay ? 1 : -1
+                let destinationIndex = (currentScreenIndex + offset + screens.count) % screens.count
+                layoutScreen = screens[destinationIndex]
+                targetFrame = WindowGeometry.movedFrame(
+                    window: currentFrame,
+                    from: screens[currentScreenIndex],
+                    to: layoutScreen
+                )
+            default:
+                if continuing, let stored, stored.lastAction == action,
+                   options.repeatBehavior == .cycleSizes, action.cyclesSize {
+                    cycleIndex = (stored.cycleIndex + 1) % WindowGeometry.cycleFractions.count
+                }
+                appliedAction = action
+                targetFrame = WindowGeometry.frame(
+                    for: action,
+                    window: currentFrame,
+                    screen: layoutScreen,
+                    options: options,
+                    cycleFraction: WindowGeometry.cycleFractions[cycleIndex]
+                )
+            }
         }
+
+        // A step action at its limit, or a layout the window already has, needs no write.
+        guard !Self.framesMatch(
+            targetFrame,
+            currentFrame,
+            originTolerance: 0.5,
+            sizeTolerance: 0.5
+        ) else { return }
         try setFrame(
             targetFrame,
             of: window,
             screen: layoutScreen,
+            acceptsPartialAxis: request.isIncremental,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+
+        if appliedAction == .restore {
+            history.remove(key)
+            return
+        }
+        let applied = (try? frame(of: window, deadline: deadline, checkCancellation: {})) ?? targetFrame
+        history.record(
+            WindowHistory.Entry(
+                restoreFrame: continuing ? (stored?.restoreFrame ?? currentFrame) : currentFrame,
+                lastApplied: applied,
+                lastAction: appliedAction,
+                cycleIndex: cycleIndex
+            ),
+            for: key
+        )
+    }
+
+    static func screenIndex(containing frame: CGRect, in screens: [CGRect]) -> Int {
+        screens.indices.max { left, right in
+            frame.intersection(screens[left]).area < frame.intersection(screens[right]).area
+        } ?? 0
+    }
+
+    func focusedWindow(
+        targetPID: pid_t?,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) throws -> AXUIElement {
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+        let system = AXUIElementCreateSystemWide()
+        let timeoutError = messagingTimeoutSetter(system, messagingTimeout)
+        guard timeoutError == .success else {
+            throw WindowManagementError.operationFailed(timeoutError)
+        }
+        return try focusedWindow(
+            targetPID: targetPID,
+            systemElement: system,
             deadline: deadline,
             checkCancellation: checkCancellation
         )
@@ -691,7 +616,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         throw WindowManagementError.noWindow
     }
 
-    private func windowCandidateResolution(
+    func windowCandidateResolution(
         _ window: AXUIElement,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
@@ -725,7 +650,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             : .rejected
     }
 
-    private func frame(
+    func frame(
         of window: AXUIElement,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
@@ -753,20 +678,30 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         return CGRect(origin: position, size: size)
     }
 
-    func setFrame(_ frame: CGRect, of window: AXUIElement, screen: CGRect? = nil) throws {
+    func setFrame(
+        _ frame: CGRect,
+        of window: AXUIElement,
+        screen: CGRect? = nil,
+        acceptsPartialAxis: Bool = false
+    ) throws {
         try setFrame(
             frame,
             of: window,
             screen: screen ?? frame,
+            acceptsPartialAxis: acceptsPartialAxis,
             deadline: uptimeProvider() + actionTimeout,
             checkCancellation: {}
         )
     }
 
-    private func setFrame(
+    /// `acceptsPartialAxis` keeps a result where the application honored only one axis. A
+    /// step resize at an application's minimum width should still change the height; a
+    /// layout such as Left Half must not be left half-applied.
+    func setFrame(
         _ frame: CGRect,
         of window: AXUIElement,
         screen: CGRect,
+        acceptsPartialAxis: Bool,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
     ) throws {
@@ -895,7 +830,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         ) {
             throw WindowManagementError.frameRejected(expected: frame, actual: finalAppliedFrame)
         }
-        if Self.isPartialAxisFailure(expected: frame, actual: finalAppliedFrame) {
+        if !acceptsPartialAxis, Self.isPartialAxisFailure(expected: frame, actual: finalAppliedFrame) {
             restoreFrame(
                 originalFrame,
                 of: window,
@@ -1015,7 +950,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         return widthMatches != heightMatches
     }
 
-    private static func framesMatch(
+    static func framesMatch(
         _ lhs: CGRect,
         _ rhs: CGRect,
         originTolerance: CGFloat,
@@ -1027,7 +962,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             && abs(lhs.height - rhs.height) <= sizeTolerance
     }
 
-    private func readRequiredAttribute(
+    func readRequiredAttribute(
         _ attribute: CFString,
         from element: AXUIElement,
         deadline: TimeInterval,
@@ -1048,7 +983,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         throw WindowManagementError.operationFailed(finalError)
     }
 
-    private func writeAttribute(
+    func writeAttribute(
         _ attribute: CFString,
         value: CFTypeRef,
         to element: AXUIElement,
@@ -1068,7 +1003,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         throw WindowManagementError.operationFailed(finalError)
     }
 
-    private func checkReady(
+    func checkReady(
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
     ) throws {
@@ -1096,28 +1031,42 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
 
 }
 
-private final class WindowActionRequestState: @unchecked Sendable {
+/// Tracks which queued window requests may still run. A layout supersedes every earlier
+/// request; a step action queues behind them so repeated presses each apply. All state is
+/// read and written only while holding `lock`.
+final class WindowActionRequestState: @unchecked Sendable {
     private let lock = NSLock()
-    private var generation: UInt64 = 0
+    private var latestRequest: UInt64 = 0
+    private var supersededThrough: UInt64 = 0
+    private var cancelledRequests: Set<UInt64> = []
 
-    func begin() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        generation &+= 1
-        return generation
+    func begin(supersedingEarlierRequests: Bool) -> UInt64 {
+        lock.withLock {
+            latestRequest += 1
+            if supersedingEarlierRequests {
+                supersededThrough = latestRequest - 1
+                cancelledRequests = cancelledRequests.filter { $0 > supersededThrough }
+            }
+            return latestRequest
+        }
     }
 
     func cancel(_ request: UInt64) {
-        lock.lock()
-        defer { lock.unlock() }
-        if generation == request { generation &+= 1 }
+        lock.withLock {
+            guard request > supersededThrough else { return }
+            _ = cancelledRequests.insert(request)
+        }
+    }
+
+    func finish(_ request: UInt64) {
+        lock.withLock { _ = cancelledRequests.remove(request) }
     }
 
     func check(_ request: UInt64) throws {
-        lock.lock()
-        let isCurrent = generation == request
-        lock.unlock()
-        guard isCurrent else { throw CancellationError() }
+        let isActive = lock.withLock {
+            request > supersededThrough && !cancelledRequests.contains(request)
+        }
+        guard isActive else { throw CancellationError() }
     }
 }
 
@@ -1133,20 +1082,83 @@ final class WindowAccessibilityWorker: @unchecked Sendable {
         self.operation = operation
     }
 
-    func perform(_ action: WindowAction, targetPID: pid_t?, screens: [CGRect]) async throws {
-        let request = state.begin()
-        try await withTaskCancellationHandler {
+    func perform(
+        _ action: WindowAction,
+        targetPID: pid_t?,
+        screens: [CGRect],
+        options: WindowLayoutOptions = .standard
+    ) async throws {
+        try await perform(
+            .action(action),
+            targetPID: targetPID,
+            screens: screens,
+            options: options,
+            pointerScreenIndex: nil
+        )
+    }
+
+    func perform(
+        _ request: WindowRequest,
+        targetPID: pid_t?,
+        screens: [CGRect],
+        options: WindowLayoutOptions,
+        pointerScreenIndex: Int?
+    ) async throws {
+        try await run(superseding: !request.isIncremental) { [operation] checkCancellation in
+            try operation.perform(
+                request,
+                targetPID: targetPID,
+                screens: screens,
+                options: options,
+                pointerScreenIndex: pointerScreenIndex,
+                checkCancellation: checkCancellation
+            )
+        }
+    }
+
+    func focusedFrame(targetPID: pid_t?) async -> CGRect? {
+        try? await run(superseding: false) { [operation] checkCancellation in
+            try operation.focusedFrame(targetPID: targetPID, checkCancellation: checkCancellation)
+        }
+    }
+
+    func captureWorkspace(screens: [CGRect], options: WindowLayoutOptions) async throws -> [WindowWorkspace.Entry] {
+        try await run(superseding: false) { [operation] checkCancellation in
+            try operation.captureWorkspaceEntries(
+                screens: screens,
+                options: options,
+                checkCancellation: checkCancellation
+            )
+        }
+    }
+
+    /// Automatic tiling refreshes queue behind user requests instead of cancelling them.
+    func refreshTiling(screens: [CGRect], options: WindowLayoutOptions) async {
+        try? await run(superseding: false) { [operation] checkCancellation in
+            try operation.retile(screens: screens, options: options, checkCancellation: checkCancellation)
+        }
+    }
+
+    func forgetApplication(_ processIdentifier: pid_t) {
+        queue.async { [operation] in
+            operation.history.removeApplication(processIdentifier)
+            operation.tiling.removeApplication(processIdentifier)
+        }
+    }
+
+    private func run<Result: Sendable>(
+        superseding: Bool,
+        _ body: @escaping @Sendable (_ checkCancellation: () throws -> Void) throws -> Result
+    ) async throws -> Result {
+        let request = state.begin(supersedingEarlierRequests: superseding)
+        return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async { [self] in
+                    defer { state.finish(request) }
                     do {
                         try state.check(request)
-                        try operation.perform(
-                            action,
-                            targetPID: targetPID,
-                            screens: screens,
-                            checkCancellation: { try self.state.check(request) }
-                        )
-                        continuation.resume(returning: ())
+                        let result = try body { try self.state.check(request) }
+                        continuation.resume(returning: result)
                     } catch {
                         continuation.resume(throwing: error)
                     }
@@ -1166,31 +1178,98 @@ final class WindowManager {
     )
 
     private let worker: WindowAccessibilityWorker
+    var layoutOptionsProvider: @MainActor () -> WindowLayoutOptions = { .standard }
+    var customLayoutProvider: @MainActor (UUID) -> CustomWindowLayout? = { _ in nil }
+    var workspaceProvider: @MainActor (UUID) -> WindowWorkspace? = { _ in nil }
 
     init(operation: WindowAccessibilityOperation = WindowAccessibilityOperation()) {
         worker = WindowAccessibilityWorker(operation: operation)
     }
 
+    /// Resolves a launcher or hot-key identifier such as `window.leftHalf` or
+    /// `window.layout.<UUID>`.
+    func request(forActionID id: String) -> WindowRequest? {
+        WindowShortcutTarget(actionID: id).flatMap(request(for:))
+    }
+
+    func request(for target: WindowShortcutTarget) -> WindowRequest? {
+        switch target {
+        case .action(let action): .action(action)
+        case .layout(let id): customLayoutProvider(id).map { .frame($0.frameSpec) }
+        case .workspace(let id): workspaceProvider(id).map(WindowRequest.workspace)
+        }
+    }
+
     func perform(_ action: WindowAction, targetPID: pid_t? = nil) async throws {
+        try await perform(.action(action), targetPID: targetPID)
+    }
+
+    func perform(_ request: WindowRequest, targetPID: pid_t? = nil) async throws {
         guard AccessibilityPermissionChecker.isTrusted else {
             throw WindowManagementError.accessibilityRequired
         }
+        if case .workspace(let workspace) = request {
+            launchMissingApplications(for: workspace)
+        }
         let screens = screenFrames()
+        let options = layoutOptionsProvider()
         let target = targetPID ?? -1
         let startedAt = ProcessInfo.processInfo.systemUptime
         do {
-            try await worker.perform(action, targetPID: targetPID, screens: screens)
+            try await worker.perform(
+                request,
+                targetPID: targetPID,
+                screens: screens,
+                options: options,
+                pointerScreenIndex: pointerScreenIndex()
+            )
             let milliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
             Self.logger.debug(
-                "Window action \(action.rawValue, privacy: .public) target \(target, privacy: .public) completed in \(milliseconds, privacy: .public) ms"
+                "Window action \(request.logName, privacy: .public) target \(target, privacy: .public) completed in \(milliseconds, privacy: .public) ms"
             )
         } catch {
             let description = Self.diagnosticDescription(for: error)
             Self.logger.error(
-                "Window action \(action.rawValue, privacy: .public) target \(target, privacy: .public) failed: \(description, privacy: .public)"
+                "Window action \(request.logName, privacy: .public) target \(target, privacy: .public) failed: \(description, privacy: .public)"
             )
             throw error
         }
+    }
+
+    func focusedWindowFrame(targetPID: pid_t?) async -> CGRect? {
+        guard AccessibilityPermissionChecker.isTrusted else { return nil }
+        return await worker.focusedFrame(targetPID: targetPID)
+    }
+
+    func captureWorkspace() async throws -> [WindowWorkspace.Entry] {
+        guard AccessibilityPermissionChecker.isTrusted else {
+            throw WindowManagementError.accessibilityRequired
+        }
+        return try await worker.captureWorkspace(screens: screenFrames(), options: layoutOptionsProvider())
+    }
+
+    func refreshTiling() async {
+        guard AccessibilityPermissionChecker.isTrusted else { return }
+        await worker.refreshTiling(screens: screenFrames(), options: layoutOptionsProvider())
+    }
+
+    func forgetApplication(_ processIdentifier: pid_t) {
+        worker.forgetApplication(processIdentifier)
+    }
+
+    private func launchMissingApplications(for workspace: WindowWorkspace) {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        for bundleIdentifier in Set(workspace.entries.map(\.bundleIdentifier)) where !running.contains(bundleIdentifier) {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { continue }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        }
+    }
+
+    private func pointerScreenIndex() -> Int? {
+        let location = NSEvent.mouseLocation
+        return NSScreen.screens.firstIndex { NSMouseInRect(location, $0.frame, false) }
     }
 
     private static func diagnosticDescription(for error: Error) -> String {
@@ -1213,7 +1292,7 @@ final class WindowManager {
         }
     }
 
-    private func screenFrames() -> [CGRect] {
+    func screenFrames() -> [CGRect] {
         guard let primary = NSScreen.screens.first else { return [] }
         let dock = DockPreferenceSnapshot.current
         return NSScreen.screens.map { screen in
