@@ -32,10 +32,11 @@ final class LauncherPreviewRendererTests: XCTestCase {
         }
     }
 
-    func testNoResultsPreviewAndLauncherMatchAnOrdinaryResultRow() throws {
+    func testStatusRowPreviewAndLauncherMatchAnOrdinaryResultRow() throws {
         _ = NSApplication.shared
         let results = LauncherMainSearchResultComposer.compose(
-            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
+            catalogResults: [], calculatorEvaluation: .incomplete, hasVisibleQuery: true,
+            noMatch: .inlineStatus, limit: 7)
         for mode in [LauncherAppearanceMode.light, .dark] {
             var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
             preferences.mode = mode
@@ -48,17 +49,15 @@ final class LauncherPreviewRendererTests: XCTestCase {
                 fixture: .init(query: "screen", results: Array(LauncherPreviewFixture.standard.results.prefix(1))),
                 iconProvider: quietIconProvider(), interactive: true)
             normal.prepareForCapture()
-            let controller = LauncherPanelController()
-            controller.applyAppearance(preferences)
-            controller.setMode(.main, initialQuery: "unmatched")
-            controller.apply(results)
             XCTAssertEqual(preview.frame, normal.frame)
             XCTAssertEqual(preview.tableDocumentFrame, normal.tableDocumentFrame)
-            XCTAssertEqual(preview.frame.height, controller.currentPanelHeight)
             XCTAssertEqual(preview.renderMetrics.resultsViewportHeight, theme.rowHeight)
-            XCTAssertEqual(preview.renderMetrics.resultsDocumentHeight, theme.rowHeight)
-            XCTAssertNil(preview.selectedResultID)
-            XCTAssertFalse(preview.moveInteractiveSelection(up: false))
+            let controller = LauncherPanelController()
+            controller.applyAppearance(preferences)
+            controller.setMode(.main, initialQuery: "1+")
+            controller.apply(results)
+            XCTAssertEqual(controller.currentPanelHeight, theme.searchHeight)
+            XCTAssertFalse(controller.isResultViewportVisible)
         }
     }
 

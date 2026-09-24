@@ -204,13 +204,28 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         try await waitForExpansionToSettle(controller)
         let expandedHeight = window.frame.height
         XCTAssertEqual(expandedHeight, theme.panelHeight(resultCount: full.count), accuracy: 0.5)
+        window.contentView?.layoutSubtreeIfNeeded()
+        func firstRow(in view: NSView) -> ResultRowView? {
+            if let row = view as? ResultRowView { return row }
+            for subview in view.subviews {
+                if let row = firstRow(in: subview) { return row }
+            }
+            return nil
+        }
+        let listedRow = window.contentView.flatMap(firstRow(in:))
+        let rowFrameBefore = listedRow?.convert(listedRow?.bounds ?? .zero, to: nil)
 
         // Clearing the query starts a shrink motion. The rows must stay mounted while the
         // bottom edge rises — hiding the viewport up front produced the "empty glass"
-        // collapse flash.
+        // collapse flash. The divider and the row's position stay until that clip finishes.
         controller.setMode(.main, initialQuery: "")
         controller.apply([])
         XCTAssertTrue(controller.isExpansionAnimationInFlight)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let listedRowAfter = window.contentView.flatMap(firstRow(in:))
+        let rowFrameAfter = listedRowAfter?.convert(listedRowAfter?.bounds ?? .zero, to: nil)
+        XCTAssertEqual(rowFrameAfter?.minY ?? -1, rowFrameBefore?.minY ?? -2, accuracy: 0.5,
+                       "Clearing the query must not lift the list before the window shrinks")
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertTrue(controller.isResultViewportVisible,
                       "Rows must ride the shrinking clip, not vanish before it")

@@ -362,8 +362,11 @@ final class LauncherPreviewRenderer: ObservableObject {
     var cachedImageCost: Int { cacheCost }
 
     func nativePaneIconDidLoad(_ iconKey: String, context: IconRenderContext? = nil) {
+        let isSettingsBadge = iconKey == IconCache.systemSettingsBadgeIconKey
         guard isSettingsSessionActive,
-              fixture.results.contains(where: { $0.entry.iconKey == iconKey }) else { return }
+              fixture.results.contains(where: {
+                  $0.entry.iconKey == iconKey || (isSettingsBadge && $0.entry.kind == .systemSetting)
+              }) else { return }
         for key in Array(cache.keys) where context == nil || key.iconContext == context { invalidate(key) }
         // Published revision restarts ThemeCard tasks, while the revision guard above prevents
         // a capture already in flight from committing a fallback-icon screenshot afterward.
@@ -514,6 +517,10 @@ final class LauncherPreviewIconProvider {
 
     func image(for entry: SearchEntry, context: IconRenderContext? = nil) -> NSImage {
         productionIconCache.image(for: entry, context: context)
+    }
+
+    func systemSettingsBadge(for paneIcon: NSImage, context: IconRenderContext? = nil) -> NSImage? {
+        productionIconCache.systemSettingsBadge(for: paneIcon, context: context)
     }
 
     func prepare(_ entries: [SearchEntry], context: IconRenderContext) {
@@ -695,9 +702,13 @@ final class LauncherPreviewContentView: NSView,
         }
         let view = preparedRows[row]
         let result = displayedResults[row]
+        let icon = iconProvider.image(for: result.entry, context: iconContext)
         view.configure(
             result: result,
-            icon: iconProvider.image(for: result.entry, context: iconContext),
+            icon: icon,
+            settingsBadge: result.entry.kind == .systemSetting
+                ? iconProvider.systemSettingsBadge(for: icon, context: iconContext)
+                : nil,
             confirmation: false,
             row: row,
             selected: row == selectedRow,

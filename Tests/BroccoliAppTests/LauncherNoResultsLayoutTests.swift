@@ -5,29 +5,45 @@ import XCTest
 
 @MainActor
 final class LauncherNoResultsLayoutTests: XCTestCase {
-    func testNoResultsUsesTheSameRowAndWindowSizeAsAnOrdinaryResult() async throws {
+    func testStatusAndGoogleRowsUseTheSameRowAndWindowSizeAsAnOrdinaryResult() async throws {
         for mode in [LauncherAppearanceMode.light, .dark] {
             try await checkVisibleTransitions(mode: mode)
         }
     }
 
-    func testSwitchingToMinimalRestoresItsStandardNoResultsRow() throws {
+    func testInlineNoResultsKeepsOnlyTheSearchBandInEveryDesign() throws {
         _ = NSApplication.shared
         let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
         let results = LauncherMainSearchResultComposer.compose(
-            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
+            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true,
+            noMatch: .inlineStatus, limit: 7)
         for design in [LauncherDesign.liquidGlass, .minimal, .liquidGlass] {
             let preferences = LauncherAppearancePreferences.defaults(design: design)
             panel.applyAppearance(preferences)
             panel.setMode(.main, initialQuery: "unmatched")
             panel.apply(results)
-            let root = try XCTUnwrap(panel.visibilityIsolationWindow.contentView)
-            root.layoutSubtreeIfNeeded()
-            let table = try XCTUnwrap(descendants(root).compactMap { $0 as? NSTableView }.first)
             let theme = LauncherThemeController().descriptor(for: preferences)
-            XCTAssertEqual(table.rect(ofRow: 0).height, theme.rowHeight)
-            XCTAssertEqual(panel.currentPanelHeight, theme.panelHeight(resultCount: 1))
-            XCTAssertNil(panel.selectedResultID)
+            XCTAssertEqual(panel.currentPanelHeight, theme.searchHeight)
+            XCTAssertFalse(panel.isResultViewportVisible)
+            XCTAssertEqual(panel.inlineSuggestionText, "— No results")
+        }
+    }
+
+    func testUnfinishedCalculationDoesNotOpenAResultRow() throws {
+        _ = NSApplication.shared
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
+        let results = LauncherMainSearchResultComposer.compose(
+            catalogResults: [], calculatorEvaluation: .incomplete, hasVisibleQuery: true,
+            noMatch: .inlineStatus, limit: 7)
+        for design in [LauncherDesign.liquidGlass, .minimal] {
+            let preferences = LauncherAppearancePreferences.defaults(design: design)
+            panel.applyAppearance(preferences)
+            panel.setMode(.main, initialQuery: "1+")
+            panel.apply(results)
+            let theme = LauncherThemeController().descriptor(for: preferences)
+            XCTAssertEqual(panel.currentPanelHeight, theme.searchHeight)
+            XCTAssertFalse(panel.isResultViewportVisible)
+            XCTAssertTrue(panel.listedResultIDs.isEmpty)
         }
     }
 
@@ -40,12 +56,13 @@ final class LauncherNoResultsLayoutTests: XCTestCase {
         panel.showForAutomatedTests()
         defer { panel.dismiss(notify: false) }
         panel.setMode(.main, initialQuery: "unmatched")
-        let noResults = LauncherMainSearchResultComposer.compose(
-            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
+        let google = LauncherMainSearchResultComposer.compose(
+            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true,
+            noMatch: .webSearch(query: "unmatched", engine: .google), limit: 7)
         let normal = Array(LauncherPreviewFixture.standard.results.prefix(1))
         var ordinaryWindowFrame: NSRect?
         var ordinaryRowFrame: NSRect?
-        for results in [normal, noResults, normal, noResults] {
+        for results in [normal, google, normal, google] {
             panel.apply(results)
             try await Task.sleep(for: .milliseconds(20))
             let root = try XCTUnwrap(panel.visibilityIsolationWindow.contentView)

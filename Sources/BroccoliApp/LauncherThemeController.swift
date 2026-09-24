@@ -44,6 +44,7 @@ enum LauncherMinimalMetrics {
     static let resultNativeIconOpticalSize: CGFloat = 35
     static let resultActionIconOpticalSize: CGFloat = 16.5
     static let resultTemplatePointSize: CGFloat = 22
+    static let resultSettingsBadgeSize: CGFloat = 15
     static let resultTitleFontSize: CGFloat = 16
     static let resultSubtitleFontSize: CGFloat = 12
     static let resultShortcutFontSize: CGFloat = 13
@@ -95,6 +96,8 @@ enum LauncherLiquidGlassMetrics {
     static let resultIconSize: CGFloat = 50
     static let resultActionIconOpticalSize: CGFloat = 30
     static let resultClipboardIconOpticalSize: CGFloat = 48
+    // The System Settings icon that marks a Settings pane result, at its bottom-right corner.
+    static let resultSettingsBadgeSize: CGFloat = 20
     static let statusIconSize: CGFloat = 22
     // Keep result selection bars clear of both the header rule and the rounded lower edge.
     // Matching top and bottom insets preserves the panel's rhythm at every result count.

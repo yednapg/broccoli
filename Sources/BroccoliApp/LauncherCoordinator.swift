@@ -71,6 +71,16 @@ enum LauncherToggleDecision: Equatable, Sendable {
     }
 }
 
+/// What the main launcher presents when a visible query matches nothing.
+enum LauncherNoMatchPresentation: Equatable, Sendable {
+    /// “No results” beside the query, presented like an inline calculator answer.
+    case inlineStatus
+    /// A selectable web search for the query.
+    case webSearch(query: String, engine: WebSearchEngine)
+    /// A number is still being typed, so neither “No results” nor a web search is offered.
+    case stillTyping
+}
+
 /// Resolves the main launcher's mutually exclusive search states. A calculator expression is
 /// not also a catalog query: presenting both at once produces irrelevant matches such as the
 /// System Settings term “802.1X” for `1+1` and leaves selection semantics ambiguous.
@@ -79,6 +89,7 @@ enum LauncherMainSearchResultComposer {
         catalogResults: [RankedResult],
         calculatorEvaluation: CalculatorEvaluation,
         hasVisibleQuery: Bool,
+        noMatch: LauncherNoMatchPresentation,
         limit: Int
     ) -> [RankedResult] {
         let resolved: [RankedResult]
@@ -123,10 +134,10 @@ enum LauncherMainSearchResultComposer {
         case .invalid:
             // Once the calculator has claimed a query, an invalid expression must not fall
             // through to fuzzy catalog matching. Show a deterministic status row instead.
-            resolved = hasVisibleQuery ? [noResultsResult] : []
+            resolved = hasVisibleQuery ? noMatchResults(noMatch) : []
         case .notExpression:
             resolved = catalogResults.isEmpty && hasVisibleQuery
-                ? [noResultsResult]
+                ? noMatchResults(noMatch)
                 : catalogResults
         }
         return Array(resolved.prefix(max(0, limit)))
@@ -174,6 +185,18 @@ enum LauncherMainSearchResultComposer {
             ))
         }
         return rows
+    }
+
+    private static func noMatchResults(_ noMatch: LauncherNoMatchPresentation) -> [RankedResult] {
+        switch noMatch {
+        case .stillTyping:
+            return []
+        case .inlineStatus:
+            return [noResultsResult]
+        case .webSearch(let query, let engine):
+            guard let entry = WebSearch.entry(for: query, engine: engine) else { return [noResultsResult] }
+            return [RankedResult(entry: entry, score: 0)]
+        }
     }
 
     private static var noResultsResult: RankedResult {
@@ -276,6 +299,7 @@ final class LauncherCoordinator {
     private let usageStore: UsageStore
     private let diagnosticsStore: DiagnosticsStore
     private let actionExecutor: ActionExecutor
+    private let windowManager: WindowManager
     private let searchEngine = SearchEngine()
     private let calculatorEngine = CalculatorEngine()
     private let searchQueue = DispatchQueue(
@@ -335,6 +359,7 @@ final class LauncherCoordinator {
         self.usageStore = usageStore
         self.diagnosticsStore = diagnosticsStore
         actionExecutor = ActionExecutor(windowManager: windowManager)
+        self.windowManager = windowManager
         self.clipboardMonitor = clipboardMonitor
         appliedAppearance = preferences.appearance
         appliedSearchConfiguration = SearchConfiguration(preferences: preferences)
@@ -370,6 +395,7 @@ final class LauncherCoordinator {
                     enabledActionIDs: preferences.enabledActionIDs,
                     isDarkMode: snapshotIsDarkMode
                 )
+                + appliedSearchConfiguration.snapshotInputs.windowEntries
                 + [Self.clipboardCommand]
         )
         attachClipboardMonitor(clipboardMonitor)
@@ -511,6 +537,7 @@ final class LauncherCoordinator {
         let applicationsEnabled = preferences.applicationsEnabled
         let settingsEnabled = preferences.settingsEnabled
         let actionsEnabled = preferences.actionsEnabled
+        let windowEntries = SearchConfiguration(preferences: preferences).snapshotInputs.windowEntries
         let isDarkMode = systemIsDarkMode
         snapshotIsDarkMode = isDarkMode
         let clipboardCommand = Self.clipboardCommand
@@ -530,6 +557,7 @@ final class LauncherCoordinator {
                         enabledActionIDs: enabledActionIDs,
                         isDarkMode: isDarkMode
                     )
+                    + windowEntries
                     + [clipboardCommand]
             )
             guard !Task.isCancelled else { return }
@@ -577,6 +605,13 @@ final class LauncherCoordinator {
         let calculatorContext = makeCalculatorContext()
         let resultLimit = LauncherSearchLimits.resultSetCap
         let hasVisibleQuery = !SearchNormalizer.normalize(query).isEmpty
+        let noMatch: LauncherNoMatchPresentation = if WebSearch.isCalculationInProgress(query) {
+            .stillTyping
+        } else if preferences.webSearchEngine == .off {
+            .inlineStatus
+        } else {
+            .webSearch(query: query, engine: preferences.webSearchEngine)
+        }
         let state = signposter.beginInterval("QueryToResults")
         let start = ContinuousClock.now
         interpretationTask?.cancel()
@@ -607,6 +642,7 @@ final class LauncherCoordinator {
                 catalogResults: catalogResults,
                 calculatorEvaluation: calculatorEvaluation,
                 hasVisibleQuery: hasVisibleQuery,
+                noMatch: noMatch,
                 limit: resultLimit
             )
             Task { @MainActor [weak self] in
@@ -659,6 +695,10 @@ final class LauncherCoordinator {
             dismissForExternalDispatch()
             _ = NSWorkspace.shared.open(URL(fileURLWithPath: path))
             finishExternalDispatchAfterActivation()
+        case .webSearch(let url):
+            dismissForExternalDispatch()
+            _ = NSWorkspace.shared.open(url)
+            finishExternalDispatchAfterActivation()
         case .calculator(let result, let patternKey):
             if let patternKey {
                 rememberCalculatorChoice(patternKey)
@@ -705,12 +745,12 @@ final class LauncherCoordinator {
             break
         }
 
-        guard let definition = ActionRegistry.definition(id: id) else {
-            executeAction(id: id, automationRelated: false)
+        if let request = windowManager.request(forActionID: id) {
+            executeWindowRequest(request)
             return
         }
-        if definition.permission == .accessibility {
-            executeWindowAction(id: id)
+        guard let definition = ActionRegistry.definition(id: id) else {
+            executeAction(id: id, automationRelated: false)
             return
         }
         guard definition.permission == .automation else {
@@ -748,7 +788,7 @@ final class LauncherCoordinator {
         }
     }
 
-    private func executeWindowAction(id: String) {
+    private func executeWindowRequest(_ request: WindowRequest) {
         guard AccessibilityPermissionChecker.isTrusted else {
             panel.dismiss(notify: false)
             let alert = NSAlert()
@@ -769,11 +809,13 @@ final class LauncherCoordinator {
 
         let targetPID = onResolveWindowTarget?(previousApplication)
         panel.dismiss(notify: false)
-        windowActionTask?.cancel()
+        if !request.isIncremental {
+            windowActionTask?.cancel()
+        }
         windowActionTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                _ = try await actionExecutor.execute(id: id, targetPID: targetPID)
+                try await windowManager.perform(request, targetPID: targetPID)
                 try Task.checkCancellation()
                 restorePreviousApplication(activateAllWindows: false)
             } catch is CancellationError {
@@ -978,15 +1020,19 @@ final class LauncherCoordinator {
         generation: Int,
         showsLoadingState: Bool
     ) {
-        let loading = SearchEntry(
-            id: "status:file-searching",
-            kind: .status,
-            title: query.isEmpty ? "Type a filename" : "Searching files…",
-            subtitle: query.isEmpty ? "Search by name or path" : "Using Spotlight metadata",
-            iconKey: "status:file-searching",
-            target: .none
-        )
-        if showsLoadingState || query.isEmpty {
+        // The field's placeholder already asks for a name or path. An empty query presents
+        // the bare search field rather than a status row repeating that prompt.
+        if query.isEmpty {
+            panel.apply([])
+        } else if showsLoadingState {
+            let loading = SearchEntry(
+                id: "status:file-searching",
+                kind: .status,
+                title: "Searching files…",
+                subtitle: "Using Spotlight metadata",
+                iconKey: "status:file-searching",
+                target: .none
+            )
             panel.apply([RankedResult(entry: loading, score: 0)])
         }
         fileSearchService.search(
@@ -1002,11 +1048,15 @@ final class LauncherCoordinator {
                     RankedResult(entry: $0.element.searchEntry, score: 1_000 - $0.offset)
                 }
                 if results.isEmpty {
+                    guard !self.panel.query.isEmpty else {
+                        self.panel.apply([])
+                        return
+                    }
                     let entry = SearchEntry(
                         id: "status:no-files",
                         kind: .status,
-                        title: self.panel.query.isEmpty ? "Type a filename" : "No files found",
-                        subtitle: self.panel.query.isEmpty ? "Search by name or path" : "Try a different name or path",
+                        title: "No files found",
+                        subtitle: "Try a different name or path",
                         iconKey: "status:no-files",
                         target: .none
                     )
@@ -1197,6 +1247,8 @@ private struct SearchConfiguration: Equatable {
         let settingsEnabled: Bool
         let actionsEnabled: Bool
         let enabledActionIDs: Set<String>
+        /// Custom layouts and workspaces, searchable like the built-in actions.
+        let windowEntries: [SearchEntry]
     }
 
     let snapshotInputs: SnapshotInputs
@@ -1211,7 +1263,10 @@ private struct SearchConfiguration: Equatable {
             applicationsEnabled: preferences.applicationsEnabled,
             settingsEnabled: preferences.settingsEnabled,
             actionsEnabled: preferences.actionsEnabled,
-            enabledActionIDs: preferences.enabledActionIDs
+            enabledActionIDs: preferences.enabledActionIDs,
+            windowEntries: preferences.actionsEnabled
+                ? WindowSearchEntries.customizations(preferences.windowManagement)
+                : []
         )
         recentItemsEnabled = preferences.recentItemsEnabled
         adaptiveRankingEnabled = preferences.adaptiveRankingEnabled

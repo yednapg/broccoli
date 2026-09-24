@@ -57,8 +57,6 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
         _ = NSApplication.shared
         let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
         var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
-        let noResults = LauncherMainSearchResultComposer.compose(
-            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
         let fixtures = LauncherPreviewFixture.standard.results
         for mode in [LauncherAppearanceMode.light, .dark] {
             preferences.mode = mode
@@ -69,9 +67,12 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
             let top = window.frame.maxY
             controller.setMode(.main, initialQuery: "fixture")
             for _ in 0..<4 {
-                for results in [fixtures, noResults, [], Array(fixtures.prefix(1))] {
+                for results in [fixtures, [], Array(fixtures.prefix(1))] {
                     controller.apply(results)
-                    let expectedHeight = theme.panelHeight(resultCount: results.count)
+                    let selectableCount = results.filter { $0.entry.kind != .status }.count
+                    let expectedHeight = selectableCount == 0
+                        ? theme.searchHeight
+                        : theme.panelHeight(resultCount: selectableCount)
                     XCTAssertEqual(window.frame.height, expectedHeight)
                     // Give AppKit a later turn to expose deferred fitting-size changes.
                     try await Task.sleep(for: .milliseconds(10))
@@ -102,7 +103,7 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
             RankedResult(
                 entry: SearchEntry(
                     id: "fixture:\(index)",
-                    kind: .status,
+                    kind: .application,
                     title: "Fixture \(index)",
                     target: .none
                 ),

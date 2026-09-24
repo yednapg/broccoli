@@ -140,21 +140,10 @@ struct CalculatorSettingsPane: View {
             }
             SpotlightSettingsCard("Supported") {
                 VStack(alignment: .leading, spacing: 8) {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 210), alignment: .leading)],
-                        alignment: .leading,
-                        spacing: 2
-                    ) {
-                        calculatorCapability("Arithmetic", symbol: "plus.forwardslash.minus")
-                        calculatorCapability("Scientific Functions", symbol: "function")
-                        calculatorCapability("Length & Area", symbol: "ruler")
-                        calculatorCapability("Volume & Mass", symbol: "cube")
-                        calculatorCapability("Temperature & Time", symbol: "thermometer.medium")
-                        calculatorCapability("Speed & Angle", symbol: "speedometer")
-                        calculatorCapability("Data Size", symbol: "externaldrive")
-                        calculatorCapability("Percentages", symbol: "percent")
-                        calculatorCapability("Dates & Time Zones", symbol: "clock")
-                        calculatorCapability("Currency", symbol: "coloncurrencysign")
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(Self.capabilityColumns.indices, id: \.self) { column in
+                            capabilityGrid(Self.capabilityColumns[column])
+                        }
                     }
                     ExamplePill("10 km in mi", detail: "6.21371 mi")
                 }
@@ -165,11 +154,51 @@ struct CalculatorSettingsPane: View {
         }
     }
 
-    private func calculatorCapability(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol)
-            .font(.system(size: 11))
-            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
-            .accessibilityElement(children: .combine)
+    struct Capability: Identifiable {
+        let title: String
+        let symbol: String
+        var id: String { title }
+    }
+
+    static let capabilityColumns: [[Capability]] = [
+        [
+            Capability(title: "Arithmetic", symbol: "plus.forwardslash.minus"),
+            Capability(title: "Length & Area", symbol: "ruler"),
+            Capability(title: "Temperature & Time", symbol: "thermometer.medium"),
+            Capability(title: "Data Size", symbol: "externaldrive"),
+            Capability(title: "Dates & Time Zones", symbol: "clock"),
+        ],
+        [
+            Capability(title: "Scientific Functions", symbol: "function"),
+            Capability(title: "Volume & Mass", symbol: "cube"),
+            Capability(title: "Speed & Angle", symbol: "speedometer"),
+            Capability(title: "Percentages", symbol: "percent"),
+            Capability(title: "Currency", symbol: "coloncurrencysign"),
+        ],
+    ]
+
+    /// The widest capability symbol at the 11-point row size. Every symbol starts at the
+    /// leading edge of this column, so the icons share one line and every title still
+    /// starts on one line.
+    static let capabilitySymbolColumn: CGFloat = 18
+    static let capabilitySymbolGap: CGFloat = 8
+    static let capabilitySymbolPointSize: CGFloat = 11
+
+    private func capabilityGrid(_ capabilities: [Capability]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(capabilities) { capability in
+                HStack(spacing: Self.capabilitySymbolGap) {
+                    Image(systemName: capability.symbol)
+                        .frame(width: Self.capabilitySymbolColumn, alignment: .leading)
+                        .accessibilityHidden(true)
+                    Text(capability.title)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            }
+        }
+        .font(.system(size: Self.capabilitySymbolPointSize))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func calculatorBinding<Value>(_ keyPath: WritableKeyPath<CalculatorPreferences, Value>) -> Binding<Value> {

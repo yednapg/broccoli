@@ -4,11 +4,14 @@ import BroccoliCore
 /// The policy is intentionally pure and allocation-light because it runs for every published
 /// search generation.
 enum LauncherInlineSuggestionManager {
+    static let noResultsEntryID = "status:no-results"
+
     static func suggestion(from results: [RankedResult]) -> RankedResult? {
-        results.first { $0.entry.id == "calculator:answer" }
+        results.first { $0.entry.id == "calculator:answer" || $0.entry.id == noResultsEntryID }
     }
 
     static func displayText(for result: RankedResult, query: String) -> String {
+        if result.entry.id == noResultsEntryID { return "— \(result.entry.title)" }
         guard result.entry.kind == .calculator else { return result.entry.title }
         let answer: String
         if let separator = result.entry.title.range(of: " = ", options: .backwards) {
