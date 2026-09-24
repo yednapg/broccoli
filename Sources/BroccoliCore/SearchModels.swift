@@ -7,6 +7,7 @@ public enum SearchKind: String, Codable, CaseIterable, Sendable {
     case file
     case calculator
     case clipboard
+    case webSearch
     case status
 }
 
@@ -18,6 +19,7 @@ public enum ExecutableTarget: Codable, Hashable, Sendable {
     case calculator(result: String, patternKey: String? = nil)
     case clipboardCommand
     case clipboardItem(id: String)
+    case webSearch(url: URL)
     case none
 }
 
@@ -226,7 +228,7 @@ public struct SearchPreferences: Sendable {
         case .application: applicationsEnabled
         case .systemSetting: settingsEnabled
         case .action: actionsEnabled
-        case .file, .calculator, .clipboard, .status: true
+        case .file, .calculator, .clipboard, .webSearch, .status: true
         }
     }
 }

@@ -138,6 +138,84 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(results.map(\.entry.id), ["1", "2"])
     }
 
+    func testSingleCharacterMatchesOnlyTheStartsOfWords() {
+        let results = engine.search(query: "j", snapshot: .init(entries: journalFixture), usage: [:])
+
+        XCTAssertEqual(results.map(\.entry.id), ["journal", "setting:joining"],
+                       "Letters inside words and keyword metadata must not flood a one-letter query")
+    }
+
+    func testSingleCharacterPutsTheMostSelectedMatchFirst() {
+        let now = Date()
+        let usage = [
+            "setting:joining": UsageRecord(selectionCount: 12, lastUsed: now.addingTimeInterval(-3 * 86_400)),
+            "setting:emoji": UsageRecord(selectionCount: 50, lastUsed: now),
+        ]
+
+        let results = engine.search(query: "j", snapshot: .init(entries: journalFixture), usage: usage, now: now)
+
+        XCTAssertEqual(results.map(\.entry.id), ["setting:joining", "journal"],
+                       "What the user picks for a letter leads, whether an app or a setting")
+        XCTAssertFalse(results.contains { $0.entry.id == "setting:emoji" },
+                       "Selection history never admits an entry the letter does not start")
+    }
+
+    func testSingleCharacterOrdersSelectedMatchesByHowOftenTheyWereChosen() {
+        let now = Date()
+        let entries = [entry("safari", "Safari"), entry("slack", "Slack"), entry("steam", "Steam")]
+        let usage = [
+            "slack": UsageRecord(selectionCount: 3, lastUsed: now),
+            "steam": UsageRecord(selectionCount: 40, lastUsed: now),
+        ]
+
+        let results = engine.search(query: "s", snapshot: .init(entries: entries), usage: usage, now: now)
+
+        XCTAssertEqual(results.map(\.entry.id), ["steam", "slack", "safari"])
+    }
+
+    func testSingleCharacterSelectionPriorityFollowsAdaptiveRanking() {
+        let usage = ["setting:joining": UsageRecord(selectionCount: 12, lastUsed: Date())]
+
+        let results = engine.search(
+            query: "j",
+            snapshot: .init(entries: journalFixture),
+            usage: usage,
+            preferences: SearchPreferences(adaptiveRankingEnabled: false)
+        )
+
+        XCTAssertEqual(results.first?.entry.id, "journal")
+    }
+
+    func testSingleCharacterKeepsApplicationsWhenPanesFillTheAlphabeticalWindow() {
+        let panes = (0..<60).map { index in
+            SearchEntry(
+                id: "setting:\(index)",
+                kind: .systemSetting,
+                title: String(format: "Sa pane %02d", index),
+                target: .setting(route: nil)
+            )
+        }
+        let slack = entry("slack", "Slack")
+
+        let results = engine.search(query: "s", snapshot: .init(entries: panes + [slack]), usage: [:], limit: 8)
+
+        XCTAssertEqual(results.first?.entry.id, "slack")
+    }
+
+    private var journalFixture: [SearchEntry] {
+        [
+            entry("journal", "Journal"),
+            SearchEntry(id: "setting:joining", kind: .systemSetting, title: "Joining a Wi-Fi network",
+                        target: .setting(route: nil)),
+            SearchEntry(id: "setting:emoji", kind: .systemSetting,
+                        title: "Show keyboard and emoji viewers in menu bar", target: .setting(route: nil)),
+            SearchEntry(id: "setting:layouts", kind: .systemSetting, title: "Keyboard layouts",
+                        keywords: ["japanese"], target: .setting(route: nil)),
+            SearchEntry(id: "setting:adjust", kind: .systemSetting,
+                        title: "Use keyboard shortcuts to adjust zoom window", target: .setting(route: nil)),
+        ]
+    }
+
     func testMultiTermQueryRequiresEveryTermButCanMatchDifferentFields() {
         let keyboard = SearchEntry(
             id: "keyboard-brightness",
