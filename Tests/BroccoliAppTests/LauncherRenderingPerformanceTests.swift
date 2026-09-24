@@ -33,9 +33,10 @@ final class LauncherRenderingPerformanceTests: XCTestCase {
         panel.applyAppearance(.defaults(design: .liquidGlass))
         panel.setMode(.main, initialQuery: "fixture")
         let results = LauncherPreviewFixture.standard.results
-        let noResults = LauncherMainSearchResultComposer.compose(
-            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true, limit: 7)
-        let transitions = [results, Array(results.prefix(1)), noResults, []]
+        let google = LauncherMainSearchResultComposer.compose(
+            catalogResults: [], calculatorEvaluation: .notExpression, hasVisibleQuery: true,
+            noMatch: .webSearch(query: "fixture", engine: .google), limit: 7)
+        let transitions = [results, Array(results.prefix(1)), google, []]
         measureSamples("result resize cycle", count: 80) {
             for results in transitions { panel.apply(results) }
         }

@@ -112,41 +112,80 @@ final class LauncherInlineSuggestionTests: XCTestCase {
         XCTAssertEqual(executed, calculation)
     }
 
-    func testLiquidNoResultsStatusUsesASeparateQuestionMarkRow() {
+    func testNoResultsIsPresentedInlineAndKeepsTheSearchBandCompact() {
+        _ = NSApplication.shared
+        for design in [LauncherDesign.liquidGlass, .minimal] {
+            let controller = LauncherPanelController()
+            let preferences = LauncherAppearancePreferences.defaults(design: design)
+            controller.applyAppearance(preferences, force: true)
+            controller.setMode(.main, initialQuery: "jknnnjnfsjn")
+            let results = LauncherMainSearchResultComposer.compose(
+                catalogResults: [],
+                calculatorEvaluation: .notExpression,
+                hasVisibleQuery: true,
+                noMatch: .inlineStatus,
+                limit: 7
+            )
+            var executed: RankedResult?
+            controller.onExecute = { executed = $0 }
+
+            controller.apply(results)
+
+            XCTAssertEqual(controller.inlineSuggestionText, "— No results")
+            XCTAssertTrue(controller.listedResultIDs.isEmpty)
+            XCTAssertFalse(controller.isResultViewportVisible)
+            XCTAssertEqual(
+                controller.currentPanelHeight,
+                LauncherThemeController().descriptor(for: preferences).searchHeight,
+                "An unmatched query leaves only the search band, with no empty result row"
+            )
+            XCTAssertTrue(controller.control(
+                NSTextField(),
+                textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.insertNewline(_:))
+            ))
+            XCTAssertNil(executed, "Return on the inline message must not execute anything")
+        }
+    }
+
+    func testGoogleFallbackIsASelectedRowThatReturnExecutes() throws {
         _ = NSApplication.shared
         let controller = LauncherPanelController()
         let preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
         controller.applyAppearance(preferences, force: true)
-        controller.setMode(.main, initialQuery: "1")
-        let noResults = RankedResult(
-            entry: SearchEntry(
-                id: "status:no-results",
-                kind: .status,
-                title: "No results",
-                iconKey: "status:no-results",
-                target: .none
-            ),
-            score: 0
+        controller.setMode(.main, initialQuery: "c++ tutorial")
+        let results = LauncherMainSearchResultComposer.compose(
+            catalogResults: [],
+            calculatorEvaluation: .notExpression,
+            hasVisibleQuery: true,
+            noMatch: .webSearch(query: "c++ tutorial", engine: .google),
+            limit: 7
         )
         var executed: RankedResult?
         controller.onExecute = { executed = $0 }
 
-        controller.apply([noResults])
+        controller.apply(results)
 
         XCTAssertNil(controller.inlineSuggestionText)
-        XCTAssertEqual(controller.listedResultIDs, ["status:no-results"])
-        XCTAssertTrue(controller.isResultViewportVisible)
+        XCTAssertEqual(controller.listedResultIDs, [WebSearch.googleEntryID])
+        XCTAssertEqual(controller.selectedResultID, WebSearch.googleEntryID)
         XCTAssertEqual(
             controller.currentPanelHeight,
-            LauncherThemeController().descriptor(for: preferences).panelHeight(resultCount: 1),
-            "The message occupies the same space as any single result"
+            LauncherThemeController().descriptor(for: preferences).panelHeight(resultCount: 1)
         )
         XCTAssertTrue(controller.control(
             NSTextField(),
             textView: NSTextView(),
             doCommandBy: #selector(NSResponder.insertNewline(_:))
         ))
-        XCTAssertNil(executed)
+        let entry = try XCTUnwrap(executed?.entry)
+        XCTAssertEqual(entry.kind, .webSearch)
+        XCTAssertEqual(entry.title, "Search Google for “c++ tutorial”")
+        XCTAssertFalse(entry.id.contains("tutorial"), "The query must never become a usage key")
+        guard case .webSearch(let url) = entry.target else {
+            return XCTFail("The Google row must open a web search")
+        }
+        XCTAssertEqual(url.absoluteString, "https://www.google.com/search?q=c%2B%2B%20tutorial")
     }
 
     func testCalculatorStateSuppressesIncidentalCatalogMatches() {
@@ -166,6 +205,7 @@ final class LauncherInlineSuggestionTests: XCTestCase {
             catalogResults: catalogResults,
             calculatorEvaluation: evaluation,
             hasVisibleQuery: true,
+            noMatch: .inlineStatus,
             limit: 8
         )
 
@@ -181,6 +221,7 @@ final class LauncherInlineSuggestionTests: XCTestCase {
             catalogResults: catalogResults,
             calculatorEvaluation: evaluation,
             hasVisibleQuery: true,
+            noMatch: .inlineStatus,
             limit: 8
         )
         let controller = LauncherPanelController()
@@ -193,18 +234,44 @@ final class LauncherInlineSuggestionTests: XCTestCase {
         XCTAssertFalse(controller.isResultViewportVisible)
     }
 
-    func testPlainNumericMissRemainsAListedNoResultsState() {
+    func testANumberBeingTypedDoesNotOfferAWebSearch() {
+        let evaluation = CalculatorEngine().classify("3", locale: Locale(identifier: "en_US_POSIX"))
         let results = LauncherMainSearchResultComposer.compose(
             catalogResults: [],
-            calculatorEvaluation: CalculatorEngine().classify(
-                "1",
-                locale: Locale(identifier: "en_US_POSIX")
-            ),
+            calculatorEvaluation: evaluation,
             hasVisibleQuery: true,
+            noMatch: .stillTyping,
             limit: 8
         )
 
-        XCTAssertEqual(results.map(\.entry.id), ["status:no-results"])
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testAnUnsolvableCalculationOffersTheSelectedWebSearch() {
+        let evaluation = CalculatorEngine().classify("2 + )", locale: Locale(identifier: "en_US_POSIX"))
+        let results = LauncherMainSearchResultComposer.compose(
+            catalogResults: [],
+            calculatorEvaluation: evaluation,
+            hasVisibleQuery: true,
+            noMatch: .webSearch(query: "2 + )", engine: .duckDuckGo),
+            limit: 8
+        )
+
+        XCTAssertEqual(evaluation, .invalid)
+        XCTAssertEqual(results.map(\.entry.id), [WebSearch.duckDuckGoEntryID])
+        XCTAssertEqual(results.first?.entry.title, "Search DuckDuckGo for “2 + )”")
+    }
+
+    func testCatalogMatchesAreNeverReplacedByTheGoogleFallback() {
+        let results = LauncherMainSearchResultComposer.compose(
+            catalogResults: [applicationResult(id: "notes", title: "Notes")],
+            calculatorEvaluation: .notExpression,
+            hasVisibleQuery: true,
+            noMatch: .webSearch(query: "notes", engine: .google),
+            limit: 8
+        )
+
+        XCTAssertEqual(results.map(\.entry.id), ["notes"])
     }
 
     func testApplyingResultsDoesNotTakeFocusFromNativeFieldEditor() throws {

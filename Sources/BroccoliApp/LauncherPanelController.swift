@@ -339,12 +339,31 @@ struct LauncherSearchGeometry {
     static let cancelTrailingInset = LauncherSearchMetrics.spotlight.cancelTrailingInset
     static let font = LauncherSearchMetrics.spotlight.font
 
+    /// Space between the scope token and the magnifier that follows it.
+    static let leadingAccessoryTextGap: CGFloat = 10
+
     let bounds: NSRect
     var metrics: LauncherSearchMetrics = .spotlight
+    /// Width of a scope token (Files, Clipboard) drawn ahead of the magnifier.
+    var leadingAccessoryWidth: CGFloat = 0
 
-    var searchButtonRect: NSRect {
+    /// The token keeps the field's leading edge. The magnifier, query, placeholder, caret,
+    /// and inline suggestion all start after it.
+    func leadingAccessoryRect(height: CGFloat) -> NSRect {
         NSRect(
             x: bounds.minX,
+            y: bounds.midY - height / 2,
+            width: leadingAccessoryWidth,
+            height: height
+        )
+    }
+
+    var searchButtonRect: NSRect {
+        let originX = bounds.minX + (
+            leadingAccessoryWidth > 0 ? leadingAccessoryWidth + Self.leadingAccessoryTextGap : 0
+        )
+        return NSRect(
+            x: originX,
             y: bounds.midY - metrics.symbolSize / 2,
             width: metrics.symbolSize,
             height: metrics.symbolSize
@@ -378,6 +397,15 @@ struct LauncherSearchGeometry {
 
 final class LauncherNativeSearchFieldCell: NSSearchFieldCell {
     var searchMetrics: LauncherSearchMetrics = .spotlight
+    var leadingAccessoryWidth: CGFloat = 0
+
+    func geometry(forBounds rect: NSRect) -> LauncherSearchGeometry {
+        LauncherSearchGeometry(
+            bounds: rect,
+            metrics: searchMetrics,
+            leadingAccessoryWidth: leadingAccessoryWidth
+        )
+    }
 
     func editorRect(forBounds rect: NSRect, isEmpty: Bool) -> NSRect {
         let textRect = searchTextRect(forBounds: rect)
@@ -405,15 +433,15 @@ final class LauncherNativeSearchFieldCell: NSSearchFieldCell {
     }
 
     override func searchButtonRect(forBounds rect: NSRect) -> NSRect {
-        LauncherSearchGeometry(bounds: rect, metrics: searchMetrics).searchButtonRect
+        geometry(forBounds: rect).searchButtonRect
     }
 
     override func searchTextRect(forBounds rect: NSRect) -> NSRect {
-        LauncherSearchGeometry(bounds: rect, metrics: searchMetrics).searchTextRect
+        geometry(forBounds: rect).searchTextRect
     }
 
     override func cancelButtonRect(forBounds rect: NSRect) -> NSRect {
-        LauncherSearchGeometry(bounds: rect, metrics: searchMetrics).cancelButtonRect
+        geometry(forBounds: rect).cancelButtonRect
     }
 
     override func titleRect(forBounds rect: NSRect) -> NSRect {
@@ -518,9 +546,66 @@ private final class LauncherSearchPlaceholderView: NSTextView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// The Files and Clipboard scope shown ahead of the magnifier. The label keeps its
+/// intrinsic size and Auto Layout centers it, so the title is optically centered in the
+/// pill at any font metrics; the pill's width follows the title.
+final class LauncherSearchScopeTokenView: NSView {
+    static let height: CGFloat = 26
+    static let horizontalPadding: CGFloat = 10
+    static let cornerRadius: CGFloat = 8
+
+    private let label = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = Self.cornerRadius
+        layer?.cornerCurve = .continuous
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        label.setAccessibilityElement(false)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    var title: String {
+        get { label.stringValue }
+        set {
+            label.stringValue = newValue
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    var titleFrame: NSRect { label.alignmentRect(forFrame: label.frame) }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(
+            width: ceil(label.intrinsicContentSize.width) + Self.horizontalPadding * 2,
+            height: Self.height
+        )
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.10).cgColor
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class LauncherNativeSearchField: NSSearchField {
     private let centeredPlaceholderView = LauncherSearchPlaceholderView(frame: .zero)
     private let inlineSuggestionView = LauncherSearchPlaceholderView(frame: .zero)
+    private let scopeTokenView = LauncherSearchScopeTokenView(frame: .zero)
     private(set) var centeredPlaceholderAttributedString: NSAttributedString?
     private(set) var inlineSuggestionText: String?
 
@@ -580,6 +665,19 @@ final class LauncherNativeSearchField: NSSearchField {
         inlineSuggestionView.isHidden = true
         inlineSuggestionView.setAccessibilityRole(.staticText)
         addSubview(inlineSuggestionView, positioned: .above, relativeTo: centeredPlaceholderView)
+        scopeTokenView.isHidden = true
+        addSubview(scopeTokenView, positioned: .above, relativeTo: inlineSuggestionView)
+    }
+
+    /// Shows a scope token such as “Files” ahead of the magnifier, or removes it.
+    /// The cell reserves the token's width, so the magnifier, text, caret, placeholder, and
+    /// inline suggestion move together from the shared search geometry.
+    func setScope(_ title: String?) {
+        scopeTokenView.title = title ?? ""
+        scopeTokenView.isHidden = title == nil
+        (cell as? LauncherNativeSearchFieldCell)?.leadingAccessoryWidth = searchGeometry.leadingAccessoryWidth
+        needsLayout = true
+        needsDisplay = true
     }
 
     func setInlineSuggestion(
@@ -612,6 +710,12 @@ final class LauncherNativeSearchField: NSSearchField {
         // outer rectangles identical removes the baseline difference between direct string
         // drawing and NSTextView rendering.
         centeredPlaceholderView.frame = searchTextBounds
+        if !scopeTokenView.isHidden {
+            scopeTokenView.frame = backingAlignedRect(
+                searchGeometry.leadingAccessoryRect(height: LauncherSearchScopeTokenView.height),
+                options: .alignAllEdgesNearest
+            )
+        }
         layoutInlineSuggestion()
     }
 
@@ -676,25 +780,28 @@ final class LauncherNativeSearchField: NSSearchField {
         inlineSuggestionView.isHidden ? nil : inlineSuggestionView.frame
     }
 
-    override var searchButtonBounds: NSRect {
-        backingAlignedRect(
-            LauncherSearchGeometry(bounds: bounds, metrics: searchMetrics).searchButtonRect,
-            options: .alignAllEdgesNearest
+    private var searchGeometry: LauncherSearchGeometry {
+        LauncherSearchGeometry(
+            bounds: bounds,
+            metrics: searchMetrics,
+            leadingAccessoryWidth: scopeTokenView.isHidden ? 0 : scopeTokenView.intrinsicContentSize.width
         )
+    }
+
+    override var searchButtonBounds: NSRect {
+        backingAlignedRect(searchGeometry.searchButtonRect, options: .alignAllEdgesNearest)
     }
 
     override var searchTextBounds: NSRect {
-        backingAlignedRect(
-            LauncherSearchGeometry(bounds: bounds, metrics: searchMetrics).searchTextRect,
-            options: .alignAllEdgesNearest
-        )
+        backingAlignedRect(searchGeometry.searchTextRect, options: .alignAllEdgesNearest)
     }
 
     override var cancelButtonBounds: NSRect {
-        backingAlignedRect(
-            LauncherSearchGeometry(bounds: bounds, metrics: searchMetrics).cancelButtonRect,
-            options: .alignAllEdgesNearest
-        )
+        backingAlignedRect(searchGeometry.cancelButtonRect, options: .alignAllEdgesNearest)
+    }
+
+    var scopeTokenFrame: NSRect? {
+        scopeTokenView.isHidden ? nil : scopeTokenView.frame
     }
 
     override func textDidChange(_ notification: Notification) {
@@ -1024,6 +1131,7 @@ final class ResultRowView: NSTableCellView {
 
     private let iconSlot = NSLayoutGuide()
     private let resultIcon = ResultIconView()
+    private let settingsBadge = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
@@ -1033,6 +1141,7 @@ final class ResultRowView: NSTableCellView {
     private var iconHeightConstraint: NSLayoutConstraint!
     private var iconDrawingWidthConstraint: NSLayoutConstraint!
     private var iconDrawingHeightConstraint: NSLayoutConstraint!
+    private var settingsBadgeSizeConstraint: NSLayoutConstraint!
     private var titleLeadingConstraint: NSLayoutConstraint!
     private var titleTopConstraint: NSLayoutConstraint!
     private var subtitleTopConstraint: NSLayoutConstraint!
@@ -1070,6 +1179,10 @@ final class ResultRowView: NSTableCellView {
         resultIcon.translatesAutoresizingMaskIntoConstraints = false
         resultIcon.imageScaling = .scaleProportionallyUpOrDown
         resultIcon.imageAlignment = .alignCenter
+        settingsBadge.translatesAutoresizingMaskIntoConstraints = false
+        settingsBadge.imageScaling = .scaleProportionallyUpOrDown
+        settingsBadge.isHidden = true
+        settingsBadge.setAccessibilityElement(false)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 17, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -1081,6 +1194,7 @@ final class ResultRowView: NSTableCellView {
         shortcutLabel.alignment = .right
         addLayoutGuide(iconSlot)
         addSubview(resultIcon)
+        addSubview(settingsBadge, positioned: .above, relativeTo: resultIcon)
         addSubview(titleLabel)
         addSubview(subtitleLabel)
         addSubview(shortcutLabel)
@@ -1117,6 +1231,9 @@ final class ResultRowView: NSTableCellView {
         iconHeightConstraint = iconSlot.heightAnchor.constraint(equalToConstant: 40)
         iconDrawingWidthConstraint = resultIcon.widthAnchor.constraint(equalToConstant: 40)
         iconDrawingHeightConstraint = resultIcon.heightAnchor.constraint(equalToConstant: 40)
+        settingsBadgeSizeConstraint = settingsBadge.widthAnchor.constraint(
+            equalToConstant: LauncherLiquidGlassMetrics.resultSettingsBadgeSize
+        )
         titleLeadingConstraint = titleLabel.leadingAnchor.constraint(
             equalTo: iconSlot.trailingAnchor,
             constant: 4
@@ -1130,6 +1247,10 @@ final class ResultRowView: NSTableCellView {
             resultIcon.centerYAnchor.constraint(equalTo: iconSlot.centerYAnchor),
             iconDrawingWidthConstraint,
             iconDrawingHeightConstraint,
+            settingsBadge.trailingAnchor.constraint(equalTo: resultIcon.trailingAnchor),
+            settingsBadge.bottomAnchor.constraint(equalTo: resultIcon.bottomAnchor),
+            settingsBadgeSizeConstraint,
+            settingsBadge.heightAnchor.constraint(equalTo: settingsBadge.widthAnchor),
             titleLeadingConstraint,
             textGroupGuide.leadingAnchor.constraint(equalTo: leadingAnchor),
             textGroupGuide.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -1156,7 +1277,7 @@ final class ResultRowView: NSTableCellView {
     /// canvas, while the simpler action symbols stay quiet inside the original 30-point canvas.
     static func minimalIconCanvasSize(for kind: SearchKind) -> CGFloat {
         switch kind {
-        case .application, .systemSetting:
+        case .application, .systemSetting, .webSearch:
             LauncherMinimalMetrics.resultNativeIconSize
         default:
             LauncherMinimalMetrics.resultIconSize
@@ -1189,7 +1310,7 @@ final class ResultRowView: NSTableCellView {
 
     static func minimalOpticalIconSize(for kind: SearchKind) -> CGFloat {
         switch kind {
-        case .application, .systemSetting:
+        case .application, .systemSetting, .webSearch:
             LauncherMinimalMetrics.resultNativeIconOpticalSize
         case .action:
             LauncherMinimalMetrics.resultActionIconOpticalSize
@@ -1311,6 +1432,7 @@ final class ResultRowView: NSTableCellView {
     func configure(
         result: RankedResult,
         icon: NSImage,
+        settingsBadge badge: NSImage? = nil,
         confirmation: Bool,
         row: Int,
         selected: Bool,
@@ -1446,6 +1568,12 @@ final class ResultRowView: NSTableCellView {
         iconHeightConstraint.constant = iconSlotSize
         iconDrawingWidthConstraint.constant = iconDrawingSize
         iconDrawingHeightConstraint.constant = iconDrawingSize
+        let showsSettingsBadge = result.entry.kind == .systemSetting && badge != nil
+        settingsBadge.image = showsSettingsBadge ? badge : nil
+        settingsBadge.isHidden = !showsSettingsBadge
+        settingsBadgeSizeConstraint.constant = usesMinimalLayout
+            ? LauncherMinimalMetrics.resultSettingsBadgeSize
+            : LauncherLiquidGlassMetrics.resultSettingsBadgeSize
         titleLeadingConstraint.constant = usesLiquidGlassLayout
             ? 10
             : (
@@ -1476,6 +1604,8 @@ final class ResultRowView: NSTableCellView {
     func setShortcutBadge(_ text: String?) {
         shortcutLabel.stringValue = text ?? ""
     }
+
+    var isShowingSettingsBadge: Bool { !settingsBadge.isHidden }
 
     func setSelected(_ selected: Bool) {
         self.selected = selected
@@ -1603,7 +1733,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     // The live launcher contains a real editable search control, while its enclosing glass
     // stays passive to avoid AppKit's transient rectangular click-response lens.
     private let liquidGlassSurface = LauncherLiquidGlassSurfaceView(interactive: true)
-    private let modeBadge = NSTextField(labelWithString: "")
     private let headerSeparator = LauncherHeaderSeparatorView()
     private let tableView = NSTableView()
     private let scrollView = LauncherResultsScrollView()
@@ -1630,9 +1759,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private var contentConstraints: [NSLayoutConstraint] = []
     private var resultsTopConstraint: NSLayoutConstraint?
     private var resultsBottomConstraint: NSLayoutConstraint?
-    private var defaultSearchLeadingConstraint: NSLayoutConstraint?
-    private var modeSearchLeadingConstraint: NSLayoutConstraint?
-    private var modeBadgeWidthConstraint: NSLayoutConstraint?
     private var currentMode: LauncherMode = .main
     private var presentationSessionActive = false
     /// Liquid Glass starts as one compact search capsule. Any useful match opens one stable
@@ -1642,6 +1768,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// The newest committed geometry whose motion has not started yet. Result changes coalesce
     /// here so a burst of keystrokes schedules one transition instead of one per key.
     private var pendingExpansionTarget: NSRect?
+    /// The rows already on screen stay mounted while a collapse clips them away. Clearing
+    /// them first left an empty expanded surface, and only then did the window shrink.
+    private var holdsRowsForCollapse = false
     private var expansionFlush: DispatchWorkItem?
     private var resizeAnimation: LauncherPanelResizeAnimation?
     private let expansionAnimationDuration: (@MainActor () -> TimeInterval)?
@@ -1784,9 +1913,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             }
         }
         headerSeparator.color = theme.headerSeparatorColor
-        modeBadge.effectiveAppearance.performAsCurrentDrawingAppearance {
-            modeBadge.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.10).cgColor
-        }
         LauncherNativeSearchFieldStyle.apply(
             to: nativeSearchField,
             metrics: theme.searchMetrics,
@@ -1925,6 +2051,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             panel.contentView = retainedContentView
         }
         searchField.stringValue = ""
+        holdsRowsForCollapse = false
         results = []
         lastAppliedQuery = nil
         inlineSuggestion = nil
@@ -1979,6 +2106,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         // Drop any pending or in-flight height motion before the panel leaves the screen;
         // the next presentation reuses this controller with fresh geometry.
+        holdsRowsForCollapse = false
         cancelPendingPanelMotion()
         panel.makeFirstResponder(nil)
         panel.endEditing(for: nil)
@@ -2021,6 +2149,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         let listedResults = results.filter {
             $0.entry.id != inlineSuggestion?.entry.id
         }
+        // A status row cannot be selected. Showing one would open the result area with
+        // nothing to act on, which is what “Continue typing” and “No files found” did.
+        let hasSelectableResult = listedResults.contains { $0.entry.kind != .status }
+        let visibleResults = hasSelectableResult
+            ? Array(listedResults.prefix(LauncherSearchLimits.resultSetCap))
+            : []
         // Spotlight keeps its initial Liquid Glass presentation as a single search capsule.
         // Recent results remain available to the other designs and specialized modes, but the
         // main Liquid Glass launcher expands only after the user supplies a query.
@@ -2030,38 +2164,42 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         let query = searchField.stringValue
         let shouldResetScroll = query != lastAppliedQuery
         lastAppliedQuery = query
-        // Search producers honor the bounded result-set cap. Clamp defensively here so a
-        // streaming producer cannot grow without limit. Extra rows beyond the viewport stay
-        // in the list and scroll.
-        self.results = suppressesEmptyMainResults
-            ? []
-            : Array(listedResults.prefix(LauncherSearchLimits.resultSetCap))
-        // Visible rows start their own interactive loads from `image(for:)` during the
-        // reload below. Warming them again here only queued a second materialization of the
-        // same artwork behind the first.
+        let nextResults = suppressesEmptyMainResults ? [] : visibleResults
+        let retainsRows = panel.isVisible
+            && cachedExpansionAnimationDuration > 0
+            && !self.results.isEmpty
+            && nextResults.isEmpty
+        holdsRowsForCollapse = retainsRows
         updateInlineSuggestionPresentation()
-        updateLiquidPresentationState()
-        if !self.results.contains(where: { $0.entry.id == confirmationEntryID }) {
-            confirmationEntryID = nil
-        }
-        tableView.reloadData()
-        if shouldResetScroll {
-            resetTableScrollPosition()
-        }
-        if inlineSuggestion != nil, selectedEntryID == nil {
-            tableView.deselectAll(nil)
-        } else if let preferredRow = LauncherSelection.preferredRow(
-            preservingEntryID: selectedEntryID,
-            in: self.results
-        ) {
-            tableView.selectRowIndexes(IndexSet(integer: preferredRow), byExtendingSelection: false)
-            if !shouldResetScroll {
-                scrollSelectedRowVisible()
-            }
+        if retainsRows {
+            // Leave the mounted rows in place. The shrinking window clips them, and the
+            // table is cleared when that motion ends.
+            updateLiquidPresentationState()
         } else {
-            tableView.deselectAll(nil)
+            self.results = nextResults
+            updateLiquidPresentationState()
+            if !self.results.contains(where: { $0.entry.id == confirmationEntryID }) {
+                confirmationEntryID = nil
+            }
+            tableView.reloadData()
+            if shouldResetScroll {
+                resetTableScrollPosition()
+            }
+            if inlineSuggestion != nil, selectedEntryID == nil {
+                tableView.deselectAll(nil)
+            } else if let preferredRow = LauncherSelection.preferredRow(
+                preservingEntryID: selectedEntryID,
+                in: self.results
+            ) {
+                tableView.selectRowIndexes(IndexSet(integer: preferredRow), byExtendingSelection: false)
+                if !shouldResetScroll {
+                    scrollSelectedRowVisible()
+                }
+            } else {
+                tableView.deselectAll(nil)
+            }
+            refreshSelectionAppearance()
         }
-        refreshSelectionAppearance()
         updateHeight()
         if needsPresentationIconRefresh, !results.isEmpty {
             needsPresentationIconRefresh = false
@@ -2152,9 +2290,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         // viewport never allocates row chrome on the first keystroke.
         let view = preparedResultRows[row]
         let result = results[row]
+        let icon = iconCache.image(for: result.entry, context: iconContext)
         view.configure(
             result: result,
-            icon: iconCache.image(for: result.entry, context: iconContext),
+            icon: icon,
+            settingsBadge: result.entry.kind == .systemSetting
+                ? iconCache.systemSettingsBadge(for: icon, context: iconContext)
+                : nil,
             confirmation: confirmationEntryID == result.entry.id,
             row: row,
             selected: tableView.selectedRow == row,
@@ -2252,11 +2394,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         // These controls survive a structural theme change. Removing them from a parent
         // does not remove their own height/width constraints, so retire our previous layout.
         NSLayoutConstraint.deactivate(contentConstraints)
-        defaultSearchLeadingConstraint?.isActive = false
-        modeSearchLeadingConstraint?.isActive = false
         nativeSearchField.removeFromSuperview()
         liquidGlassSurface.removeFromSuperview()
-        modeBadge.removeFromSuperview()
         headerSeparator.removeFromSuperview()
         scrollView.removeFromSuperview()
         let content = NSView()
@@ -2342,15 +2481,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         content.addSubview(searchField)
         panel.initialFirstResponder = searchField
 
-        modeBadge.translatesAutoresizingMaskIntoConstraints = false
-        modeBadge.font = .systemFont(ofSize: 12, weight: .semibold)
-        modeBadge.alignment = .center
-        modeBadge.textColor = .secondaryLabelColor
-        modeBadge.wantsLayer = true
-        modeBadge.layer?.cornerRadius = 8
-        modeBadge.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.10).cgColor
-        content.addSubview(modeBadge)
-
         if tableView.tableColumns.isEmpty {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("result"))
             column.resizingMask = .autoresizingMask
@@ -2420,21 +2550,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             resultsChrome.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: theme.resultHorizontalInset),
             resultsTopConstraint,
             resultsBottomConstraint,
-            modeBadge.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: theme.searchHorizontalInset),
-            modeBadge.centerYAnchor.constraint(equalTo: searchChrome.centerYAnchor),
-            modeBadge.heightAnchor.constraint(equalToConstant: 26),
+            searchChrome.leadingAnchor.constraint(
+                equalTo: content.leadingAnchor,
+                constant: theme.searchHorizontalInset
+            ),
         ]
-        let modeBadgeWidthConstraint = modeBadge.widthAnchor.constraint(equalToConstant: 54)
-        constraints.append(modeBadgeWidthConstraint)
-        self.modeBadgeWidthConstraint = modeBadgeWidthConstraint
-        modeSearchLeadingConstraint = searchChrome.leadingAnchor.constraint(
-            equalTo: modeBadge.trailingAnchor,
-            constant: 10
-        )
-        defaultSearchLeadingConstraint = searchChrome.leadingAnchor.constraint(
-            equalTo: content.leadingAnchor,
-            constant: theme.searchHorizontalInset
-        )
         constraints.append(resultsChrome.trailingAnchor.constraint(
             equalTo: content.trailingAnchor,
             constant: -theme.resultHorizontalInset
@@ -2469,9 +2589,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
         contentConstraints = constraints
         NSLayoutConstraint.activate(contentConstraints)
-        modeBadge.effectiveAppearance.performAsCurrentDrawingAppearance {
-            modeBadge.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.10).cgColor
-        }
         updateModeChrome()
         updateInlineSuggestionPresentation()
         tableView.rowHeight = theme.rowHeight
@@ -2504,7 +2621,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         case .execute:
             if results.indices.contains(tableView.selectedRow) {
                 onExecute?(results[tableView.selectedRow])
-            } else if let inlineSuggestion {
+            } else if let inlineSuggestion, inlineSuggestion.entry.target != .none {
                 onExecute?(inlineSuggestion)
             }
         case .reveal:
@@ -2544,28 +2661,23 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func updateModeChrome() {
-        defaultSearchLeadingConstraint?.isActive = false
-        modeSearchLeadingConstraint?.isActive = false
-
         let placeholder: String
+        let accessibilityLabel: String
         switch currentMode {
         case .main:
-            modeBadge.isHidden = true
-            defaultSearchLeadingConstraint?.isActive = true
+            nativeSearchField.setScope(nil)
             placeholder = "Search Broccoli"
+            accessibilityLabel = "Search Broccoli"
         case .fileSearch:
-            modeBadge.stringValue = "Files"
-            modeBadgeWidthConstraint?.constant = 54
-            modeBadge.isHidden = false
-            modeSearchLeadingConstraint?.isActive = true
+            nativeSearchField.setScope("Files")
             placeholder = "Search names and paths"
+            accessibilityLabel = "Search Files"
         case .clipboard:
-            modeBadge.stringValue = "Clipboard"
-            modeBadgeWidthConstraint?.constant = 78
-            modeBadge.isHidden = false
-            modeSearchLeadingConstraint?.isActive = true
+            nativeSearchField.setScope("Clipboard")
             placeholder = "Filter history"
+            accessibilityLabel = "Search Clipboard History"
         }
+        searchField.setAccessibilityLabel(accessibilityLabel)
         nativeSearchField.setCenteredPlaceholder(
             LauncherNativeSearchFieldStyle.placeholder(
                 placeholder,
@@ -2599,6 +2711,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private var desiredPanelHeight: CGFloat {
+        if holdsRowsForCollapse {
+            return theme.searchHeight
+        }
         if theme.design == .liquidGlass,
            currentMode == .main,
            !presentsResultViewport {
@@ -2692,7 +2807,10 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func updateResultsGeometry() {
-        let hasResults = presentsResultViewport
+        // While a collapse is clipping the current rows, keep the insets and the divider
+        // where they were. Recomputing them for an empty query lifts the list and removes
+        // the line before the window has shrunk.
+        let hasResults = holdsRowsForCollapse || presentsResultViewport
         let insets = theme.resultVerticalInsets(resultCount: hasResults ? results.count : 0)
         resultsTopConstraint?.constant = theme.searchHeight + insets.top
         resultsBottomConstraint?.constant = -insets.bottom
@@ -2702,7 +2820,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
 
     private func updateHeaderSeparatorVisibility() {
         headerSeparator.isHidden = !theme.shouldShowHeaderSeparator(
-            hasResults: presentsResultViewport,
+            hasResults: holdsRowsForCollapse || presentsResultViewport,
             selectedRow: tableView.selectedRow
         )
     }
@@ -2722,11 +2840,20 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 // viewport up front produced the "empty glass that collapses" flash.
                 // Visibility settles when the motion ends.
                 scrollView.isHidden = false
+            } else {
+                holdsRowsForCollapse = false
             }
             pendingExpansionTarget = frame
             scheduleExpansionFlush(after: isShrinking ? LauncherMotionMetrics.shrinkDelay : 0)
         } else {
             cancelPendingPanelMotion()
+            if holdsRowsForCollapse {
+                holdsRowsForCollapse = false
+                results = []
+                confirmationEntryID = nil
+                tableView.reloadData()
+                updateResultsGeometry()
+            }
             commitPanelFrame(frame, display: display)
         }
     }
@@ -2839,6 +2966,13 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// Applies the post-motion state: exact committed geometry, settled result-viewport
     /// visibility, and a shadow that matches the final outline.
     private func finishPanelMotion() {
+        if holdsRowsForCollapse {
+            holdsRowsForCollapse = false
+            results = []
+            confirmationEntryID = nil
+            tableView.reloadData()
+            updateResultsGeometry()
+        }
         let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: desiredPanelHeight)
         commitPanelFrame(frame, display: panel.isVisible)
         if panel.hasShadow { panel.invalidateShadow() }
@@ -2862,7 +2996,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func reloadVisibleIcon(for key: String) {
-        let rows = IndexSet(results.indices.filter { results[$0].entry.iconKey == key })
+        let reloadsSettingsBadges = key == IconCache.systemSettingsBadgeIconKey
+        let rows = IndexSet(results.indices.filter {
+            results[$0].entry.iconKey == key
+                || (reloadsSettingsBadges && results[$0].entry.kind == .systemSetting)
+        })
         guard !rows.isEmpty else { return }
         for row in rows { _ = tableView(tableView, viewFor: tableView.tableColumns.first, row: row) }
         refreshSelectionAppearance()

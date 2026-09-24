@@ -144,6 +144,7 @@ final class LauncherAppearanceTests: XCTestCase {
             catalogResults: catalog,
             calculatorEvaluation: .notExpression,
             hasVisibleQuery: true,
+            noMatch: .inlineStatus,
             limit: LauncherSearchLimits.resultSetCap
         )
         XCTAssertEqual(composed.count, LauncherSearchLimits.resultSetCap)
@@ -1722,6 +1723,19 @@ final class LauncherAppearanceTests: XCTestCase {
         let optedIn = AppPreferences(defaults: defaults)
         XCTAssertTrue(optedIn.recentItemsEnabled)
         XCTAssertTrue(optedIn.searchPreferences.recentItemsEnabled)
+    }
+
+    func testWebSearchDefaultsToGoogleAndKeepsAnEarlierOptOut() {
+        let defaults = makeDefaults()
+        XCTAssertEqual(AppPreferences(defaults: defaults).webSearchEngine, .google)
+
+        let optedOut = makeDefaults()
+        optedOut.set(false, forKey: "search.webSearchFallbackEnabled")
+        XCTAssertEqual(AppPreferences(defaults: optedOut).webSearchEngine, .off)
+
+        let preferences = AppPreferences(defaults: defaults)
+        preferences.webSearchEngine = .duckDuckGo
+        XCTAssertEqual(AppPreferences(defaults: defaults).webSearchEngine, .duckDuckGo)
     }
 
     func testAppearancePersistsWithoutRestart() {

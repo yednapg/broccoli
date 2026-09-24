@@ -165,6 +165,8 @@ final class IconCache {
             return Self.templateSymbol("function", description: "Calculator")
         case .clipboard:
             return Self.templateSymbol("clipboard", description: "Clipboard")
+        case .webSearch:
+            return entry.iconKey == WebSearch.duckDuckGoIconKey ? Self.duckDuckGoLogo : Self.googleLogo
         case .status:
             return Self.templateSymbol(
                 entry.iconKey == "status:no-results" ? "questionmark" : "magnifyingglass",
@@ -174,6 +176,109 @@ final class IconCache {
             return pendingNativeIcon
         }
     }
+
+    /// The System Settings application icon that marks a Settings pane result. It uses the
+    /// ordinary application-icon cache, so it is materialized once per drawing context.
+    /// Returns `nil` while the pane artwork itself is still pending: a badge must never sit
+    /// on an empty icon slot.
+    func systemSettingsBadge(for paneIcon: NSImage, context: IconRenderContext? = nil) -> NSImage? {
+        guard paneIcon !== pendingNativeIcon else { return nil }
+        let badge = image(for: Self.systemSettingsApplicationEntry, context: context)
+        return badge === pendingNativeIcon ? nil : badge
+    }
+
+    /// Icon-load notifications carry this key when the badge artwork arrives.
+    static let systemSettingsBadgeIconKey = "/System/Applications/System Settings.app"
+
+    private static let systemSettingsApplicationEntry = SearchEntry(
+        id: systemSettingsBadgeIconKey,
+        kind: .application,
+        title: "System Settings",
+        iconKey: systemSettingsBadgeIconKey,
+        target: .application(
+            path: systemSettingsBadgeIconKey,
+            bundleIdentifier: "com.apple.systempreferences"
+        )
+    )
+
+    private static let googleLogo = brandTile(mark: googleMark, name: "Google")
+    private static let duckDuckGoLogo = brandTile(mark: duckDuckGoMark, name: "DuckDuckGo")
+
+    /// A search mark on an application-icon tile, so the row reads like its app neighbours.
+    /// The drawing handler runs in the appearance of whichever view draws it: a white tile
+    /// in Light, a dark tile in Dark, with a firmer edge under Increase Contrast.
+    private static func brandTile(mark: NSImage, name: String) -> NSImage {
+        let image = NSImage(size: NSSize(width: 64, height: 64), flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            let isDark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let increasesContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            // Measured from the system's own macOS 26 app icons: artwork fills 824 of the
+            // 1,024-point grid, with a continuous corner of about a quarter of its side.
+            let tileSide = rect.width * 824 / 1_024
+            let tile = NSRect(
+                x: rect.midX - tileSide / 2,
+                y: rect.midY - tileSide / 2,
+                width: tileSide,
+                height: tileSide
+            )
+            let layer = CALayer()
+            layer.frame = CGRect(origin: .zero, size: tile.size)
+            layer.cornerRadius = tileSide * 0.255
+            layer.cornerCurve = .continuous
+            layer.backgroundColor = (isDark ? NSColor(white: 0.17, alpha: 1) : NSColor.white).cgColor
+            layer.borderWidth = 1
+            layer.borderColor = (isDark ? NSColor.white : NSColor.black)
+                .withAlphaComponent(increasesContrast ? 0.4 : (isDark ? 0.14 : 0.1)).cgColor
+            context.saveGState()
+            context.translateBy(x: tile.minX, y: tile.minY)
+            layer.render(in: context)
+            context.restoreGState()
+            // The glyph's own extent, like the marks inside system app icons.
+            let markSide = tileSide * 0.6
+            mark.draw(in: NSRect(
+                x: rect.midX - markSide / 2,
+                y: rect.midY - markSide / 2,
+                width: markSide,
+                height: markSide
+            ))
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = name
+        return image
+    }
+
+    /// Google's four-color “G”, decoded by AppKit's native SVG image representation so it
+    /// stays vector at every row size and backing scale. The view box is the glyph's extent.
+    private static let googleMark: NSImage = {
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="4 4 40 40">\
+        <path fill="#4285F4" d="M24 20v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C41.6 35 44 29.9 44 24c0-1.3-.1-2.7-.4-4H24z"/>\
+        <path fill="#34A853" d="M12.7 28.1 6.2 33.1C9.5 39.6 16.2 44 24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9z"/>\
+        <path fill="#FBBC05" d="M6.2 14.7C4.8 17.5 4 20.6 4 24s.8 6.5 2.2 9.1l6.5-5c-.4-1.3-.7-2.6-.7-4.1s.3-2.8.7-4.1l-6.5-5.2z"/>\
+        <path fill="#EA4335" d="M24 12c3.1 0 5.8 1.2 8 3l5.6-5.7C34 6.1 29.3 4 24 4 16.2 4 9.5 8.4 6.2 14.7l6.5 5.2C14.4 15.3 18.8 12 24 12z"/>\
+        </svg>
+        """
+        let image = NSImage(data: Data(svg.utf8)) ?? NSImage(size: NSSize(width: 40, height: 40))
+        image.isTemplate = false
+        image.accessibilityDescription = "Google"
+        return image
+    }()
+
+    /// DuckDuckGo's orange duck, decoded by AppKit's native SVG image representation.
+    private static let duckDuckGoMark: NSImage = {
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="4 10 40 28">\
+        <path fill="#DE5833" d="M14 30c0-6 6-11 14-11 1.4 0 2.8.2 4 .6C31 15 34 12 38 12c3.2 0 5 2.2 5 5 0 1.2-.4 2.2-1.1 3 2.6 1.6 4.1 4.4 4.1 7.6C46 33 41.5 37 35 37H22c-5 0-8-3-8-7z"/>\
+        <circle fill="#fff" cx="37.2" cy="16.2" r="1.3"/>\
+        <path fill="#F6A15A" d="M42 16.5l6 1.2-6 2.2z"/>\
+        </svg>
+        """
+        let image = NSImage(data: Data(svg.utf8)) ?? NSImage(size: NSSize(width: 40, height: 28))
+        image.isTemplate = false
+        image.accessibilityDescription = "DuckDuckGo"
+        return image
+    }()
 
     func prewarm(
         _ entries: [SearchEntry],
