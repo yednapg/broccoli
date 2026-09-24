@@ -11,6 +11,8 @@ final class AppPreferences: ObservableObject {
         static let actionsEnabled = "search.actionsEnabled"
         static let recentItemsEnabled = "search.recentItemsEnabled"
         static let adaptiveRankingEnabled = "search.adaptiveRankingEnabled"
+        static let webSearchFallbackEnabled = "search.webSearchFallbackEnabled"
+        static let webSearchEngine = "search.webSearchEngine"
         static let hotKey = "shortcut.configuration"
         static let appearance = "appearance.configuration.v1"
         static let fileSearch = "files.configuration.v1"
@@ -27,6 +29,9 @@ final class AppPreferences: ObservableObject {
     @Published var actionsEnabled: Bool { didSet { save(actionsEnabled, Key.actionsEnabled) } }
     @Published var recentItemsEnabled: Bool { didSet { save(recentItemsEnabled, Key.recentItemsEnabled) } }
     @Published var adaptiveRankingEnabled: Bool { didSet { save(adaptiveRankingEnabled, Key.adaptiveRankingEnabled) } }
+    @Published var webSearchEngine: WebSearchEngine {
+        didSet { defaults.set(webSearchEngine.rawValue, forKey: Key.webSearchEngine) }
+    }
     @Published var hotKey: HotKeyConfiguration { didSet { saveHotKey() } }
     @Published var appearance: LauncherAppearancePreferences {
         didSet {
@@ -49,12 +54,14 @@ final class AppPreferences: ObservableObject {
             Key.actionsEnabled: true,
             Key.recentItemsEnabled: false,
             Key.adaptiveRankingEnabled: true,
+            Key.webSearchFallbackEnabled: true,
         ])
         applicationsEnabled = defaults.bool(forKey: Key.applicationsEnabled)
         settingsEnabled = defaults.bool(forKey: Key.settingsEnabled)
         actionsEnabled = defaults.bool(forKey: Key.actionsEnabled)
         recentItemsEnabled = defaults.bool(forKey: Key.recentItemsEnabled)
         adaptiveRankingEnabled = defaults.bool(forKey: Key.adaptiveRankingEnabled)
+        webSearchEngine = Self.loadedWebSearchEngine(defaults: defaults)
         var loadedAppearance = Self.load(
             LauncherAppearancePreferences.self,
             key: Key.appearance,
@@ -81,6 +88,8 @@ final class AppPreferences: ObservableObject {
             defaults: defaults
         ) ?? WindowManagementPreferences()
         loadedWindowManagement.migrateInterimDefaultShortcuts()
+        loadedWindowManagement.adoptRepeatedSizeCycle()
+        loadedWindowManagement.sanitize()
         windowManagement = loadedWindowManagement
         var loadedActionIDs = Self.load(
             Set<String>.self,
@@ -109,6 +118,16 @@ final class AppPreferences: ObservableObject {
             adaptiveRankingEnabled: adaptiveRankingEnabled,
             alwaysIncludedEntryIDs: ActionRegistry.recoveryEntryIDs
         )
+    }
+
+    /// A stored engine wins. Installs from before the picker existed stored only the Google
+    /// toggle: off stays off, and everything else remains Google.
+    private static func loadedWebSearchEngine(defaults: UserDefaults) -> WebSearchEngine {
+        if let raw = defaults.string(forKey: Key.webSearchEngine),
+           let engine = WebSearchEngine(rawValue: raw) {
+            return engine
+        }
+        return defaults.bool(forKey: Key.webSearchFallbackEnabled) ? .google : .off
     }
 
     private func save(_ value: Bool, _ key: String) {

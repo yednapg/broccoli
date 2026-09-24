@@ -1,3 +1,4 @@
+import BroccoliCore
 import SwiftUI
 
 struct SearchSettingsPane: View {
@@ -46,6 +47,16 @@ struct SearchSettingsPane: View {
                         .labelsHidden()
                         .settingsToggleAccessibility("Use Adaptive Ranking", isOn: preferences.adaptiveRankingEnabled)
                 }
+                SpotlightSettingsRow(title: "Web Search", subtitle: "When nothing on this Mac matches, or a calculation cannot be solved. A number you are still typing waits.") {
+                    Picker("Web Search", selection: $preferences.webSearchEngine) {
+                        ForEach(WebSearchEngine.allCases) { engine in
+                            Text(engine.title).tag(engine)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                    .accessibilityLabel("Web Search")
+                }
                 Button { confirmClearUsage = true } label: {
                     SpotlightSettingsRow(
                         symbol: "trash",
@@ -62,7 +73,7 @@ struct SearchSettingsPane: View {
             }
             SettingsFootnote(
                 symbol: "lock.fill",
-                text: "Search queries are never saved or sent off this Mac."
+                text: "Search queries are never saved. A query leaves this Mac only when you choose a web search."
             )
         }
     }
