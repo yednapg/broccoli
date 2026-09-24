@@ -58,7 +58,7 @@ enum PreferencesSection: String, CaseIterable, Identifiable, Hashable {
         case .files: "file folder find spotlight metadata scope hidden library volume"
         case .calculator: "math expression arithmetic scientific units conversion temperature distance currency time zone date percent"
         case .clipboard: "clipboard history copy paste retention images urls files ignored apps encrypted"
-        case .windows: "window management rectangle snap tile left right top bottom maximize center monitor display shortcut accessibility"
+        case .windows: "window management rectangle snap tile left right top bottom maximize center monitor display shortcut accessibility resize larger smaller wider narrower taller shorter quarter third fourth sixth nudge edge"
         case .actions: "dark mode volume mute screen saver sleep restart shutdown logout"
         case .privacy: "privacy permissions automation diagnostics local data clear export"
         case .about: "about version license privacy"
@@ -322,8 +322,9 @@ final class BroccoliSettingsContext {
     let initialShortcutError: String?
     let onShortcutChanged: (HotKeyConfiguration) -> String?
     let initialWindowShortcutError: String?
-    let onWindowShortcutChanged: (WindowAction, HotKeyConfiguration) -> String?
+    let onWindowShortcutChanged: (WindowShortcutTarget, HotKeyConfiguration?) -> WindowShortcutChangeResult
     let onWindowShortcutsEnabledChanged: (Bool) -> String?
+    let onCaptureWorkspace: (String) async -> String?
     let onClearUsage: () -> Void
     let onClearClipboard: () -> Void
     let onExportDiagnostics: () -> Void
@@ -335,8 +336,9 @@ final class BroccoliSettingsContext {
         initialShortcutError: String?,
         onShortcutChanged: @escaping (HotKeyConfiguration) -> String?,
         initialWindowShortcutError: String?,
-        onWindowShortcutChanged: @escaping (WindowAction, HotKeyConfiguration) -> String?,
+        onWindowShortcutChanged: @escaping (WindowShortcutTarget, HotKeyConfiguration?) -> WindowShortcutChangeResult,
         onWindowShortcutsEnabledChanged: @escaping (Bool) -> String?,
+        onCaptureWorkspace: @escaping (String) async -> String?,
         onClearUsage: @escaping () -> Void,
         onClearClipboard: @escaping () -> Void,
         onExportDiagnostics: @escaping () -> Void,
@@ -357,6 +359,7 @@ final class BroccoliSettingsContext {
         self.initialWindowShortcutError = initialWindowShortcutError
         self.onWindowShortcutChanged = onWindowShortcutChanged
         self.onWindowShortcutsEnabledChanged = onWindowShortcutsEnabledChanged
+        self.onCaptureWorkspace = onCaptureWorkspace
         self.onClearUsage = onClearUsage
         self.onClearClipboard = onClearClipboard
         self.onExportDiagnostics = onExportDiagnostics

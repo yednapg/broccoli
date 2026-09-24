@@ -226,44 +226,19 @@ struct ClipboardSettingsPane: View {
     }
 
     private func presentIgnoredApplicationPicker() {
-        let panel = NSOpenPanel()
-        panel.title = "Add Ignored Applications"
-        panel.message = "Choose one or more applications whose clipboard content Broccoli should skip."
-        panel.prompt = "Add"
-        panel.allowedContentTypes = [.applicationBundle]
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.resolvesAliases = true
-        panel.treatsFilePackagesAsDirectories = false
-        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-
-        let completion: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .OK else { return }
-            addIgnoredApplications(panel.urls)
-        }
-        if let window = NSApp.keyWindow {
-            panel.beginSheetModal(for: window, completionHandler: completion)
-        } else {
-            panel.begin(completionHandler: completion)
-        }
+        IgnoredApplicationPicker.present(
+            title: "Add Ignored Applications",
+            message: "Choose one or more applications whose clipboard content Broccoli should skip.",
+            completion: addIgnoredApplications
+        )
     }
 
     private func addIgnoredApplications(_ urls: [URL]) {
         var applicationsByIdentifier = Dictionary(
             uniqueKeysWithValues: ignoredAppsDraft.map { ($0.bundleIdentifier, $0) }
         )
-        var skippedApplications = 0
-
-        for selectedURL in urls {
-            let url = selectedURL.resolvingSymlinksInPath()
-            guard url.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame,
-                  let bundleIdentifier = Bundle(url: url)?.bundleIdentifier?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !bundleIdentifier.isEmpty else {
-                skippedApplications += 1
-                continue
-            }
+        let selection = IgnoredApplicationPicker.bundleIdentifiers(from: urls)
+        for (bundleIdentifier, url) in selection.identifiers {
             applicationsByIdentifier[bundleIdentifier] = ignoredApplicationDraft(
                 bundleIdentifier: bundleIdentifier,
                 preferredURL: url
@@ -272,7 +247,7 @@ struct ClipboardSettingsPane: View {
 
         ignoredAppsDraft = sortIgnoredApplications(Array(applicationsByIdentifier.values))
         ignoredAppsEditorMessage = IgnoredApplicationsCopy.invalidSelectionMessage(
-            count: skippedApplications
+            count: selection.skipped
         )
         saveIgnoredApps()
     }
@@ -287,38 +262,13 @@ struct ClipboardSettingsPane: View {
         bundleIdentifier: String,
         preferredURL: URL? = nil
     ) -> IgnoredApplicationDraft {
-        let applicationURL = preferredURL
-            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
-        let displayName: String
-        let icon: NSImage
-
-        if let applicationURL {
-            let bundle = Bundle(url: applicationURL)
-            displayName = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
-                ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
-                ?? applicationURL.deletingPathExtension().lastPathComponent
-            icon = NSWorkspace.shared.icon(forFile: applicationURL.path)
-        } else {
-            displayName = "Application Not Installed"
-            icon = NSImage(systemSymbolName: "app", accessibilityDescription: nil) ?? NSImage()
-        }
-
-        return IgnoredApplicationDraft(
-            bundleIdentifier: bundleIdentifier,
-            displayName: displayName,
-            icon: icon,
-            isResolved: applicationURL != nil
-        )
+        IgnoredApplicationPicker.draft(bundleIdentifier: bundleIdentifier, preferredURL: preferredURL)
     }
 
     private func sortIgnoredApplications(
         _ applications: [IgnoredApplicationDraft]
     ) -> [IgnoredApplicationDraft] {
-        applications.sorted { lhs, rhs in
-            let nameComparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
-            if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
-            return lhs.bundleIdentifier.localizedStandardCompare(rhs.bundleIdentifier) == .orderedAscending
-        }
+        IgnoredApplicationPicker.sorted(applications)
     }
 
     private func clipboardBinding<Value>(_ keyPath: WritableKeyPath<ClipboardPreferences, Value>) -> Binding<Value> {

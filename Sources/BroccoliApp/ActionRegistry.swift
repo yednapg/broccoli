@@ -44,15 +44,9 @@ enum ActionRegistry {
         ActionDefinition(id: "audio.volumeUp", title: "Volume Up", aliases: ["audio", "sound", "louder", "increase volume"], risk: .safe, permission: .none, keepsPanelOpen: true),
         ActionDefinition(id: "audio.volumeDown", title: "Volume Down", aliases: ["audio", "sound", "quieter", "decrease volume"], risk: .safe, permission: .none, keepsPanelOpen: true),
         ActionDefinition(id: "screensaver.start", title: "Start Screen Saver", aliases: ["screen saver", "display", "idle"], risk: .safe, permission: .none, keepsPanelOpen: false),
-        ActionDefinition(id: "window.leftHalf", title: "Left Half", aliases: ["window left", "snap left", "tile left"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.rightHalf", title: "Right Half", aliases: ["window right", "snap right", "tile right"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.topHalf", title: "Top Half", aliases: ["window top", "snap top", "tile top"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.bottomHalf", title: "Bottom Half", aliases: ["window bottom", "snap bottom", "tile bottom"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.maximize", title: "Maximize Window", aliases: ["window full", "fill screen", "zoom window"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.minimized", title: "Minimized", aliases: ["window minimized", "minimize window", "shrink window", "restore down"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.center", title: "Center Window", aliases: ["window center", "recenter"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.nextDisplay", title: "Move to Next Display", aliases: ["window next monitor", "move display", "next screen"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
-        ActionDefinition(id: "window.previousDisplay", title: "Move to Previous Display", aliases: ["window previous monitor", "previous screen"], risk: .safe, permission: .accessibility, keepsPanelOpen: false),
+    ] + WindowAction.allCases.map { action in
+        ActionDefinition(id: action.actionID, title: action.title, aliases: action.aliases, risk: .safe, permission: .accessibility, keepsPanelOpen: false)
+    } + [
         ActionDefinition(id: "catalog.refresh", title: "Refresh Applications", aliases: ["reload", "reindex", "apps"], risk: .safe, permission: .none, keepsPanelOpen: false),
         ActionDefinition(id: "broccoli.preferences", title: "Open Broccoli Settings", aliases: ["preferences", "settings", "options"], risk: .safe, permission: .none, keepsPanelOpen: false),
         ActionDefinition(id: "broccoli.quit", title: "Quit Broccoli", aliases: ["exit", "close launcher"], risk: .safe, permission: .none, keepsPanelOpen: false),

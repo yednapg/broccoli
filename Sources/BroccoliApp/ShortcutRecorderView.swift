@@ -8,13 +8,18 @@ final class ShortcutRecorderControl: NSView {
         static let horizontalTextInset: CGFloat = 8
     }
 
-    var configuration: HotKeyConfiguration = .commandSpace {
+    var configuration: HotKeyConfiguration? = .commandSpace {
         didSet {
             needsDisplay = true
             updateAccessibilityState()
         }
     }
     var onChange: ((HotKeyConfiguration) -> Bool)?
+    /// When set, Delete while recording removes the shortcut. Leave it nil for a shortcut
+    /// that must always exist, such as the one that opens Broccoli.
+    var onClear: (() -> Bool)? {
+        didSet { updateAccessibilityState() }
+    }
     private(set) var isRecording = false
 
     override var acceptsFirstResponder: Bool { true }
@@ -65,6 +70,18 @@ final class ShortcutRecorderControl: NSView {
             return
         }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if let onClear,
+           event.keyCode == UInt16(kVK_Delete) || event.keyCode == UInt16(kVK_ForwardDelete),
+           flags.intersection([.command, .option, .control, .shift]).isEmpty {
+            setRecording(false)
+            if onClear() {
+                configuration = nil
+            } else {
+                NSSound.beep()
+                needsDisplay = true
+            }
+            return
+        }
         var carbonModifiers: UInt32 = 0
         if flags.contains(.command) { carbonModifiers |= UInt32(cmdKey) }
         if flags.contains(.option) { carbonModifiers |= UInt32(optionKey) }
@@ -127,10 +144,12 @@ final class ShortcutRecorderControl: NSView {
         (isRecording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.lineWidth = lineWidth
         path.stroke()
-        let text = isRecording ? "Type shortcut…" : configuration.displayName
+        let text = isRecording ? "Type shortcut…" : configuration?.displayName ?? "Record Shortcut"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: isRecording || configuration != nil
+                ? NSColor.labelColor
+                : NSColor.secondaryLabelColor,
         ]
         let size = text.size(withAttributes: attributes)
         let availableWidth = max(0, drawingBounds.width - Metrics.horizontalTextInset * 2)
@@ -166,11 +185,13 @@ final class ShortcutRecorderControl: NSView {
     }
 
     private func updateAccessibilityState() {
-        setAccessibilityValue(isRecording ? "Recording" : configuration.displayName)
-        setAccessibilityHelp(
-            isRecording
-                ? "Recording. Press a shortcut, or Escape to cancel."
-                : "Press to record a new global shortcut."
-        )
+        setAccessibilityValue(isRecording ? "Recording" : configuration?.displayName ?? "None")
+        let help: String
+        switch (isRecording, onClear != nil) {
+        case (true, true): help = "Recording. Press a shortcut, Delete to remove it, or Escape to cancel."
+        case (true, false): help = "Recording. Press a shortcut, or Escape to cancel."
+        case (false, _): help = "Press to record a new global shortcut."
+        }
+        setAccessibilityHelp(help)
     }
 }

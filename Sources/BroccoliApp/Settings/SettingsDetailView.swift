@@ -62,7 +62,8 @@ struct SettingsDetailView: View {
                 preferences: context.preferences,
                 initialWindowShortcutError: context.initialWindowShortcutError,
                 onWindowShortcutChanged: context.onWindowShortcutChanged,
-                onWindowShortcutsEnabledChanged: context.onWindowShortcutsEnabledChanged
+                onWindowShortcutsEnabledChanged: context.onWindowShortcutsEnabledChanged,
+                onCaptureWorkspace: context.onCaptureWorkspace
             )
         case .actions:
             ActionsSettingsPane(preferences: context.preferences)

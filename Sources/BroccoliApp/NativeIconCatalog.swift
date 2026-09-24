@@ -18,15 +18,6 @@ enum NativeIconCatalog {
         "audio.volumeUp": ["speaker.plus.fill", "speaker.wave.3.fill", "speaker.plus", "speaker.wave.3", "speaker"],
         "audio.volumeDown": ["speaker.minus.fill", "speaker.wave.1.fill", "speaker.minus", "speaker.wave.1", "speaker"],
         "screensaver.start": ["tv.fill", "display", "rectangle"],
-        "window.leftHalf": ["rectangle.lefthalf.inset.filled"],
-        "window.rightHalf": ["rectangle.righthalf.inset.filled"],
-        "window.topHalf": ["rectangle.tophalf.inset.filled"],
-        "window.bottomHalf": ["rectangle.bottomhalf.inset.filled"],
-        "window.maximize": ["arrow.up.left.and.arrow.down.right"],
-        "window.minimized": ["arrow.down.right.and.arrow.up.left", "rectangle.inset.filled", "rectangle"],
-        "window.center": ["rectangle.center.inset.filled"],
-        "window.nextDisplay": ["arrow.right.to.line"],
-        "window.previousDisplay": ["arrow.left.to.line"],
         "catalog.refresh": ["arrow.clockwise", "arrow.triangle.2.circlepath"],
         "broccoli.preferences": ["gearshape", "gear"],
         "broccoli.quit": ["xmark.circle", "xmark"],
@@ -34,7 +25,10 @@ enum NativeIconCatalog {
         "power.restart": ["restart", "arrow.clockwise"],
         "power.shutdown": ["poweroff", "power", "power.circle"],
         "power.logout": ["rectangle.portrait.and.arrow.forward", "rectangle.portrait.and.arrow.right", "arrow.right.square"],
-    ]
+    ].merging(
+        WindowAction.allCases.map { ($0.actionID, $0.symbolCandidates) },
+        uniquingKeysWith: { current, _ in current }
+    )
 
     static var actionSymbols: [String: String] {
         actionSymbolCandidates.compactMapValues(\.first)
@@ -46,7 +40,10 @@ enum NativeIconCatalog {
     }
 
     static func actionSymbols(forActionID id: String) -> [String] {
-        actionSymbolCandidates[id] ?? ["bolt"]
+        if let symbols = actionSymbolCandidates[id] { return symbols }
+        if id.hasPrefix(WindowShortcutTarget.layoutPrefix) { return ["rectangle.dashed", "rectangle"] }
+        if id.hasPrefix(WindowShortcutTarget.workspacePrefix) { return ["rectangle.3.group", "square.grid.2x2"] }
+        return ["bolt"]
     }
 
     /// SwiftUI's `Image(systemName:)` accepts one name, so Settings resolves the same ordered
