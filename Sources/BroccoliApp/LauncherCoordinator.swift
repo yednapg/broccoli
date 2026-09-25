@@ -143,48 +143,20 @@ enum LauncherMainSearchResultComposer {
         return Array(resolved.prefix(max(0, limit)))
     }
 
+    /// A solved calculation stays on the search line. A second row would open the result
+    /// list just to repeat the same answer.
     private static func calculatorRows(_ calculation: CalculatorResult) -> [RankedResult] {
-        var rows: [RankedResult] = []
-        if calculation.presentsInline {
-            rows.append(RankedResult(
-                entry: SearchEntry(
-                    id: "calculator:answer",
-                    kind: .calculator,
-                    title: calculation.displayText,
-                    subtitle: "Calculator · Return to copy",
-                    iconKey: "calculator",
-                    target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
-                ),
-                score: Int.max
-            ))
-        }
-        if let context = calculation.context, !context.isEmpty {
-            rows.append(RankedResult(
-                entry: SearchEntry(
-                    id: "calculator:detail",
-                    kind: .calculator,
-                    title: calculation.displayText,
-                    subtitle: context,
-                    iconKey: "calculator",
-                    target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
-                ),
-                score: Int.max - 1
-            ))
-        }
-        if rows.isEmpty {
-            rows.append(RankedResult(
-                entry: SearchEntry(
-                    id: "calculator:answer",
-                    kind: .calculator,
-                    title: calculation.displayText,
-                    subtitle: "Calculator · Return to copy",
-                    iconKey: "calculator",
-                    target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
-                ),
-                score: Int.max
-            ))
-        }
-        return rows
+        [RankedResult(
+            entry: SearchEntry(
+                id: "calculator:answer",
+                kind: .calculator,
+                title: calculation.displayText,
+                subtitle: "Calculator · Return to copy",
+                iconKey: "calculator",
+                target: .calculator(result: calculation.copyText, patternKey: calculation.patternKey)
+            ),
+            score: Int.max
+        )]
     }
 
     private static func noMatchResults(_ noMatch: LauncherNoMatchPresentation) -> [RankedResult] {
@@ -1212,18 +1184,13 @@ extension LauncherCoordinator {
                 context: self.makeCalculatorContext()
             ) else { return }
             guard generation == self.queryGeneration else { return }
-            var results = self.displayedResults
-            results.append(RankedResult(
-                entry: SearchEntry(
-                    id: "calculator:interpreted",
-                    kind: .calculator,
-                    title: result.displayText,
-                    subtitle: "Interpreted as \(canonical)",
-                    iconKey: "calculator",
-                    target: .calculator(result: result.copyText)
-                ),
-                score: 1
-            ))
+            let results = LauncherMainSearchResultComposer.compose(
+                catalogResults: [],
+                calculatorEvaluation: .value(result),
+                hasVisibleQuery: true,
+                noMatch: .inlineStatus,
+                limit: 1
+            )
             self.displayedResults = results
             self.panel.apply(results, preservingSelection: true)
         }
