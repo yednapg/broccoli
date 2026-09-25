@@ -214,6 +214,35 @@ final class LauncherInlineSuggestionTests: XCTestCase {
         XCTAssertFalse(results.contains { $0.entry.title == "802.1X" })
     }
 
+    func testTimeZoneAnswerStaysOnTheSearchLine() {
+        _ = NSApplication.shared
+        let context = CalculatorContext(
+            now: Date(timeIntervalSince1970: 1_758_643_200),
+            timeZone: TimeZone(identifier: "Asia/Kolkata")!,
+            locale: Locale(identifier: "en_US"),
+            regionCode: "IN"
+        )
+        let evaluation = CalculatorEngine().classify("10 pm ist to sf", context: context)
+        let results = LauncherMainSearchResultComposer.compose(
+            catalogResults: [],
+            calculatorEvaluation: evaluation,
+            hasVisibleQuery: true,
+            noMatch: .inlineStatus,
+            limit: 8
+        )
+        XCTAssertEqual(results.map(\.entry.id), ["calculator:answer"])
+
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.setMode(.main, initialQuery: "10 pm ist to sf")
+        controller.apply(results)
+        let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))
+        XCTAssertEqual(controller.currentPanelHeight, theme.searchHeight)
+        XCTAssertFalse(controller.isResultViewportVisible)
+        XCTAssertTrue(controller.listedResultIDs.isEmpty)
+        XCTAssertTrue(controller.inlineSuggestionText?.contains("9:30") == true, controller.inlineSuggestionText ?? "")
+    }
+
     func testTrailingEqualsKeepsCalculatorStateAndSuppressesCatalogMatches() {
         let catalogResults = [applicationResult(id: "802.1x", title: "802.1X")]
         let evaluation = CalculatorEngine().classify("1+1=", locale: Locale(identifier: "en_US_POSIX"))
