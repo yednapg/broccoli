@@ -604,6 +604,7 @@ final class LauncherPreviewContentView: NSView,
             }
         }
         headerSeparator.color = next.headerSeparatorColor
+        applyAdditiveInk()
         iconProvider.prepare(fixture.results.map(\.entry), context: iconContext)
         refreshIcons()
         needsDisplay = true
@@ -895,12 +896,18 @@ final class LauncherPreviewContentView: NSView,
         }
 
         NSLayoutConstraint.activate(constraints)
+        applyAdditiveInk()
         tableView.reloadData()
         if selectedRow >= 0 {
             tableView.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
         }
         layoutSubtreeIfNeeded()
         layoutTableDocument()
+    }
+
+    private func applyAdditiveInk() {
+        LauncherAdditiveInk.apply(descriptor.usesAdditiveInk, to: searchField)
+        LauncherAdditiveInk.apply(descriptor.usesAdditiveInk, to: headerSeparator)
     }
 
     func controlTextDidChange(_ obj: Notification) {

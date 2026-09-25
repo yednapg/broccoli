@@ -1,6 +1,7 @@
 import AppKit
 import BroccoliCore
 import ServiceManagement
+import SwiftUI
 import XCTest
 @testable import BroccoliApp
 
@@ -462,18 +463,24 @@ final class LauncherAppearanceTests: XCTestCase {
         )
 
         for descriptor in [light, dark] {
-            XCTAssertEqual(descriptor.searchTextColor, descriptor.searchIconColor)
             if descriptor.isDark {
-                assertColor(descriptor.searchIconColor, red: 1, green: 1, blue: 1, alpha: 0.72)
+                // Opaque neutral lifts, composited additively so the surface supplies the hue.
+                XCTAssertTrue(descriptor.usesAdditiveInk)
+                let ink = LauncherLiquidGlassMetrics.darkInkLift
+                let query = LauncherLiquidGlassMetrics.darkQueryLift
+                let rule = LauncherLiquidGlassMetrics.darkRuleLift
+                assertColor(descriptor.searchIconColor, red: ink, green: ink, blue: ink, alpha: 1)
+                assertColor(descriptor.searchTextColor, red: query, green: query, blue: query, alpha: 1)
+                assertColor(descriptor.headerSeparatorColor, red: rule, green: rule, blue: rule, alpha: 1)
+                XCTAssertEqual(LauncherLiquidGlassMetrics.darkRimLift, Double(ink) / 4, accuracy: 0.001,
+                               "The rim is half as white as the earlier half-lift border")
             } else {
+                XCTAssertFalse(descriptor.usesAdditiveInk)
+                XCTAssertEqual(descriptor.searchTextColor, descriptor.searchIconColor)
                 assertColor(descriptor.searchIconColor, red: 0, green: 0, blue: 0, alpha: 1)
-            }
-            XCTAssertEqual(descriptor.searchPlaceholderColor, descriptor.searchIconColor)
-            if descriptor.isDark {
-                assertColor(descriptor.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.25)
-            } else {
                 assertColor(descriptor.headerSeparatorColor, red: 0, green: 0, blue: 0, alpha: 0.25)
             }
+            XCTAssertEqual(descriptor.searchPlaceholderColor, descriptor.searchIconColor)
             XCTAssertEqual(descriptor.headerSeparatorAngleDegrees, 0)
         }
     }
@@ -1486,7 +1493,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(before, after, "The magnifier pixels must not change during expansion")
     }
 
-    func testLiquidMaterialUsesOneVariantAcrossExpansionAndAppearance() throws {
+    func testLiquidSurfaceChangesBackdropOnlyWithAppearance() throws {
         let surface = LauncherLiquidGlassSurfaceView(
             frame: NSRect(x: 0, y: 0, width: 640, height: 58),
             interactive: false
@@ -1507,13 +1514,42 @@ final class LauncherAppearanceTests: XCTestCase {
             "Showing results must not change the surface material"
         )
 
-        surface.appearance = NSAppearance(named: .darkAqua)
-        surface.layoutSubtreeIfNeeded()
-        XCTAssertEqual(
-            material.material,
-            .hudWindow,
-            "Appearance changes must not change the surface material"
+        let content = NSView()
+        surface.setContentView(content)
+        XCTAssertTrue(content.superview === material, "Light content stays in the HUD's vibrancy")
+        let backdrop = try XCTUnwrap(
+            surface.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> }
         )
+        XCTAssertTrue(backdrop.isHidden)
+        XCTAssertEqual(material.state, .active)
+
+        for name in [NSAppearance.Name.darkAqua, .accessibilityHighContrastDarkAqua] {
+            surface.appearance = NSAppearance(named: name)
+            for height: CGFloat in [58, 450, 58] {
+                surface.frame.size.height = height
+                surface.layoutSubtreeIfNeeded()
+                XCTAssertTrue(surface.usesDarkBackdrop)
+                XCTAssertTrue(material.isHidden)
+                XCTAssertEqual(material.state, .inactive, "An inactive HUD does not sample a second background")
+                XCTAssertFalse(backdrop.isHidden)
+                XCTAssertEqual(backdrop.frame, surface.bounds)
+                XCTAssertEqual(backdrop.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                XCTAssertTrue(backdrop.layer?.masksToBounds ?? false)
+                XCTAssertTrue(content.superview === surface)
+                XCTAssertGreaterThan(
+                    try XCTUnwrap(surface.subviews.firstIndex(of: content)),
+                    try XCTUnwrap(surface.subviews.firstIndex(of: backdrop))
+                )
+            }
+        }
+
+        surface.appearance = NSAppearance(named: .aqua)
+        surface.layoutSubtreeIfNeeded()
+        XCTAssertEqual(material.material, .hudWindow, "Returning to Light restores the HUD")
+        XCTAssertFalse(material.isHidden)
+        XCTAssertEqual(material.state, .active)
+        XCTAssertTrue(backdrop.isHidden)
+        XCTAssertTrue(content.superview === material)
         XCTAssertFalse(material.wantsLayer)
         XCTAssertNotNil(material.maskImage)
     }

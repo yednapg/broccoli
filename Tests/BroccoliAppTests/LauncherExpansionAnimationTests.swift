@@ -344,6 +344,9 @@ final class LauncherExpansionAnimationTests: XCTestCase {
 
         // A keystroke briefly narrows the results, and the next one restores them.
         controller.apply(Array(full.prefix(1)))
+        XCTAssertEqual(controller.listedResultIDs.count, 1)
+        XCTAssertEqual(controller.mountedResultRowCount, full.count,
+                       "Surplus rows stay mounted so the window clips them instead of opening an empty band")
         try await Task.sleep(for: .milliseconds(40))
         XCTAssertEqual(window.frame.height, expandedHeight, accuracy: 0.5,
                        "A shrink must wait before moving the panel")
@@ -355,6 +358,8 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         controller.apply(Array(full.prefix(1)))
         try await waitForExpansionToSettle(controller)
         XCTAssertEqual(window.frame.height, theme.panelHeight(resultCount: 1), accuracy: 0.5)
+        XCTAssertEqual(controller.mountedResultRowCount, 1,
+                       "The surplus rows leave once the window has finished clipping them")
     }
 
     func testNativeRowIconsSurviveTheHeightMotion() async throws {
