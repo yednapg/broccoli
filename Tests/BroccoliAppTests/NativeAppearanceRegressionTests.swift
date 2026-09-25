@@ -1,5 +1,6 @@
 import AppKit
 import BroccoliCore
+import SwiftUI
 import XCTest
 @testable import BroccoliApp
 
@@ -25,13 +26,16 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                         let surface = LauncherLiquidGlassSurfaceView()
                         surface.appearance = theme.drawingAppearance
                         surface.layoutSubtreeIfNeeded()
-                        // One behind-window HUD material carries the whole surface in every
-                        // appearance and accessibility combination. AppKit adapts it to
-                        // Reduce Transparency and Increase Contrast on its own.
+                        // One visible backdrop carries the whole surface in every appearance and
+                        // accessibility combination: the HUD in Light, the SwiftUI material in
+                        // Dark. Each adapts to Reduce Transparency and Increase Contrast itself.
                         let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                        let backdrop = try XCTUnwrap(surface.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> })
+                        XCTAssertEqual(material.isHidden, dark)
+                        XCTAssertEqual(backdrop.isHidden, !dark)
+                        XCTAssertEqual(material.state, dark ? .inactive : .active)
                         XCTAssertEqual(material.material, .hudWindow)
                         XCTAssertEqual(material.blendingMode, .behindWindow)
-                        XCTAssertEqual(material.state, .active)
                         XCTAssertFalse(material.wantsLayer, "Layer-backing the HUD drops vibrancy for labels and the header rule")
                         XCTAssertNotNil(material.maskImage)
                         XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
@@ -240,8 +244,15 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                 XCTAssertEqual(material.material, .hudWindow)
                 XCTAssertEqual(material.blendingMode, .behindWindow)
                 XCTAssertEqual(material.alphaValue, 1)
+                XCTAssertEqual(material.isHidden, mode == .dark)
+                XCTAssertEqual(material.state, mode == .dark ? .inactive : .active)
                 XCTAssertEqual(material.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]),
                                mode == .dark ? .darkAqua : .aqua)
+                let backdrops = descendants(root).filter { $0 is NSHostingView<LauncherDarkGlassBackdrop> }
+                XCTAssertEqual(backdrops.count, 1)
+                XCTAssertEqual(backdrops.first?.isHidden, mode != .dark)
+                let field = try XCTUnwrap(descendants(root).compactMap { $0 as? NSSearchField }.first)
+                XCTAssertEqual(LauncherAdditiveInk.isApplied(to: field), mode == .dark)
                 XCTAssertTrue(window.firstResponder === responder)
                 XCTAssertEqual(panel.query, "screen")
                 XCTAssertEqual(root.layer?.borderWidth, 0)
@@ -290,18 +301,25 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                     for height: CGFloat in [58, 200, 58] {
                         surface.frame.size.height = height
                         surface.layoutSubtreeIfNeeded()
-                        // Exactly one surface. A second backdrop underneath is what flattened
-                        // the material and produced a hard rim; anything else here would be a
-                        // stroked overlay on the native boundary.
-                        XCTAssertEqual(surface.subviews.count, 1, "The surface must not acquire a second backdrop or overlay")
+                        // Exactly one visible backdrop. Stacking a second material is what
+                        // flattened the surface and produced a hard rim.
                         let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                        let backdrop = try XCTUnwrap(surface.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> })
+                        XCTAssertEqual(
+                            surface.subviews.filter { !$0.isHidden && $0 !== content }.count, 1,
+                            "Only one backdrop may sample")
+                        XCTAssertEqual(material.isHidden, dark)
+                        XCTAssertEqual(backdrop.isHidden, !dark)
+                        XCTAssertEqual(material.state, dark ? .inactive : .active)
                         XCTAssertEqual(material.frame, surface.bounds)
+                        XCTAssertEqual(backdrop.frame, surface.bounds)
                         XCTAssertFalse(material.wantsLayer)
                         XCTAssertNotNil(material.maskImage)
                         XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
                         XCTAssertEqual(material.maskImage?.capInsets.left, LauncherLiquidGlassMetrics.cornerRadius)
+                        XCTAssertEqual(backdrop.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
                         XCTAssertEqual(content.convert(content.bounds, to: surface), surface.bounds)
-                        XCTAssertTrue(content.isDescendant(of: material))
+                        XCTAssertEqual(content.superview === material, !dark)
                         XCTAssertEqual(material.material, .hudWindow)
                         XCTAssertEqual(material.blendingMode, .behindWindow)
                     }

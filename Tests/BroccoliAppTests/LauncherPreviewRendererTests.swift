@@ -20,7 +20,14 @@ final class LauncherPreviewRendererTests: XCTestCase {
                 let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
                 if count == 0 { compactRadius = LauncherLiquidGlassSurfaceView.cornerRadius }
                 XCTAssertEqual(LauncherLiquidGlassSurfaceView.cornerRadius, try XCTUnwrap(compactRadius))
-                XCTAssertEqual(material.material, .hudWindow)
+                XCTAssertEqual(material.isHidden, mode == .dark)
+                XCTAssertEqual(material.state, mode == .dark ? .inactive : .active)
+                XCTAssertEqual(surface.usesDarkBackdrop, mode == .dark)
+                XCTAssertEqual(
+                    LauncherAdditiveInk.isApplied(to: preview.previewSearchField),
+                    mode == .dark,
+                    "The preview composites Dark ink the same way as the launcher"
+                )
                 XCTAssertEqual(material.blendingMode, .behindWindow)
                 XCTAssertFalse(material.wantsLayer)
                 XCTAssertEqual(material.maskImage?.capInsets.top, compactRadius)
@@ -286,7 +293,10 @@ final class LauncherPreviewRendererTests: XCTestCase {
 
         surface.appearance = NSAppearance(named: .darkAqua)
         surface.layoutSubtreeIfNeeded()
-        XCTAssertEqual(material.material, .hudWindow)
+        XCTAssertTrue(material.isHidden)
+        XCTAssertEqual(material.state, .inactive)
+        XCTAssertTrue(surface.usesDarkBackdrop)
+        XCTAssertTrue(content.superview === surface)
 
         surface.appearance = NSAppearance(named: .aqua)
         surface.frame.size.height = 184

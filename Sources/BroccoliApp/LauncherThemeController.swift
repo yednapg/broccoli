@@ -1,5 +1,6 @@
 @preconcurrency import AppKit
 import BroccoliCore
+import SwiftUI
 
 /// Minimal keeps its authored controls and typography while using a narrower desktop shell.
 /// Width is the only scaled dimension; the live panel and Settings preview share these metrics
@@ -114,6 +115,18 @@ enum LauncherLiquidGlassMetrics {
     // A one-point divider stays one Retina point after the surrounding geometry is resized.
     static let separatorThickness = figmaSeparatorThickness
     static let separatorAngleDegrees = figmaSeparatorAngleDegrees
+
+    /// Dark keeps the backdrop's hue by darkening SwiftUI's regular material with neutral black
+    /// instead of blending toward gray. Every Dark ink below is a neutral lift added to the
+    /// surface (plus-lighter), so its color comes from the wallpaper; the rim is half the
+    /// placeholder and magnifier lift.
+    static let darkMaterial: Material = .regularMaterial
+    static let darkShadeOpacity: Double = 0.36
+    static let darkRimLift: Double = 0.125
+    static let darkRimLiftIncreasedContrast: Double = 0.22
+    static let darkInkLift: CGFloat = 0.50
+    static let darkQueryLift: CGFloat = 0.88
+    static let darkRuleLift: CGFloat = 0.12
 }
 
 /// Motion values for transitions between launcher presentation states. The durations are
@@ -181,7 +194,7 @@ struct LauncherThemeDescriptor {
         switch design {
         case .liquidGlass:
             // Device ink, not a catalog color. Semantic labels still pick up wallpaper chroma
-            // through HUD even when vibrancy is off. This is the same black/white as the glyph.
+            // through HUD even when vibrancy is off. This is the same ink as the glyph.
             return searchIconColor
         case .minimal:
             return .placeholderTextColor
@@ -213,15 +226,25 @@ struct LauncherThemeDescriptor {
                 ? NSColor.white.withAlphaComponent(0.82)
                 : NSColor.black
         case .liquidGlass:
-            return searchIconColor
+            return isDark
+                ? Self.additiveLift(LauncherLiquidGlassMetrics.darkQueryLift)
+                : searchIconColor
         }
+    }
+
+    /// Dark Liquid Glass ink is opaque neutral gray composited additively over the surface.
+    var usesAdditiveInk: Bool { design == .liquidGlass && isDark }
+
+    /// Plus-lighter adds display (sRGB) components, so the lift is specified there.
+    private static func additiveLift(_ amount: CGFloat) -> NSColor {
+        NSColor(srgbRed: amount, green: amount, blue: amount, alpha: 1)
     }
 
     var searchIconColor: NSColor {
         switch design {
         case .liquidGlass:
             return isDark
-                ? NSColor(calibratedWhite: 1, alpha: 0.72)
+                ? Self.additiveLift(LauncherLiquidGlassMetrics.darkInkLift)
                 : NSColor(calibratedWhite: 0, alpha: 1)
         case .minimal:
             return isDark
@@ -232,7 +255,9 @@ struct LauncherThemeDescriptor {
 
     var headerSeparatorColor: NSColor {
         if design == .liquidGlass {
-            return searchIconColor.withAlphaComponent(0.25)
+            return isDark
+                ? Self.additiveLift(LauncherLiquidGlassMetrics.darkRuleLift)
+                : searchIconColor.withAlphaComponent(0.25)
         }
         return isDark
             ? NSColor.white.withAlphaComponent(0.25)
