@@ -29,17 +29,17 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                         // One visible backdrop carries the whole surface in every appearance and
                         // accessibility combination: the HUD in Light, the SwiftUI material in
                         // Dark. Each adapts to Reduce Transparency and Increase Contrast itself.
-                        let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
-                        let backdrop = try XCTUnwrap(surface.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> })
+                        let material = try XCTUnwrap(surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                        let backdrop = try XCTUnwrap(surface.glassClip.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> })
                         XCTAssertEqual(material.isHidden, dark)
                         XCTAssertEqual(backdrop.isHidden, !dark)
+                        XCTAssertEqual(surface.rim.isHidden, !dark)
                         XCTAssertEqual(material.state, dark ? .inactive : .active)
                         XCTAssertEqual(material.material, .hudWindow)
                         XCTAssertEqual(material.blendingMode, .behindWindow)
                         XCTAssertFalse(material.wantsLayer, "Layer-backing the HUD drops vibrancy for labels and the header rule")
-                        XCTAssertNotNil(material.maskImage)
-                        XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
-                        XCTAssertEqual(material.maskImage?.resizingMode, .stretch)
+                        XCTAssertEqual(surface.glassClip.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                        XCTAssertTrue(surface.glassClip.layer?.masksToBounds == true)
                         let minimal = LauncherThemeController().descriptor(
                             for: .defaults(design: .minimal), environment: environment)
                         XCTAssertEqual(minimal.surface, transparency || contrast ? .opaque : .ultraThick)
@@ -189,16 +189,33 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                 XCTAssertEqual(window.frame.size, surface.frame.size)
                 XCTAssertEqual(surface.frame.width, LauncherLiquidGlassMetrics.width)
                 XCTAssertEqual(surface.layer?.shadowOpacity ?? 0, 0, "Only the native window supplies the added shadow")
-                let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                let material = try XCTUnwrap(surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.first)
                 let boundary = try XCTUnwrap(root.layer)
-                XCTAssertTrue(boundary.masksToBounds, "Window content must not paint a rectangular corner beyond the rounded surface")
-                XCTAssertEqual(boundary.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                let clip = try XCTUnwrap(surface.glassClip.layer)
+                XCTAssertEqual(surface.glassClip.frame, surface.bounds)
+                XCTAssertTrue(clip.masksToBounds, "The surface must not paint a rectangular corner beyond its outline")
+                XCTAssertEqual(clip.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                XCTAssertEqual(clip.cornerCurve, .continuous)
                 XCTAssertFalse(material.wantsLayer)
-                XCTAssertNotNil(material.maskImage)
-                XCTAssertEqual(boundary.cornerCurve, .continuous)
+                XCTAssertNil(material.maskImage, "A second mask on the HUD antialiases the outline twice")
+                // Only the glass clip antialiases the outline. A second clip on the same edge
+                // thins the rim along the arcs and leaves a visible step where each arc begins.
+                XCTAssertFalse(boundary.masksToBounds)
+                let clippingLayers = ([boundary] + descendants(root).compactMap(\.layer)).filter {
+                    $0.masksToBounds && $0.cornerRadius == LauncherLiquidGlassMetrics.cornerRadius
+                }
+                XCTAssertEqual(clippingLayers.count, 1)
+                let rim = try XCTUnwrap(surface.rim.layer)
+                XCTAssertEqual(surface.rim.frame, surface.bounds)
+                XCTAssertEqual(surface.rim.isHidden, mode == .light)
+                XCTAssertFalse(rim.masksToBounds)
+                XCTAssertEqual(rim.cornerRadius, clip.cornerRadius)
+                XCTAssertEqual(rim.cornerCurve, clip.cornerCurve)
+                XCTAssertEqual(rim.borderWidth, 1)
+                XCTAssertTrue(LauncherAdditiveInk.isApplied(to: surface.rim))
                 XCTAssertEqual(boundary.borderWidth, 0)
                 XCTAssertEqual(boundary.shadowOpacity, 0, "Retain AppKit's window shadow, without a second layer shadow")
-                try assertTransparentWindowCorners(boundary)
+                try assertTransparentWindowCorners(root: boundary, clip: clip)
             }
         }
         panel.applyAppearance(.defaults(design: .minimal))
@@ -219,12 +236,12 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         let root = try XCTUnwrap(window.contentView)
         root.layoutSubtreeIfNeeded()
         let originalMaterial = try XCTUnwrap(descendants(root).compactMap { $0 as? NSVisualEffectView }.first)
+        let surface = try XCTUnwrap(descendants(root).compactMap { $0 as? LauncherLiquidGlassSurfaceView }.first)
         let compactRadius = LauncherLiquidGlassMetrics.cornerRadius
         let responder = window.firstResponder
         let fixtures = LauncherPreviewFixture.standard.results
-        XCTAssertEqual(root.layer?.cornerRadius, compactRadius)
+        XCTAssertEqual(surface.glassClip.layer?.cornerRadius, compactRadius)
         XCTAssertFalse(originalMaterial.wantsLayer)
-        XCTAssertNotNil(originalMaterial.maskImage)
 
         for mode in [LauncherAppearanceMode.light, .dark, .light] {
             preferences.mode = mode
@@ -239,8 +256,8 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                 XCTAssertTrue(window.contentView === root)
                 XCTAssertTrue(material === originalMaterial, "Expansion must retain the compact bar's native surface")
                 XCTAssertFalse(material.wantsLayer, "Showing results must not layer-back the HUD")
-                XCTAssertEqual(material.maskImage?.capInsets.top, compactRadius, "Showing results must not tighten the corners")
-                XCTAssertEqual(root.layer?.cornerRadius, compactRadius)
+                XCTAssertEqual(surface.glassClip.layer?.cornerRadius, compactRadius, "Showing results must not tighten the corners")
+                XCTAssertEqual(surface.rim.layer?.cornerRadius, compactRadius)
                 XCTAssertEqual(material.material, .hudWindow)
                 XCTAssertEqual(material.blendingMode, .behindWindow)
                 XCTAssertEqual(material.alphaValue, 1)
@@ -261,8 +278,9 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         }
     }
 
-    private func assertTransparentWindowCorners(_ boundary: CALayer) throws {
-        // A solid probe exercises the production window's outer clipping, independent of the
+    private func assertTransparentWindowCorners(root: CALayer, clip boundary: CALayer) throws {
+        XCTAssertEqual(boundary.bounds.size, root.bounds.size)
+        // A solid probe exercises the surface's outer clipping, independent of the
         // material's sampling. This checks corner alpha, not blur or native shadow fidelity.
         let probe = CALayer()
         probe.frame = boundary.bounds
@@ -303,21 +321,30 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                         surface.layoutSubtreeIfNeeded()
                         // Exactly one visible backdrop. Stacking a second material is what
                         // flattened the surface and produced a hard rim.
-                        let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
-                        let backdrop = try XCTUnwrap(surface.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> })
+                        let clip = surface.glassClip
+                        let material = try XCTUnwrap(clip.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                        let backdrop = try XCTUnwrap(clip.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> })
                         XCTAssertEqual(
-                            surface.subviews.filter { !$0.isHidden && $0 !== content }.count, 1,
+                            clip.subviews.filter { !$0.isHidden && $0 !== content }.count, 1,
                             "Only one backdrop may sample")
                         XCTAssertEqual(material.isHidden, dark)
                         XCTAssertEqual(backdrop.isHidden, !dark)
                         XCTAssertEqual(material.state, dark ? .inactive : .active)
+                        XCTAssertEqual(clip.frame, surface.bounds)
                         XCTAssertEqual(material.frame, surface.bounds)
                         XCTAssertEqual(backdrop.frame, surface.bounds)
                         XCTAssertFalse(material.wantsLayer)
-                        XCTAssertNotNil(material.maskImage)
-                        XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
-                        XCTAssertEqual(material.maskImage?.capInsets.left, LauncherLiquidGlassMetrics.cornerRadius)
-                        XCTAssertEqual(backdrop.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                        XCTAssertEqual(clip.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                        XCTAssertTrue(clip.layer?.masksToBounds == true)
+                        XCTAssertEqual(surface.rim.frame, surface.bounds)
+                        XCTAssertEqual(surface.rim.isHidden, !dark)
+                        let lift = CGFloat(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                            ? LauncherLiquidGlassMetrics.darkRimLiftIncreasedContrast
+                            : LauncherLiquidGlassMetrics.darkRimLift)
+                        if dark {
+                            XCTAssertEqual(surface.rim.layer?.borderColor,
+                                           NSColor(srgbRed: lift, green: lift, blue: lift, alpha: 1).cgColor)
+                        }
                         XCTAssertEqual(content.convert(content.bounds, to: surface), surface.bounds)
                         XCTAssertEqual(content.superview === material, !dark)
                         XCTAssertEqual(material.material, .hudWindow)

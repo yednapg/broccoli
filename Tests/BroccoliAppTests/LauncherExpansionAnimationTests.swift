@@ -56,10 +56,11 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         XCTAssertEqual(root.frame.size, window.frame.size)
         XCTAssertTrue(root.layer?.animationKeys()?.isEmpty ?? true,
                       "No animations may linger after the motion completes")
-        let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+        let material = try XCTUnwrap(surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.first)
         XCTAssertEqual(material.frame, surface.bounds)
         XCTAssertFalse(material.wantsLayer)
-        XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassMetrics.cornerRadius)
+        XCTAssertEqual(surface.glassClip.frame, surface.bounds)
+        XCTAssertEqual(surface.glassClip.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
     }
 
     func testNewResultsDuringAnimationConvergeToNewestTarget() async throws {
@@ -360,6 +361,123 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         XCTAssertEqual(window.frame.height, theme.panelHeight(resultCount: 1), accuracy: 0.5)
         XCTAssertEqual(controller.mountedResultRowCount, 1,
                        "The surplus rows leave once the window has finished clipping them")
+        XCTAssertEqual(controller.selectedResultID, full[0].entry.id,
+                       "Narrowing the list must not drop the accent selection")
+    }
+
+    func testFullCollapseClipsRowsOnlyAtTheWindowEdgeAndFadesTheDivider() throws {
+        _ = NSApplication.shared
+        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let root = try XCTUnwrap(window.contentView)
+        let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))
+        let full = LauncherPreviewFixture.standard.results
+        let viewportTop = theme.searchHeight + theme.resultTopInset
+        let expandedViewportHeight = theme.resultsViewportHeight(resultCount: full.count)
+
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(full)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        root.layoutSubtreeIfNeeded()
+        let viewport = try XCTUnwrap(descendants(root).compactMap { $0 as? NSScrollView }.first)
+        let divider = try XCTUnwrap(descendants(root).compactMap { $0 as? LauncherHeaderSeparatorView }.first)
+        XCTAssertEqual(viewport.frame.height, expandedViewportHeight, accuracy: 0.5)
+
+        controller.setMode(.main, initialQuery: "")
+        controller.apply([])
+        var samples = 0
+        var previousAlpha: CGFloat = 1
+        let deadline = Date().addingTimeInterval(0.6)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.001))
+            guard controller.isExpansionAnimationInFlight else { continue }
+            samples += 1
+            let height = window.frame.height
+            let viewportInWindow = viewport.convert(viewport.bounds, to: nil)
+            XCTAssertEqual(viewport.frame.height, expandedViewportHeight, accuracy: 0.5,
+                           "At height \(height), the viewport must not cut the rows along a second edge")
+            XCTAssertEqual(height - viewportInWindow.maxY, viewportTop, accuracy: 0.5,
+                           "The rows must stay put while the window edge rises over them")
+            XCTAssertFalse(divider.isHidden)
+            XCTAssertLessThanOrEqual(divider.alphaValue, previousAlpha + 0.001,
+                                     "The divider only fades out during a collapse")
+            if height >= viewportTop {
+                XCTAssertEqual(divider.alphaValue, 1, accuracy: 0.001)
+            }
+            if height <= theme.searchHeight {
+                XCTAssertEqual(divider.alphaValue, 0, accuracy: 0.001,
+                               "The divider must be gone before it reaches the bottom rim")
+            }
+            previousAlpha = divider.alphaValue
+        }
+        XCTAssertGreaterThan(samples, 2)
+        XCTAssertFalse(controller.isExpansionAnimationInFlight)
+        XCTAssertEqual(window.frame.height, theme.searchHeight, accuracy: 0.5)
+        XCTAssertTrue(divider.isHidden)
+        XCTAssertFalse(controller.isResultViewportVisible)
+
+        // The viewport is pinned above the bottom inset again once the collapse ends.
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(Array(full.prefix(1)))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(window.frame.height, theme.panelHeight(resultCount: 1), accuracy: 0.5)
+        XCTAssertEqual(viewport.frame.height, theme.resultsViewportHeight(resultCount: 1), accuracy: 0.5)
+        XCTAssertEqual(divider.alphaValue, 1, "A settled expansion shows the divider at full ink")
+    }
+
+    func testGrowthStartsFromTheCompactBarAndRevealsRowsOnlyAtTheWindowEdge() throws {
+        _ = NSApplication.shared
+        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        controller.applyAppearance(.defaults(design: .liquidGlass))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let root = try XCTUnwrap(window.contentView)
+        let theme = LauncherThemeController().descriptor(for: .defaults(design: .liquidGlass))
+        let full = LauncherPreviewFixture.standard.results
+        let viewportTop = theme.searchHeight + theme.resultTopInset
+        let viewportHeight = theme.resultsViewportHeight(resultCount: full.count)
+        let divider = try XCTUnwrap(descendants(root).compactMap { $0 as? LauncherHeaderSeparatorView }.first)
+        let viewport = try XCTUnwrap(descendants(root).compactMap { $0 as? NSScrollView }.first)
+
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(full)
+        // AppKit's window display pass resized the compact bar to the viewport insets' minimum
+        // before the motion began, so the divider appeared on an empty strip.
+        window.displayIfNeeded()
+        XCTAssertEqual(window.frame.height, theme.searchHeight, accuracy: 0.5,
+                       "Committing rows must not resize the window ahead of the motion")
+
+        var samples = 0
+        var previousHeight = window.frame.height
+        var previousAlpha: CGFloat = 0
+        let deadline = Date().addingTimeInterval(0.5)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.001))
+            guard controller.isExpansionAnimationInFlight else { continue }
+            samples += 1
+            let height = window.frame.height
+            XCTAssertGreaterThanOrEqual(height, previousHeight, "Growth only moves downward")
+            XCTAssertEqual(viewport.frame.height, viewportHeight, accuracy: 0.5,
+                           "At height \(height), the viewport must not reveal rows along a second edge")
+            let viewportInWindow = viewport.convert(viewport.bounds, to: nil)
+            XCTAssertEqual(height - viewportInWindow.maxY, viewportTop, accuracy: 0.5)
+            XCTAssertGreaterThanOrEqual(divider.alphaValue, previousAlpha - 0.001,
+                                        "The divider only fades in during a growth")
+            if height <= theme.searchHeight {
+                XCTAssertEqual(divider.alphaValue, 0, accuracy: 0.001)
+            }
+            previousHeight = height
+            previousAlpha = divider.alphaValue
+        }
+        XCTAssertGreaterThan(samples, 2)
+        XCTAssertEqual(window.frame.height, theme.panelHeight(resultCount: full.count), accuracy: 0.5)
+        XCTAssertEqual(viewport.frame.height, viewportHeight, accuracy: 0.5)
+        XCTAssertEqual(divider.alphaValue, 1)
     }
 
     func testNativeRowIconsSurviveTheHeightMotion() async throws {
@@ -408,5 +526,9 @@ final class LauncherExpansionAnimationTests: XCTestCase {
             }
             return resultRows(in: subview)
         }
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
     }
 }

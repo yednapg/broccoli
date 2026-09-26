@@ -79,6 +79,8 @@ enum LauncherLiquidGlassMetrics {
     static let scale = searchHeight / figmaSearchHeight
     // Preserve the search capsule's curvature when rows expand the same glass surface.
     static let cornerRadius = searchHeight / 2
+    // The glass clip and the Dark rim share this curve, so the rim follows the clipped edge.
+    static let cornerCurve: CALayerCornerCurve = .continuous
     static let searchFontSize: CGFloat = 26
     static let searchHorizontalInset: CGFloat = 20
     static let searchVerticalInset = figmaSearchVerticalInset * scale

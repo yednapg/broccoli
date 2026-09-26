@@ -83,10 +83,12 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
                     let surface = try XCTUnwrap(root.subviews.first as? LauncherLiquidGlassSurfaceView)
                     XCTAssertEqual(surface.frame, root.bounds)
                     XCTAssertEqual(root.frame.size, window.frame.size)
-                    XCTAssertTrue(root.layer?.masksToBounds == true)
-                    XCTAssertEqual(root.layer?.cornerRadius, theme.cornerRadius)
-                    XCTAssertTrue(root.layer?.animationKeys()?.isEmpty ?? true,
-                                  "The window clip must not lag behind the resized glass")
+                    XCTAssertEqual(surface.glassClip.frame, surface.bounds)
+                    XCTAssertTrue(surface.glassClip.layer?.masksToBounds == true)
+                    XCTAssertEqual(surface.glassClip.layer?.cornerRadius, theme.cornerRadius)
+                    XCTAssertEqual(surface.rim.frame, surface.bounds)
+                    XCTAssertTrue(surface.glassClip.layer?.animationKeys()?.isEmpty ?? true,
+                                  "The glass clip must not lag behind the resized glass")
                 }
             }
             controller.dismiss(notify: false)
