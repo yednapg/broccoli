@@ -996,26 +996,15 @@ enum LauncherNativeSearchFieldStyle {
     }
 }
 
-/// Dark Liquid Glass backdrop. The material is darkened only by neutral black, and the rim adds
-/// neutral gray to whatever is beneath it, so all of the surface's color comes from the desktop.
+/// Dark Liquid Glass backdrop. The material is darkened only by neutral black, so all of the
+/// surface's color comes from the desktop. It fills its bounds; the surface's glass clip
+/// gives it the rounded outline.
 struct LauncherDarkGlassBackdrop: View {
-    @Environment(\.colorSchemeContrast) private var contrast
-
     var body: some View {
-        let shape = RoundedRectangle(
-            cornerRadius: LauncherLiquidGlassMetrics.cornerRadius,
-            style: .continuous
-        )
         ZStack {
-            shape.fill(.clear).background(LauncherLiquidGlassMetrics.darkMaterial, in: shape)
-            shape.fill(Color.black.opacity(LauncherLiquidGlassMetrics.darkShadeOpacity))
-            shape.strokeBorder(lineWidth: 1)
-                .foregroundStyle(Color(white: contrast == .increased
-                    ? LauncherLiquidGlassMetrics.darkRimLiftIncreasedContrast
-                    : LauncherLiquidGlassMetrics.darkRimLift))
-                .blendMode(.plusLighter)
+            Rectangle().fill(.clear).background(LauncherLiquidGlassMetrics.darkMaterial)
+            Rectangle().fill(Color.black.opacity(LauncherLiquidGlassMetrics.darkShadeOpacity))
         }
-        .clipShape(shape)
         .transaction { $0.disablesAnimations = true }
         .environment(\.colorScheme, .dark)
         .accessibilityHidden(true)
@@ -1034,15 +1023,24 @@ private final class LauncherDarkGlassBackdropView: NSHostingView<LauncherDarkGla
 /// `NSGlassEffectView` was measured against both: at pill size its lens contributes almost no
 /// blur, and it samples in-window content, so nothing may be layered beneath it.
 ///
-/// Do not layer-back the HUD to round it. A layer-backed visual-effect view drops vibrancy,
-/// so Light labels and the header rule would composite as plain gray over wallpaper. Dark
-/// content cannot live inside the effect view at all (it would sit over the HUD), so the
-/// content moves onto the SwiftUI backdrop and its ink composites additively instead.
+/// Do not layer-back the HUD itself to round it. A layer-backed visual-effect view drops
+/// vibrancy, so Light labels and the header rule would composite as plain gray over wallpaper.
+/// The glass clip is an ancestor that rounds the HUD, the Dark backdrop, and the content
+/// together. Dark content cannot live inside the effect view at all (it would sit over the
+/// HUD), so the content moves onto the SwiftUI backdrop and its ink composites additively.
+///
+/// The glass clip is the only layer that antialiases the outline, and the Dark rim is drawn
+/// once above it with the same geometry. A rim stroked inside that outline and then clipped
+/// by it again loses part of its outer pixels along the arcs but not along the straight
+/// edges, so it thins abruptly where each arc begins.
 @MainActor
 final class LauncherLiquidGlassSurfaceView: NSView {
     static let cornerRadius = LauncherLiquidGlassMetrics.cornerRadius
+    static let cornerCurve = LauncherLiquidGlassMetrics.cornerCurve
     static let collapsedHeight = LauncherLiquidGlassMetrics.searchHeight
 
+    let glassClip = NSView()
+    let rim = LauncherGlassRimView()
     private let materialView = NSVisualEffectView()
     private let darkBackdrop = LauncherDarkGlassBackdropView(rootView: LauncherDarkGlassBackdrop())
     private var hostedContent: NSView?
@@ -1056,24 +1054,26 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
         // Configure the persistent surface once. Resizing must not select a different
         // material, blending mode, or corner treatment. AppKit handles Reduce Transparency and
-        // Increase Contrast for the HUD, and SwiftUI does for the Dark material. A stretchable
-        // mask rounds the capsule without `wantsLayer`, which would flatten vibrancy.
+        // Increase Contrast for the HUD, and SwiftUI does for the Dark material.
+        glassClip.frame = bounds
+        glassClip.autoresizingMask = [.width, .height]
+        glassClip.wantsLayer = true
+        glassClip.layer?.cornerRadius = Self.cornerRadius
+        glassClip.layer?.cornerCurve = Self.cornerCurve
+        glassClip.layer?.masksToBounds = true
+        addSubview(glassClip)
         darkBackdrop.sizingOptions = []
         darkBackdrop.frame = bounds
         darkBackdrop.autoresizingMask = [.width, .height]
-        // The backdrop layer is rectangular. Clip it to the capsule or the four corners
-        // paint a second, square edge over the rounded surface.
-        darkBackdrop.wantsLayer = true
-        darkBackdrop.layer?.cornerRadius = Self.cornerRadius
-        darkBackdrop.layer?.cornerCurve = .continuous
-        darkBackdrop.layer?.masksToBounds = true
         materialView.frame = bounds
         materialView.autoresizingMask = [.width, .height]
         materialView.material = .hudWindow
         materialView.blendingMode = .behindWindow
         materialView.state = .active
-        materialView.maskImage = Self.stretchingCornerMask(radius: Self.cornerRadius)
-        addSubview(materialView)
+        glassClip.addSubview(materialView)
+        rim.frame = bounds
+        rim.autoresizingMask = [.width, .height]
+        addSubview(rim)
         updateSurfaceForAppearance()
     }
 
@@ -1081,11 +1081,10 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
     override func layout() {
         super.layout()
-        materialView.frame = bounds
-        darkBackdrop.frame = bounds
-        darkBackdrop.layer?.cornerRadius = Self.cornerRadius
-        darkBackdrop.layer?.cornerCurve = .continuous
-        darkBackdrop.layer?.masksToBounds = true
+        glassClip.frame = bounds
+        materialView.frame = glassClip.bounds
+        darkBackdrop.frame = glassClip.bounds
+        rim.frame = bounds
         // Detached previews can resolve a new appearance without delivering the change
         // callback before capture.
         updateSurfaceForAppearance()
@@ -1098,6 +1097,10 @@ final class LauncherLiquidGlassSurfaceView: NSView {
 
     private func updateSurfaceForAppearance() {
         let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        rim.update(
+            visible: isDark,
+            increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        )
         let darkInstalled = darkBackdrop.superview != nil
         guard isDark != usesDarkBackdrop || darkInstalled != isDark else { return }
         usesDarkBackdrop = isDark
@@ -1108,7 +1111,7 @@ final class LauncherLiquidGlassSurfaceView: NSView {
         // every height step.
         if let hostedContent { attach(hostedContent) }
         if darkBackdrop.superview == nil {
-            addSubview(darkBackdrop, positioned: .below, relativeTo: hostedContent)
+            glassClip.addSubview(darkBackdrop, positioned: .below, relativeTo: hostedContent)
         }
         darkBackdrop.isHidden = !isDark
         materialView.isHidden = isDark
@@ -1121,6 +1124,7 @@ final class LauncherLiquidGlassSurfaceView: NSView {
         // Give content destination geometry before activating constraints: a detached
         // preview has no window display cycle to expand a zero-sized effect view afterward,
         // so it would otherwise settle at the search field's fitting height.
+        glassClip.frame = bounds
         materialView.frame = bounds
         darkBackdrop.frame = bounds
         view.frame = bounds
@@ -1132,7 +1136,7 @@ final class LauncherLiquidGlassSurfaceView: NSView {
     /// sits above the SwiftUI backdrop. Moving between visible parents keeps the field editor,
     /// its selection, and marked text.
     private func attach(_ view: NSView) {
-        let parent: NSView = usesDarkBackdrop ? self : materialView
+        let parent: NSView = usesDarkBackdrop ? glassClip : materialView
         guard view.superview !== parent else { return }
         parent.addSubview(view)
         NSLayoutConstraint.activate([
@@ -1142,25 +1146,33 @@ final class LauncherLiquidGlassSurfaceView: NSView {
             view.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
         ])
     }
+}
 
-    /// Cap-inset mask that stretches to any panel size while keeping the shared corner radius.
-    private static func stretchingCornerMask(radius: CGFloat) -> NSImage {
-        let edge = radius * 2 + 1
-        let size = NSSize(width: edge, height: edge)
-        let image = NSImage(size: size, flipped: false) { rect in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            let layer = CALayer()
-            layer.frame = rect
-            layer.backgroundColor = NSColor.black.cgColor
-            layer.cornerRadius = radius
-            layer.cornerCurve = .continuous
-            layer.masksToBounds = true
-            layer.render(in: context)
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
+/// The Dark one-point rim: neutral gray added to the surface beneath it with plus-lighter.
+/// A layer border shares its corner geometry with the glass clip's mask exactly.
+@MainActor
+final class LauncherGlassRimView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = LauncherLiquidGlassMetrics.cornerRadius
+        layer?.cornerCurve = LauncherLiquidGlassMetrics.cornerCurve
+        layer?.borderWidth = 1
+        layer?.masksToBounds = false
+        LauncherAdditiveInk.apply(true, to: self)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func update(visible: Bool, increasedContrast: Bool) {
+        isHidden = !visible
+        let lift = CGFloat(increasedContrast
+            ? LauncherLiquidGlassMetrics.darkRimLiftIncreasedContrast
+            : LauncherLiquidGlassMetrics.darkRimLift)
+        let color = NSColor(srgbRed: lift, green: lift, blue: lift, alpha: 1).cgColor
+        if layer?.borderColor != color { layer?.borderColor = color }
     }
 }
 
@@ -1865,6 +1877,8 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private var contentConstraints: [NSLayoutConstraint] = []
     private var resultsTopConstraint: NSLayoutConstraint?
     private var resultsBottomConstraint: NSLayoutConstraint?
+    /// Replaces the bottom constraint while a growth reveals rows or a full collapse clips them.
+    private var resultsMotionHeightConstraint: NSLayoutConstraint?
     private var currentMode: LauncherMode = .main
     private var presentationSessionActive = false
     /// Liquid Glass starts as one compact search capsule. Any useful match opens one stable
@@ -2303,24 +2317,20 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             if !self.results.contains(where: { $0.entry.id == confirmationEntryID }) {
                 confirmationEntryID = nil
             }
-            tableView.reloadData()
-            if shouldResetScroll {
-                resetTableScrollPosition()
-            }
             if inlineSuggestion != nil, selectedEntryID == nil {
                 tableView.deselectAll(nil)
-            } else if let preferredRow = LauncherSelection.preferredRow(
-                preservingEntryID: selectedEntryID,
-                in: self.results
-            ) {
-                tableView.selectRowIndexes(IndexSet(integer: preferredRow), byExtendingSelection: false)
-                if !shouldResetScroll {
-                    scrollSelectedRowVisible()
-                }
+                tableView.reloadData()
+                refreshSelectionAppearance()
             } else {
-                tableView.deselectAll(nil)
+                // Select before reloading. A reload that finds no selection builds every
+                // row unselected, and the accent then disappears and returns a moment later.
+                reloadResultsPreservingSelection(selectedEntryID)
             }
-            refreshSelectionAppearance()
+            if shouldResetScroll {
+                resetTableScrollPosition()
+            } else {
+                scrollSelectedRowVisible()
+            }
         }
         updateHeight()
         if needsPresentationIconRefresh, !results.isEmpty {
@@ -2525,6 +2535,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         // These controls survive a structural theme change. Removing them from a parent
         // does not remove their own height/width constraints, so retire our previous layout.
         NSLayoutConstraint.deactivate(contentConstraints)
+        resultsMotionHeightConstraint?.isActive = false
         nativeSearchField.removeFromSuperview()
         liquidGlassSurface.removeFromSuperview()
         headerSeparator.removeFromSuperview()
@@ -2540,13 +2551,11 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         host.translatesAutoresizingMaskIntoConstraints = true
         host.autoresizingMask = [.width, .height]
         if theme.surface == .glass {
-            // The window shadow follows the composited window contents. Clip its outer
-            // content boundary to the same geometry as the material surface, including while
-            // the backdrop changes size; rectangular corner pixels must not reach WindowServer.
+            // The window shadow follows the composited window contents. The glass surface
+            // clips everything it draws to its rounded outline, so rectangular corner pixels
+            // never reach WindowServer. Clipping the host as well would antialias that edge
+            // a second time and thin the Dark rim along the arcs.
             host.wantsLayer = true
-            host.layer?.cornerCurve = .continuous
-            host.layer?.cornerRadius = theme.cornerRadius
-            host.layer?.masksToBounds = true
         }
 
         // The material surface and the native window shadow must share the same boundary. An
@@ -2661,6 +2670,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         )
         self.resultsTopConstraint = resultsTopConstraint
         self.resultsBottomConstraint = resultsBottomConstraint
+        resultsMotionHeightConstraint = resultsChrome.heightAnchor.constraint(equalToConstant: 0)
         scrollView.isHidden = !hasResults
         let searchChrome: NSView = searchField
         let searchHeightConstraint = searchChrome.heightAnchor.constraint(
@@ -2951,8 +2961,35 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         let insets = theme.resultVerticalInsets(resultCount: hasResults ? results.count : 0)
         resultsTopConstraint?.constant = theme.searchHeight + insets.top
         resultsBottomConstraint?.constant = -insets.bottom
+        if holdsRowsForCollapse {
+            if resultsMotionHeightConstraint?.isActive == false, !scrollView.isHidden {
+                setResultsViewportMotionHeight(scrollView.frame.height)
+            }
+        } else {
+            setResultsViewportMotionHeight(nil)
+        }
         scrollView.isHidden = !hasResults
         updateHeaderSeparatorVisibility()
+    }
+
+    /// While the window grows or fully collapses, the viewport keeps a fixed height, so the
+    /// window's rounded bottom edge is the only thing that reveals or clips the rows. Pinned
+    /// above that edge, the viewport cut the rows along a second, straight line, and its
+    /// insets made AppKit enlarge a compact window to their minimum height before a growth
+    /// began, so the divider appeared on an empty strip that then opened beneath it.
+    private func setResultsViewportMotionHeight(_ height: CGFloat?) {
+        guard let pinned = resultsBottomConstraint,
+              let fixed = resultsMotionHeightConstraint
+        else { return }
+        if let height {
+            fixed.constant = max(0, height)
+            guard !fixed.isActive else { return }
+            NSLayoutConstraint.deactivate([pinned])
+            NSLayoutConstraint.activate([fixed])
+        } else if fixed.isActive {
+            NSLayoutConstraint.deactivate([fixed])
+            NSLayoutConstraint.activate([pinned])
+        }
     }
 
     private func updateHeaderSeparatorVisibility() {
@@ -2960,6 +2997,15 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             hasResults: holdsRowsForCollapse || presentsResultViewport,
             selectedRow: tableView.selectedRow
         )
+        updateHeaderSeparatorFade()
+    }
+
+    /// The divider fades across the top result inset: in as a growth opens it and out as a
+    /// collapse closes it, so the line never lies on the bottom rim.
+    private func updateHeaderSeparatorFade() {
+        let revealed = (panel.frame.height - theme.searchHeight) / max(1, theme.resultTopInset)
+        let alpha = min(1, max(0, revealed))
+        if headerSeparator.alphaValue != alpha { headerSeparator.alphaValue = alpha }
     }
 
     private func resizePanel(to height: CGFloat, display: Bool) {
@@ -2981,7 +3027,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 holdsRowsForCollapse = false
                 if !rowsHeldForClip.isEmpty {
                     rowsHeldForClip = []
-                    tableView.reloadData()
+                    reloadResultsPreservingSelection(selectedResultID)
+                }
+                if presentsResultViewport {
+                    setResultsViewportMotionHeight(
+                        theme.resultsViewportHeight(resultCount: results.count)
+                    )
                 }
             }
             pendingExpansionTarget = frame
@@ -3093,6 +3144,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 }
             }
             panel.contentView?.layoutSubtreeIfNeeded()
+            updateHeaderSeparatorFade()
             beforeDisplay()
             if display && panel.isVisible { panel.displayIfNeeded() }
         }
@@ -3102,6 +3154,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// visibility, and a shadow that matches the final outline.
     private func finishPanelMotion() {
         releaseRowsHeldForClipping(clearResults: holdsRowsForCollapse)
+        setResultsViewportMotionHeight(nil)
         let frame = LauncherPanelGeometry.resizing(panel.frame, toHeight: desiredPanelHeight)
         commitPanelFrame(frame, display: panel.isVisible)
         if panel.hasShadow { panel.invalidateShadow() }
@@ -3111,15 +3164,40 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     /// clears the list it was holding.
     private func releaseRowsHeldForClipping(clearResults: Bool) {
         let hadSurplus = !rowsHeldForClip.isEmpty
+        let selectedID = selectedResultID
         holdsRowsForCollapse = false
         rowsHeldForClip = []
         guard clearResults || hadSurplus else { return }
         if clearResults {
             results = []
             confirmationEntryID = nil
+            tableView.reloadData()
+        } else {
+            reloadResultsPreservingSelection(selectedID)
         }
-        tableView.reloadData()
         updateResultsGeometry()
+    }
+
+    /// Reloads the table without letting the accent selection drop out and return.
+    private func reloadResultsPreservingSelection(_ entryID: String?) {
+        let row = LauncherSelection.preferredRow(preservingEntryID: entryID, in: results)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            defer { CATransaction.commit() }
+            if let row {
+                tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            tableView.reloadData()
+            if let row {
+                tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            } else {
+                tableView.deselectAll(nil)
+            }
+            refreshSelectionAppearance()
+        }
     }
 
     /// Drops any scheduled or in-flight transition, leaving the window frame where it is.
@@ -3128,6 +3206,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         expansionFlush?.cancel()
         expansionFlush = nil
         pendingExpansionTarget = nil
+        setResultsViewportMotionHeight(nil)
         stopResizeAnimation()
     }
 

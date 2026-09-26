@@ -17,7 +17,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
                     iconProvider: quietIconProvider(), interactive: true)
                 preview.prepareForCapture()
                 let surface = try XCTUnwrap(preview.subviews.first as? LauncherLiquidGlassSurfaceView)
-                let material = try XCTUnwrap(surface.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+                let material = try XCTUnwrap(surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.first)
                 if count == 0 { compactRadius = LauncherLiquidGlassSurfaceView.cornerRadius }
                 XCTAssertEqual(LauncherLiquidGlassSurfaceView.cornerRadius, try XCTUnwrap(compactRadius))
                 XCTAssertEqual(material.isHidden, mode == .dark)
@@ -30,7 +30,8 @@ final class LauncherPreviewRendererTests: XCTestCase {
                 )
                 XCTAssertEqual(material.blendingMode, .behindWindow)
                 XCTAssertFalse(material.wantsLayer)
-                XCTAssertEqual(material.maskImage?.capInsets.top, compactRadius)
+                XCTAssertEqual(surface.glassClip.layer?.cornerRadius, compactRadius)
+                XCTAssertEqual(surface.rim.isHidden, mode != .dark, "The preview draws the launcher's rim")
                 XCTAssertEqual(material.alphaValue, 1)
                 XCTAssertEqual(material.frame.size, preview.frame.size)
                 XCTAssertEqual(material.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]),
@@ -275,17 +276,17 @@ final class LauncherPreviewRendererTests: XCTestCase {
         surface.layoutSubtreeIfNeeded()
 
         let material = try XCTUnwrap(
-            surface.subviews.compactMap { $0 as? NSVisualEffectView }.first
+            surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.first
         )
         XCTAssertEqual(
-            surface.subviews.compactMap { $0 as? NSVisualEffectView }.count,
+            surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.count,
             1
         )
         XCTAssertEqual(material.material, .hudWindow)
         XCTAssertEqual(material.blendingMode, .behindWindow)
         XCTAssertFalse(material.wantsLayer)
         XCTAssertEqual(
-            material.maskImage?.capInsets.top,
+            surface.glassClip.layer?.cornerRadius,
             LauncherLiquidGlassMetrics.cornerRadius
         )
         XCTAssertEqual(material.frame, surface.bounds)
@@ -296,7 +297,7 @@ final class LauncherPreviewRendererTests: XCTestCase {
         XCTAssertTrue(material.isHidden)
         XCTAssertEqual(material.state, .inactive)
         XCTAssertTrue(surface.usesDarkBackdrop)
-        XCTAssertTrue(content.superview === surface)
+        XCTAssertTrue(content.superview === surface.glassClip)
 
         surface.appearance = NSAppearance(named: .aqua)
         surface.frame.size.height = 184
@@ -304,7 +305,8 @@ final class LauncherPreviewRendererTests: XCTestCase {
         XCTAssertEqual(material.frame, surface.bounds)
         XCTAssertEqual(material.material, .hudWindow)
         XCTAssertFalse(material.wantsLayer)
-        XCTAssertEqual(material.maskImage?.capInsets.top, LauncherLiquidGlassSurfaceView.cornerRadius)
+        XCTAssertEqual(surface.glassClip.frame, surface.bounds)
+        XCTAssertEqual(surface.glassClip.layer?.cornerRadius, LauncherLiquidGlassSurfaceView.cornerRadius)
     }
 
     func testRenderedResultsViewportMatchesProductionDocumentHeight() async throws {

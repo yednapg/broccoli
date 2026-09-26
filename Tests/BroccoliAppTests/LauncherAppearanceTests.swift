@@ -1499,7 +1499,7 @@ final class LauncherAppearanceTests: XCTestCase {
             interactive: false
         )
         let material = try XCTUnwrap(
-            surface.subviews.compactMap { $0 as? NSVisualEffectView }.first
+            surface.glassClip.subviews.compactMap { $0 as? NSVisualEffectView }.first
         )
 
         surface.appearance = NSAppearance(named: .aqua)
@@ -1518,9 +1518,10 @@ final class LauncherAppearanceTests: XCTestCase {
         surface.setContentView(content)
         XCTAssertTrue(content.superview === material, "Light content stays in the HUD's vibrancy")
         let backdrop = try XCTUnwrap(
-            surface.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> }
+            surface.glassClip.subviews.first { $0 is NSHostingView<LauncherDarkGlassBackdrop> }
         )
         XCTAssertTrue(backdrop.isHidden)
+        XCTAssertTrue(surface.rim.isHidden, "Light has no rim")
         XCTAssertEqual(material.state, .active)
 
         for name in [NSAppearance.Name.darkAqua, .accessibilityHighContrastDarkAqua] {
@@ -1532,13 +1533,19 @@ final class LauncherAppearanceTests: XCTestCase {
                 XCTAssertTrue(material.isHidden)
                 XCTAssertEqual(material.state, .inactive, "An inactive HUD does not sample a second background")
                 XCTAssertFalse(backdrop.isHidden)
+                XCTAssertFalse(surface.rim.isHidden)
                 XCTAssertEqual(backdrop.frame, surface.bounds)
-                XCTAssertEqual(backdrop.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
-                XCTAssertTrue(backdrop.layer?.masksToBounds ?? false)
-                XCTAssertTrue(content.superview === surface)
+                XCTAssertEqual(surface.glassClip.layer?.cornerRadius, LauncherLiquidGlassMetrics.cornerRadius)
+                XCTAssertTrue(surface.glassClip.layer?.masksToBounds ?? false)
+                XCTAssertTrue(content.superview === surface.glassClip)
                 XCTAssertGreaterThan(
-                    try XCTUnwrap(surface.subviews.firstIndex(of: content)),
-                    try XCTUnwrap(surface.subviews.firstIndex(of: backdrop))
+                    try XCTUnwrap(surface.glassClip.subviews.firstIndex(of: content)),
+                    try XCTUnwrap(surface.glassClip.subviews.firstIndex(of: backdrop))
+                )
+                XCTAssertGreaterThan(
+                    try XCTUnwrap(surface.subviews.firstIndex(of: surface.rim)),
+                    try XCTUnwrap(surface.subviews.firstIndex(of: surface.glassClip)),
+                    "The rim draws above the clipped glass, outside its mask"
                 )
             }
         }
@@ -1551,7 +1558,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertTrue(backdrop.isHidden)
         XCTAssertTrue(content.superview === material)
         XCTAssertFalse(material.wantsLayer)
-        XCTAssertNotNil(material.maskImage)
+        XCTAssertNil(material.maskImage)
     }
 
     func testLiquidHeaderSeparatorUsesSearchInkWithoutVibrancy() {
