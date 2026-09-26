@@ -143,7 +143,28 @@ macOS privacy permissions cannot be granted by the app or a normal build script.
 
 All Git mutations require the user's specific approval. This includes staging, committing, amending, merging, rebasing, tagging, creating or publishing branches, rewriting history, and pushing. Approval to edit files is not approval for any of those actions. Approval to commit is not approval to push.
 
-When work is ready, leave it unstaged and report the intended files, verification performed, and a proposed commit subject. Wait for approval before staging or committing, then wait for separate approval before pushing.
+When work is ready, leave it unstaged and report the intended files, verification performed, and a proposed commit message in the format below. Wait for approval before staging or committing, then wait for separate approval before pushing.
+
+### Commit messages
+
+Every commit uses Conventional Commits, including commits the user asks for in casual words such as "fixed border and animation". Turn the request into this format rather than copying it verbatim.
+
+```text
+fix(launcher): Smooth border and panel motion
+
+The Dark rim was clipped by the same outline it traced, so it thinned
+where each corner began. Clip the glass once and draw the rim above
+it, so its weight stays even around the corners.
+```
+
+- Subject: `type(scope): Description`, 50 characters or fewer in total, imperative mood, capital letter after the colon, and no trailing period. It should complete the sentence "If applied, this commit will …".
+- Types: `feat` (new behavior), `fix` (bug fix), `perf` (measurable speedup), `refactor` (no behavior change), `docs` (documentation only), `style` (formatting only), `test` (tests only), `build` (scripts, packaging, signing), and `chore` (maintenance and merges).
+- Scope is optional and names the area: `launcher`, `settings`, `search`, `calculator`, `clipboard`, `icons`, `window`, `release`, and similar. Keep one lowercase word.
+- Separate the subject from the body with one blank line. Wrap the body at 72 characters. Explain what changed and why it matters to the user or the codebase, not how the code does it. Omit the body only when the subject says everything.
+- Keep existing trailers such as `Co-authored-by:` at the end, after a blank line.
+- A merge commit reads `chore: Merge <branch-name>` with a one-line body saying what it brings in.
+
+When the user asks to reword existing commits, change only the messages. Preserve each commit's author, author date, committer date, tree, and parent structure. Verify every commit against a local backup branch before any force-push, and push with `--force-with-lease` against the exact commits that were rewritten.
 
 The installed application may contain uncommitted work. If so, state that it is newer than GitHub and is not represented by a remote commit. Do not say a build is on GitHub until the exact commit has been pushed and the remote state has been checked.
 
@@ -165,4 +186,4 @@ Use focused checks while iterating. Before handing off:
 
 Review the final diff for accidental changes, debug code, generated files, and unsupported claims. If a check cannot run, give the exact command, the blocker, and the remaining risk.
 
-Finish with the changed behavior and files, checks actually run, anything still unverified, current Git status, and a proposed commit subject. Do not stage or commit it.
+Finish with the changed behavior and files, checks actually run, anything still unverified, current Git status, and a proposed commit message that follows the commit message rules above. Do not stage or commit it.
