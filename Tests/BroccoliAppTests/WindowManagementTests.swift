@@ -663,6 +663,54 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(sizeWriteCount, 3)
     }
 
+    func testFrameWriteSuspendsEnhancedUserInterfaceThenRestoresIt() throws {
+        let original = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let probe = EnhancedUserInterfaceProbe(frame: original, enhancedUserInterface: true)
+
+        try probe.makeOperation().setFrame(target, of: probe.window)
+
+        XCTAssertEqual(probe.appliedFrame, target)
+        XCTAssertEqual(probe.enhancedUserInterface, true)
+        XCTAssertEqual(probe.enhancedUserInterfaceWrites, [false, true])
+        XCTAssertEqual(probe.frameWritesWhileEnhanced, 0)
+    }
+
+    func testFrameWriteRestoresEnhancedUserInterfaceWhenWritesReportErrors() throws {
+        let original = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let probe = EnhancedUserInterfaceProbe(frame: original, enhancedUserInterface: true)
+        probe.enhancedUserInterfaceWriteError = .notImplemented
+
+        try probe.makeOperation().setFrame(target, of: probe.window)
+
+        XCTAssertEqual(probe.appliedFrame, target)
+        XCTAssertEqual(probe.enhancedUserInterface, true)
+        XCTAssertEqual(probe.enhancedUserInterfaceWrites, [false, true])
+    }
+
+    func testFrameWriteRestoresEnhancedUserInterfaceWhenFrameIsRejected() {
+        let original = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let probe = EnhancedUserInterfaceProbe(frame: original, enhancedUserInterface: true)
+        probe.rejectsFrames = true
+
+        XCTAssertThrowsError(try probe.makeOperation().setFrame(target, of: probe.window))
+        XCTAssertEqual(probe.enhancedUserInterface, true)
+        XCTAssertEqual(probe.enhancedUserInterfaceWrites, [false, true])
+    }
+
+    func testFrameWriteLeavesEnhancedUserInterfaceAloneWhenItIsOff() throws {
+        let original = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let probe = EnhancedUserInterfaceProbe(frame: original, enhancedUserInterface: false)
+
+        try probe.makeOperation().setFrame(target, of: probe.window)
+
+        XCTAssertEqual(probe.appliedFrame, target)
+        XCTAssertEqual(probe.enhancedUserInterfaceWrites, [])
+    }
+
     func testFrameWriteAcceptsTerminalCharacterGridSnap() throws {
         let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
         let cases: [(target: CGRect, snapped: CGRect)] = [
@@ -1087,6 +1135,68 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(finalSize, target.size)
         XCTAssertFalse(ranOnMainThread)
         XCTAssertEqual(timeout, 0.75)
+    }
+}
+
+/// An application that, like Firefox-based browsers, accepts frame writes without applying
+/// them while AXEnhancedUserInterface is on.
+private final class EnhancedUserInterfaceProbe {
+    let application = AXUIElementCreateApplication(100)
+    var window: AXUIElement { application }
+    var appliedFrame: CGRect
+    var enhancedUserInterface: Bool
+    var rejectsFrames = false
+    /// Firefox applies the attribute but answers with this error.
+    var enhancedUserInterfaceWriteError: AXError = .success
+    var enhancedUserInterfaceWrites: [Bool] = []
+    var frameWritesWhileEnhanced = 0
+
+    init(frame: CGRect, enhancedUserInterface: Bool) {
+        appliedFrame = frame
+        self.enhancedUserInterface = enhancedUserInterface
+    }
+
+    func makeOperation() -> WindowAccessibilityOperation {
+        WindowAccessibilityOperation(
+            attributeReader: { [self] _, attribute in
+                if CFEqual(attribute, WindowAccessibilityOperation.enhancedUserInterfaceAttribute) {
+                    return AccessibilityAttributeRead(
+                        error: .success,
+                        value: enhancedUserInterface ? kCFBooleanTrue : kCFBooleanFalse
+                    )
+                }
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    var value = appliedFrame.origin
+                    return AccessibilityAttributeRead(error: .success, value: AXValueCreate(.cgPoint, &value))
+                }
+                if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    var value = appliedFrame.size
+                    return AccessibilityAttributeRead(error: .success, value: AXValueCreate(.cgSize, &value))
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { [self] _, attribute, value in
+                if CFEqual(attribute, WindowAccessibilityOperation.enhancedUserInterfaceAttribute) {
+                    enhancedUserInterface = (value as? Bool) == true
+                    enhancedUserInterfaceWrites.append(enhancedUserInterface)
+                    return enhancedUserInterfaceWriteError
+                }
+                guard !enhancedUserInterface, !rejectsFrames else {
+                    if enhancedUserInterface { frameWritesWhileEnhanced += 1 }
+                    return .success
+                }
+                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
+                if CFEqual(attribute, kAXPositionAttribute as CFString) {
+                    AXValueGetValue(accessibilityValue, .cgPoint, &appliedFrame.origin)
+                } else if CFEqual(attribute, kAXSizeAttribute as CFString) {
+                    AXValueGetValue(accessibilityValue, .cgSize, &appliedFrame.size)
+                }
+                return .success
+            },
+            messagingTimeoutSetter: { _, _ in .success },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
+        )
     }
 }
 

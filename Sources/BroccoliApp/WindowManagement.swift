@@ -271,6 +271,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     // 80 pt one-axis clamp as success.
     private static let frameSizeTolerance: CGFloat = 24
     private static let frameStabilityTolerance: CGFloat = 1
+    static let enhancedUserInterfaceAttribute = "AXEnhancedUserInterface" as CFString
 
     enum WindowCandidateResolution {
         case accepted
@@ -698,6 +699,46 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     /// step resize at an application's minimum width should still change the height; a
     /// layout such as Left Half must not be left half-applied.
     func setFrame(
+        _ frame: CGRect,
+        of window: AXUIElement,
+        screen: CGRect,
+        acceptsPartialAxis: Bool,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) throws {
+        let restoreEnhancedUserInterface = suspendEnhancedUserInterface(of: window)
+        defer { restoreEnhancedUserInterface() }
+        try applyFrame(
+            frame,
+            of: window,
+            screen: screen,
+            acceptsPartialAxis: acceptsPartialAxis,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
+    }
+
+    /// Chromium- and Firefox-based applications report frame writes as successful but ignore
+    /// or animate them while AXEnhancedUserInterface is on. The attribute belongs to assistive
+    /// clients such as VoiceOver, so it is turned back on as soon as the frame is applied.
+    /// Firefox applies writes to this attribute while returning an error, so the write result
+    /// cannot decide whether it needs restoring.
+    private func suspendEnhancedUserInterface(of window: AXUIElement) -> () -> Void {
+        var processIdentifier: pid_t = 0
+        guard AXUIElementGetPid(window, &processIdentifier) == .success,
+              processIdentifier > 0 else { return {} }
+        let application = AXUIElementCreateApplication(processIdentifier)
+        _ = messagingTimeoutSetter(application, messagingTimeout)
+        let attribute = Self.enhancedUserInterfaceAttribute
+        let read = attributeReader(application, attribute)
+        guard read.error == .success, (read.value as? Bool) == true else { return {} }
+        _ = attributeWriter(application, attribute, kCFBooleanFalse)
+        return { [attributeWriter] in
+            _ = attributeWriter(application, attribute, kCFBooleanTrue)
+        }
+    }
+
+    private func applyFrame(
         _ frame: CGRect,
         of window: AXUIElement,
         screen: CGRect,
