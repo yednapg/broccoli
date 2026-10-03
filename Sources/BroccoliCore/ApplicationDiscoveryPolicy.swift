@@ -37,7 +37,9 @@ public enum ApplicationDiscoveryPolicy {
         if standardized == finderPath {
             return packageType == "FNDR" && bundleIdentifier == "com.apple.finder"
         }
-        return packageType == "APPL"
+        // Passwords.app is a user-facing system app whose package type is XPC!,
+        // not APPL. Spotlight still indexes it as an application bundle.
+        return packageType == "APPL" || packageType == "XPC!"
     }
 
     public static func isUserFacingLocation(
