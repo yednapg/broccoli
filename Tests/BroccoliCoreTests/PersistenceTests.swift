@@ -45,6 +45,30 @@ final class PersistenceTests: XCTestCase {
         ))
     }
 
+    func testDiscoveryPolicyAllowsPasswordsPackageType() {
+        XCTAssertTrue(ApplicationDiscoveryPolicy.isCandidatePath(
+            "/System/Applications/Passwords.app"
+        ))
+        XCTAssertTrue(ApplicationDiscoveryPolicy.isUserFacingLocation(
+            "/System/Applications/Passwords.app"
+        ))
+        XCTAssertTrue(ApplicationDiscoveryPolicy.isSupportedApplicationBundle(
+            path: "/System/Applications/Passwords.app",
+            packageType: "XPC!",
+            bundleIdentifier: "com.apple.Passwords"
+        ))
+        XCTAssertFalse(ApplicationDiscoveryPolicy.isSupportedApplicationBundle(
+            path: "/System/Library/CoreServices/ManagedClient.app",
+            packageType: "AAPL",
+            bundleIdentifier: "com.apple.ManagedClient"
+        ))
+        XCTAssertFalse(ApplicationDiscoveryPolicy.isSupportedApplicationBundle(
+            path: "/Applications/Helper.app",
+            packageType: "BNDL",
+            bundleIdentifier: "com.example.helper"
+        ))
+    }
+
     func testDiscoveryPolicyKeepsUserFacingAndDeveloperApplications() {
         XCTAssertTrue(ApplicationDiscoveryPolicy.isCandidatePath(
             "/Applications/Visual Studio Code - Insiders.app"
