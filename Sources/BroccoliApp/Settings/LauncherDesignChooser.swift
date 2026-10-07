@@ -4,8 +4,10 @@ import SwiftUI
 enum LauncherDesignChooserLayout {
     static let designs: [LauncherDesign] = [.liquidGlass, .minimal]
     static let accessibilityLabel = "Launcher Design"
-    static let thumbnailWidth: CGFloat = 128
-    static let thumbnailPadding: CGFloat = 6
+    static let thumbnailWidth: CGFloat = 120
+    /// Shared well for the closer launcher frames. The taller shot sets the
+    /// height so neither background is clipped.
+    static let artworkPixelSize = CGSize(width: 1024, height: 718)
     static let thumbnailSpacing: CGFloat = 8
     static let titleSpacing: CGFloat = 6
     static let wellCornerRadius: CGFloat = 10
@@ -27,28 +29,8 @@ enum LauncherDesignChooserLayout {
         CGSize(width: thumbnailWidth, height: thumbnailHeight)
     }
 
-    /// Shared well height, fitted to the production Liquid Glass screenshot aspect.
-    /// Minimal uses the same well so the two cards stay aligned.
     static var thumbnailHeight: CGFloat {
-        let productionWidth = LauncherLiquidGlassMetrics.width
-        let resultCount = CGFloat(LauncherPreviewFixture.standard.results.count)
-        let productionHeight = LauncherLiquidGlassMetrics.searchHeight
-            + LauncherLiquidGlassMetrics.resultTopInset
-            + resultCount * LauncherLiquidGlassMetrics.searchHeight
-            + LauncherLiquidGlassMetrics.resultBottomInset
-        return fittedImageSize(
-            for: CGSize(width: productionWidth, height: productionHeight)
-        ).height + thumbnailPadding * 2
-    }
-
-    static func fittedImageSize(for productionSize: CGSize) -> CGSize {
-        guard productionSize.width > 0, productionSize.height > 0 else { return .zero }
-        let availableWidth = max(1, thumbnailWidth - thumbnailPadding * 2)
-        let scale = availableWidth / productionSize.width
-        return CGSize(
-            width: productionSize.width * scale,
-            height: productionSize.height * scale
-        )
+        thumbnailWidth * artworkPixelSize.height / artworkPixelSize.width
     }
 
     static func neighbor(of design: LauncherDesign, offset: Int) -> LauncherDesign? {
@@ -85,8 +67,6 @@ enum LauncherDesignChooserLayout {
 /// HStack cannot share focus or selection chrome with the thumbnails.
 struct LauncherDesignChooserRow: View {
     @Binding var selection: LauncherDesign
-    let appearance: LauncherAppearancePreferences
-    @ObservedObject var renderer: LauncherPreviewRenderer
 
     var body: some View {
         HStack(alignment: .center, spacing: 18) {
@@ -96,11 +76,7 @@ struct LauncherDesignChooserRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityHidden(true)
 
-            LauncherDesignChooser(
-                selection: $selection,
-                appearance: appearance,
-                renderer: renderer
-            )
+            LauncherDesignChooser(selection: $selection)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -109,8 +85,6 @@ struct LauncherDesignChooserRow: View {
 
 struct LauncherDesignChooser: View {
     @Binding var selection: LauncherDesign
-    let appearance: LauncherAppearancePreferences
-    @ObservedObject var renderer: LauncherPreviewRenderer
 
     var body: some View {
         HStack(spacing: LauncherDesignChooserLayout.thumbnailSpacing) {
@@ -161,11 +135,7 @@ struct LauncherDesignChooser: View {
             cornerRadius: LauncherDesignChooserLayout.wellCornerRadius,
             style: .continuous
         )
-        return LauncherDesignPreviewThumbnail(
-            design: design,
-            appearance: appearance,
-            renderer: renderer
-        )
+        return LauncherDesignPreviewThumbnail(design: design)
         .frame(
             width: LauncherDesignChooserLayout.thumbnailWidth,
             height: LauncherDesignChooserLayout.thumbnailHeight
@@ -214,32 +184,26 @@ private struct LauncherDesignCardButtonStyle: ButtonStyle {
     }
 }
 
+enum LauncherDesignArtwork {
+    static func image(for design: LauncherDesign) -> NSImage? {
+        let name = switch design {
+        case .liquidGlass: "LauncherDesignLiquidGlass"
+        case .minimal: "LauncherDesignMinimal"
+        }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "jpg") else { return nil }
+        return NSImage(contentsOf: url)
+    }
+}
+
 private struct LauncherDesignPreviewThumbnail: View {
     let design: LauncherDesign
-    let appearance: LauncherAppearancePreferences
-    @ObservedObject var renderer: LauncherPreviewRenderer
-    @State private var renderedImage: NSImage?
-
-    private var previewPreferences: LauncherAppearancePreferences {
-        var preferences = appearance
-        preferences.design = design
-        return preferences
-    }
 
     var body: some View {
-        let displayed = renderedImage ?? renderer.cachedImage(for: previewPreferences)
-        ZStack {
-            if let displayed {
-                Image(nsImage: displayed)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-            }
-        }
-        .padding(LauncherDesignChooserLayout.thumbnailPadding)
-        .task(id: renderer.renderIdentity(for: previewPreferences)) {
-            renderedImage = renderer.cachedImage(for: previewPreferences)
-            renderedImage = await renderer.image(for: previewPreferences)
+        if let image = LauncherDesignArtwork.image(for: design) {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
         }
     }
 }

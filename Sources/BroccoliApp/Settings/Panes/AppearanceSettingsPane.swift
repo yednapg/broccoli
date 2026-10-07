@@ -18,11 +18,7 @@ struct AppearanceSettingsPane: View {
     private var appearance: some View {
         Group {
             SpotlightSettingsCard("Appearance") {
-                LauncherDesignChooserRow(
-                    selection: appearanceBinding(\.design),
-                    appearance: preferences.appearance,
-                    renderer: previewRenderer
-                )
+                LauncherDesignChooserRow(selection: appearanceBinding(\.design))
                 SpotlightSettingsRow(title: "Color Mode") {
                     Picker("Color Mode", selection: appearanceBinding(\.mode)) {
                         ForEach(LauncherAppearanceMode.allCases) { Text($0.title).tag($0) }
