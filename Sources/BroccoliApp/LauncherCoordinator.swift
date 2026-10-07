@@ -795,18 +795,17 @@ final class LauncherCoordinator {
         }
     }
 
+    /// Always goes through Launch Services, as Spotlight does. For a running app that sends
+    /// the standard reopen event, which is what shows a menu-bar app's interface when it has
+    /// no windows; activating the process alone leaves it hidden.
     private func launchApplication(path: String, bundleIdentifier: String?) {
-        if let bundleIdentifier,
-           let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first {
-            if running.activate(options: [.activateAllWindows]) {
-                finishExternalDispatchAfterActivation(expectedApplication: running)
-                return
-            }
+        let running = bundleIdentifier.flatMap {
+            NSRunningApplication.runningApplications(withBundleIdentifier: $0).first
         }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(
-            at: URL(fileURLWithPath: path),
+            at: Self.applicationLaunchURL(catalogPath: path, runningBundleURL: running?.bundleURL),
             configuration: configuration
         ) { [weak self] application, error in
             guard let self else { return }
@@ -826,6 +825,12 @@ final class LauncherCoordinator {
                 self?.panel.showError(error, automationRelated: false)
             }
         }
+    }
+
+    /// A running copy is opened at its own bundle, so a duplicate installed elsewhere is not
+    /// launched beside it.
+    nonisolated static func applicationLaunchURL(catalogPath: String, runningBundleURL: URL?) -> URL {
+        runningBundleURL ?? URL(fileURLWithPath: catalogPath)
     }
 
     private func openSetting(route: String?) {

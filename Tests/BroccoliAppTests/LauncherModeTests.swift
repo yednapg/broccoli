@@ -6,6 +6,19 @@ import BroccoliCore
 
 @MainActor
 final class LauncherModeTests: XCTestCase {
+    func testApplicationLaunchOpensTheRunningCopyBeforeTheCatalogPath() {
+        let catalogPath = "/Applications/iScreenshot.app"
+        let running = URL(fileURLWithPath: "/Users/me/Applications/iScreenshot.app")
+        XCTAssertEqual(
+            LauncherCoordinator.applicationLaunchURL(catalogPath: catalogPath, runningBundleURL: running),
+            running
+        )
+        XCTAssertEqual(
+            LauncherCoordinator.applicationLaunchURL(catalogPath: catalogPath, runningBundleURL: nil),
+            URL(fileURLWithPath: catalogPath)
+        )
+    }
+
     func testFilePrefixesRequireTrailingWhitespace() {
         XCTAssertNil(LauncherModeController.fileQuery(from: "f"))
         XCTAssertNil(LauncherModeController.fileQuery(from: "find"))
