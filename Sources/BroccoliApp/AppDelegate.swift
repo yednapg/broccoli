@@ -86,6 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private let applicationIconController = ApplicationIconController()
     private var lastExternalApplication: NSRunningApplication?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // AppKit otherwise logs an exception and keeps running. One raised inside a Swift
+        // task leaves the main actor's executor state pointing at freed stack, and the app
+        // crashes seconds later in unrelated code. Crash at the throw site instead.
+        UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         applyPresentationMode()
         preferences = AppPreferences()
