@@ -216,6 +216,116 @@ final class SearchEngineTests: XCTestCase {
         ]
     }
 
+    func testAQueryMustStartOnAWordWhenSpacesAreRemoved() {
+        let speech = SearchEntry(
+            id: "speech",
+            kind: .systemSetting,
+            title: "Allow applications to access speech recognition",
+            target: .setting(route: nil)
+        )
+        let repeats = SearchEntry(
+            id: "repeats",
+            kind: .systemSetting,
+            title: "Ignore switch repeats",
+            target: .setting(route: nil)
+        )
+        let canary = entry("canary", "Google Chrome Canary")
+        let keyboard = SearchEntry(
+            id: "keyboard",
+            kind: .systemSetting,
+            title: "Keyboard",
+            keywords: ["backlight brightness"],
+            target: .setting(route: nil)
+        )
+        let snapshot = SearchSnapshot(entries: [speech, repeats, canary, keyboard])
+
+        let joinedInsideAWord = engine.search(query: "chr", snapshot: snapshot, usage: [:]).map(\.entry.id)
+        XCTAssertEqual(joinedInsideAWord, ["canary"], "chr starts Chrome, not speech or switch")
+        for query in ["sto", "echr", "lightbrightness"] {
+            XCTAssertTrue(
+                engine.search(query: query, snapshot: snapshot, usage: [:]).isEmpty,
+                "\(query) begins inside a word"
+            )
+        }
+
+        XCTAssertEqual(
+            engine.search(query: "speechrecognition", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["speech"]
+        )
+        XCTAssertEqual(
+            engine.search(query: "switchrepeats", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["repeats"]
+        )
+        XCTAssertEqual(
+            engine.search(query: "chromecanary", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["canary"]
+        )
+        XCTAssertEqual(
+            engine.search(query: "recognition", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["speech"]
+        )
+        XCTAssertEqual(
+            engine.search(query: "backlightbrightness", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["keyboard"]
+        )
+    }
+
+    func testSettingsMatchFromTheStartOfAWordWhileApplicationNamesMatchInside() {
+        let encode = SearchEntry(
+            id: "encode",
+            kind: .systemSetting,
+            title: "Encode media",
+            target: .setting(route: nil)
+        )
+        let country = SearchEntry(
+            id: "country",
+            kind: .systemSetting,
+            title: "Country code",
+            target: .setting(route: nil)
+        )
+        let xcode = entry("xcode", "Xcode")
+        let results = engine.search(
+            query: "code",
+            snapshot: SearchSnapshot(entries: [encode, country, xcode]),
+            usage: [:]
+        )
+
+        XCTAssertEqual(results.map(\.entry.id), ["country", "xcode"])
+    }
+
+    func testAKeywordMatchesFromTheStartOfItsWord() {
+        let layouts = SearchEntry(
+            id: "layouts",
+            kind: .systemSetting,
+            title: "Keyboard layouts",
+            keywords: ["Unicode", "Hex"],
+            target: .setting(route: nil)
+        )
+        let xcode = entry("xcode", "Xcode")
+        let snapshot = SearchSnapshot(entries: [layouts, xcode])
+
+        XCTAssertEqual(
+            engine.search(query: "code", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["xcode"]
+        )
+        XCTAssertEqual(
+            engine.search(query: "uni", snapshot: snapshot, usage: [:]).map(\.entry.id),
+            ["layouts"]
+        )
+        XCTAssertEqual(
+            engine.search(query: "bright", snapshot: SearchSnapshot(entries: [
+                SearchEntry(
+                    id: "keyboard",
+                    kind: .systemSetting,
+                    title: "Keyboard",
+                    keywords: ["backlight brightness"],
+                    target: .setting(route: nil)
+                )
+            ]), usage: [:]).map(\.entry.id),
+            ["keyboard"]
+        )
+    }
+
     func testMultiTermQueryRequiresEveryTermButCanMatchDifferentFields() {
         let keyboard = SearchEntry(
             id: "keyboard-brightness",
