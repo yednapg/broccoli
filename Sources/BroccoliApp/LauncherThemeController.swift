@@ -2,40 +2,59 @@
 import BroccoliCore
 import SwiftUI
 
-/// Minimal keeps its authored controls and typography while using a narrower desktop shell.
-/// Width is the only scaled dimension; the live panel and Settings preview share these metrics
-/// so text, icons, rows, and vertical rhythm cannot shrink accidentally with the window.
+/// Minimal keeps its authored controls and typography in a 550-point shell.
+/// The live panel and Settings preview share these metrics so text, icons, rows,
+/// and vertical rhythm cannot shrink accidentally with the window.
 enum LauncherMinimalMetrics {
-    static let widthScale: CGFloat = 0.90
-    static let width: CGFloat = 600 * widthScale
-    static let cornerRadius: CGFloat = 5
+    static let width: CGFloat = 550
+    static let cornerRadius: CGFloat = 2
+    /// The collapsed bar stays at this height. Result rows are shorter.
     static let searchHeight: CGFloat = 55
-    static let searchFontSize: CGFloat = 24
-    static let searchHorizontalInset: CGFloat = 20
-    static let searchVerticalInset: CGFloat = 11.5
-    // The authored 32-point line remains 11.5 points from the shell edges, but AppKit's
-    // field editor needs extra transparent headroom above it to avoid clipping ascenders.
-    static let searchControlVerticalInset: CGFloat = 9
-    static let searchSymbolSize: CGFloat = 24
+    static let rowHeight: CGFloat = 50
+    static let searchFontSize: CGFloat = 34
+    static let searchFontWeight = NSFont.Weight.light
+    /// The caret and the query sit this far from the left edge. Shortcuts and the clear
+    /// button end the same distance from the right edge.
+    static let contentHorizontalInset: CGFloat = 12
+    static var searchHorizontalInset: CGFloat { contentHorizontalInset }
+    /// The field's alignment rect is what the leading constraint positions, but AppKit draws
+    /// the query two points to the left of it and the caret another half point before that.
+    static let queryOriginCorrection: CGFloat = 2.5
+    static var queryLeadingInset: CGFloat { queryOriginCorrection }
+    /// Room the field editor keeps around the font's line box so ascenders are not clipped.
+    static let searchFieldHeadroom: CGFloat = 4
+    static var searchLineHeight: CGFloat {
+        let font = NSFont.systemFont(ofSize: searchFontSize, weight: searchFontWeight)
+        return ceil(font.ascender - font.descender + font.leading)
+    }
+    /// Inset of the font's line box inside the shared bar.
+    static var searchVerticalInset: CGFloat {
+        (searchHeight - searchLineHeight) / 2
+    }
+    static var searchControlVerticalInset: CGFloat {
+        (searchHeight - (searchLineHeight + searchFieldHeadroom * 2)) / 2
+    }
+    static let searchSymbolSize: CGFloat = searchFontSize
     static let searchSymbolPointSize: CGFloat = searchFontSize
-    // Keep the icon centered between two equal horizontal spaces: shell-to-icon and
-    // icon-to-query.
-    static let searchSymbolTextGap: CGFloat = searchHorizontalInset
+    /// Gap used after a scope token. Minimal has no magnifier, so this is not the query inset.
+    static let searchSymbolTextGap: CGFloat = 20
     // Deliberately large diagnostic correction used to make the query shift unmistakable.
     static let nativeTextLeadingCompensation: CGFloat = -10
-    // Give the SF Symbol just enough optical correction to fill its compact 24-point box.
+    // Give the SF Symbol just enough optical correction to fill its search-size box.
     static let searchSymbolDrawingScale: CGFloat = 1.08
     static let searchSymbolDrawingVerticalScale: CGFloat = 1.10
-    static let separatorTopInset: CGFloat = 54
-    static let separatorLeadingInset: CGFloat = 16
-    static let separatorTrailingInset: CGFloat = 16
+    static var separatorLeadingInset: CGFloat { contentHorizontalInset }
+    static var separatorTrailingInset: CGFloat { contentHorizontalInset }
     static let separatorThickness: CGFloat = 1
-    static let rowHeight: CGFloat = 50
+    /// The rule occupies the last point of the shared bar.
+    static var separatorTopInset: CGFloat { searchHeight - separatorThickness }
     // The Minimal selection is an edge-to-edge rectangular band. Content retains its own
     // leading inset instead of using an outer table inset that narrows the blue fill.
     static let resultHorizontalInset: CGFloat = 0
-    static let resultContentLeadingInset: CGFloat = 13
-    static let resultTitleLeadingInset: CGFloat = 8
+    /// Visible edge of every result icon, measured from the panel's left edge.
+    static let resultIconLeadingInset: CGFloat = 6
+    /// Where result titles and subtitles begin, measured from the panel's left edge.
+    static let resultTextLeadingInset: CGFloat = 48
     static let resultTopInset: CGFloat = 0
     static let resultBottomInset: CGFloat = 0
     static let rowSpacing: CGFloat = 0
@@ -43,17 +62,81 @@ enum LauncherMinimalMetrics {
     static let resultIconOpticalSize: CGFloat = 26
     static let resultNativeIconSize: CGFloat = 35
     static let resultNativeIconOpticalSize: CGFloat = 35
-    static let resultActionIconOpticalSize: CGFloat = 16.5
-    static let resultTemplatePointSize: CGFloat = 22
+    /// One column for every Minimal result icon. It is wide enough that a square
+    /// glyph and a wide symbol can share the same height.
+    static let resultIconBox: CGFloat = 44
+    static let resultIconBody: CGFloat = 34
+    /// SF Symbols sit on a plate the size of a Settings icon. The glyph is smaller than the plate.
+    static let resultSymbolGlyphSize: CGFloat = 18
+    static let resultSymbolTileCornerRatio: CGFloat = 0.22
+    /// Sampled from the dark Settings pane artwork, which reads as a plate rather than pure black.
+    static let resultSymbolTileDark = NSColor(srgbRed: 28.0 / 255, green: 28.0 / 255, blue: 28.0 / 255, alpha: 1)
+    static let resultSymbolTileLight = NSColor(srgbRed: 0.95, green: 0.95, blue: 0.96, alpha: 1)
+    static let resultActionIconOpticalSize: CGFloat = resultNativeIconOpticalSize
+    /// Room around a fitted symbol so its outer stroke is not sliced by the icon box.
+    static let resultSymbolEdgeMargin: CGFloat = 2
+    static let resultTemplatePointSize: CGFloat = resultNativeIconOpticalSize
     static let resultSettingsBadgeSize: CGFloat = 15
-    static let resultTitleFontSize: CGFloat = 16
+    static let resultTitleFontSize: CGFloat = 18
     static let resultSubtitleFontSize: CGFloat = 12
-    static let resultShortcutFontSize: CGFloat = 13
+    static let resultShortcutFontSize: CGFloat = 14
+    static let resultShortcutFontWeight = NSFont.Weight.regular
+    /// Lowers a centered title stack so the rendered letters share the row's midpoint.
+    /// The line boxes sit one point high once AppKit has drawn them.
+    static let resultTextOpticalLift: CGFloat = -1
+    /// `NSTableView` full-width style still insets each cell by this much on both sides.
+    /// Row content is laid out inside that cell, so this margin is not added again.
+    static let resultTableHorizontalInset: CGFloat = 6
+    /// Leading edge of the icon box inside a row. The plate is centered in that box, so its
+    /// visible edge lands on `resultIconLeadingInset`. The box may start before the cell.
+    static var resultIconSlotLeadingInset: CGFloat {
+        resultIconLeadingInset - resultTableHorizontalInset - (resultIconBox - resultIconBody) / 2
+    }
+    /// Gap between the icon box and the title that puts the title on `resultTextLeadingInset`.
+    static var resultTitleSpacingAfterIconSlot: CGFloat {
+        resultTextLeadingInset - resultTableHorizontalInset - resultIconSlotLeadingInset - resultIconBox
+    }
+    /// Trailing inset inside a row for the shortcut and for titles in rows without one.
+    static var resultTrailingInset: CGFloat {
+        contentHorizontalInset - resultTableHorizontalInset
+    }
     static let figmaBackgroundBlur: CGFloat = 60
     // AppKit's public behind-window effect is less opaque than Figma's Ultra Thick recipe.
-    // This wash brings the sampled live surface from ~85% to the reference's ~93% light fill.
+    // The light wash brings the sampled surface toward the reference's light fill.
     static let lightTintOpacity: CGFloat = 0.60
-    static let darkTintOpacity: CGFloat = 0.92
+    /// One device pixel. A full point is two pixels on a Retina display and reads as a bold stroke.
+    static func rimWidth(forBackingScale scale: CGFloat) -> CGFloat {
+        1 / max(scale, 1)
+    }
+
+    /// Minimal has no hairline. The fill, including a selected row, runs to the window edge.
+    static func fillInset(forBackingScale scale: CGFloat) -> CGFloat {
+        _ = scale
+        return 0
+    }
+
+    static let lightRimOpacity: CGFloat = 0.20
+    static let lightRimOpacityIncreasedContrast: CGFloat = 0.38
+    /// White at this opacity over the dark fill is only visible up close.
+    static let darkRimOpacity: CGFloat = 0.06
+    static let darkRimOpacityIncreasedContrast: CGFloat = 0.12
+    /// The Dark fill. Dark never shows the material.
+    static let darkOpaqueBackground = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+    /// The system borderless shadow is a 0.3-density, 8-point blur with a hard rim at 0.85.
+    /// That rim reads as a border. Minimal keeps the native shadow and quiets every part of it.
+    static let shadowDensity: CGFloat = 0.15
+    static let shadowRadius: CGFloat = 12
+    static let shadowVerticalOffset: CGFloat = 2
+    static let shadowRimDensity: CGFloat = 0.15
+
+    static func rimColor(isDark: Bool, increasedContrast: Bool) -> NSColor {
+        if isDark {
+            let alpha = increasedContrast ? darkRimOpacityIncreasedContrast : darkRimOpacity
+            return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: alpha)
+        }
+        let alpha = increasedContrast ? lightRimOpacityIncreasedContrast : lightRimOpacity
+        return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: alpha)
+    }
 }
 
 /// The first "Liquid Glass" group in the Figma file is authored at 900 × 75 points. The live
@@ -109,9 +192,6 @@ enum LauncherLiquidGlassMetrics {
     // Enlarge the invisible native field equally above and below the authored inset. This
     // provides font-rendering headroom without changing either centered midY.
     static let searchControlVerticalOutset: CGFloat = 8
-    // AppKit's shared field editor adds 5.5 points of leading ink only after text entry.
-    // Counteract it for nonempty queries so the compact placeholder never jumps on expansion.
-    static let fieldEditorTextLeadingCorrection: CGFloat = 5.5
     static let separatorTopInset = figmaSeparatorTopInset * scale
     static let separatorHorizontalInset = figmaSeparatorHorizontalInset * scale
     // A one-point divider stays one Retina point after the surrounding geometry is resized.
@@ -224,9 +304,9 @@ struct LauncherThemeDescriptor {
     var searchTextColor: NSColor {
         switch design {
         case .minimal:
-            return isDark
-                ? NSColor.white.withAlphaComponent(0.82)
-                : NSColor.black
+            // Solid ink. A translucent white is drawn lighter in the collapsed bar than
+            // beside an open result row, so the same letters look like a different weight.
+            return isDark ? .white : .black
         case .liquidGlass:
             return isDark
                 ? Self.additiveLift(LauncherLiquidGlassMetrics.darkQueryLift)
@@ -382,7 +462,8 @@ final class LauncherThemeController {
 
         switch preferences.design {
         case .minimal:
-            let surface: LauncherThemeDescriptor.Surface = reducedTransparency || contrast
+            // Dark is pure black, so only Light needs the material.
+            let surface: LauncherThemeDescriptor.Surface = dark || reducedTransparency || contrast
                 ? .opaque
                 : .ultraThick
             return LauncherThemeDescriptor(
@@ -403,12 +484,13 @@ final class LauncherThemeController {
                 surface: surface,
                 appearance: appearance,
                 backgroundColor: dark
-                    ? .black
+                    ? LauncherMinimalMetrics.darkOpaqueBackground
                     : NSColor(calibratedWhite: 0.93, alpha: 1),
                 selectionColor: .controlAccentColor,
                 selectedTextColor: .alternateSelectedControlTextColor,
                 selectedShortcutTextColor: .alternateSelectedControlTextColor,
-                hasShadow: false,
+                // The native window shadow stays, with the quieter parameters below.
+                hasShadow: true,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,
                 originX: CGFloat(preferences.originX),
