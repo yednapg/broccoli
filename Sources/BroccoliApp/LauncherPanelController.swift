@@ -2365,20 +2365,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         }
     }
 
-    func confirmAutomationFirstUse(actionTitle: String) -> Bool {
-        dismiss(notify: false)
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Automation Permission Required"
-        alert.informativeText = "To run “\(actionTitle),” Broccoli sends a fixed, audited Apple Event to macOS System Events. Continue to show the macOS permission prompt."
-        alert.addButton(withTitle: "Continue")
-        alert.addButton(withTitle: "Not Now")
-        alert.buttons.first?.keyEquivalent = "\r"
-        alert.buttons.last?.keyEquivalent = "\u{1b}"
-        NSApp.activate(ignoringOtherApps: true)
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
     func showAutomationDenied(actionTitle: String) {
         dismiss(notify: false)
         let alert = NSAlert()

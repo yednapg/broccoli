@@ -41,16 +41,15 @@ struct DisruptiveActionConfirmation: Equatable, Sendable {
 
 enum AutomationPreflightDecision: Equatable, Sendable {
     case proceed
-    case explainFirstUse
     case recoverDenied
     case unavailable
 
+    /// Not-requested proceeds without a Broccoli dialog. macOS reports that state whenever
+    /// System Events is not running, even after consent, and macOS asks on genuine first use.
     static func resolve(_ state: AutomationPermissionState) -> Self {
         switch state {
-        case .allowed, .checking, .unknown:
+        case .allowed, .notRequested, .checking, .unknown:
             .proceed
-        case .notRequested:
-            .explainFirstUse
         case .denied:
             .recoverDenied
         case .targetUnavailable:
@@ -734,9 +733,6 @@ final class LauncherCoordinator {
             let permission = await AutomationPermissionChecker.current()
             switch AutomationPreflightDecision.resolve(permission) {
             case .proceed:
-                executeAction(id: id, automationRelated: true)
-            case .explainFirstUse:
-                guard panel.confirmAutomationFirstUse(actionTitle: definition.title) else { return }
                 executeAction(id: id, automationRelated: true)
             case .recoverDenied:
                 panel.showAutomationDenied(actionTitle: definition.title)
