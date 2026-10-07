@@ -52,6 +52,7 @@ cp "${PROJECT_DIR}/Support/Brand/Broccoli-AppIcon-Light-1024.png" \
   "${RESOURCES_DIR}/Broccoli-AppIcon-Light-1024.png"
 cp "${PROJECT_DIR}/Support/Brand/Broccoli-AppIcon-Dark-1024.png" \
   "${RESOURCES_DIR}/Broccoli-AppIcon-Dark-1024.png"
+cp "${PROJECT_DIR}/Support/LauncherDesign/"*.jpg "${RESOURCES_DIR}/"
 
 if [[ -n "${BROCCOLI_VERSION:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${BROCCOLI_VERSION}" "${CONTENTS_DIR}/Info.plist"

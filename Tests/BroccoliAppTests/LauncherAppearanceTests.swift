@@ -2069,29 +2069,38 @@ final class LauncherAppearanceTests: XCTestCase {
         )
         XCTAssertNil(LauncherDesignChooserLayout.neighbor(of: .minimal, offset: 1))
 
-        _ = NSApplication.shared
-        var preferences = LauncherAppearancePreferences.defaults(design: .liquidGlass)
-        preferences.visibleResultCount = 3
-        let descriptor = LauncherThemeController().descriptor(for: preferences)
-        let productionSize = CGSize(
-            width: descriptor.width,
-            height: descriptor.panelHeight(
-                resultCount: LauncherPreviewFixture.standard.results.count
+        let artwork = LauncherDesignChooserLayout.artworkPixelSize
+        XCTAssertEqual(
+            LauncherDesignChooserLayout.thumbnailHeight / LauncherDesignChooserLayout.thumbnailWidth,
+            artwork.height / artwork.width,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(LauncherDesignChooserLayout.thumbnailHeight, 84.141, accuracy: 0.001)
+    }
+
+    func testLauncherDesignArtworkUsesTheCloserFrames() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Support/LauncherDesign")
+        let expected: [String: CGSize] = [
+            "LauncherDesignLiquidGlass.jpg": CGSize(width: 240, height: 159),
+            "LauncherDesignMinimal.jpg": CGSize(width: 240, height: 168),
+        ]
+        for (name, size) in expected {
+            let url = directory.appendingPathComponent(name)
+            let image = try XCTUnwrap(NSImage(contentsOf: url))
+            let rep = try XCTUnwrap(image.representations.first)
+            XCTAssertEqual(rep.pixelsWide, Int(size.width), name)
+            XCTAssertEqual(rep.pixelsHigh, Int(size.height), name)
+            let fittedHeight = LauncherDesignChooserLayout.thumbnailWidth * size.height / size.width
+            XCTAssertLessThanOrEqual(
+                fittedHeight,
+                LauncherDesignChooserLayout.thumbnailHeight + 0.01,
+                "\(name) must fit the shared well without clipping"
             )
-        )
-        let fitted = LauncherDesignChooserLayout.fittedImageSize(for: productionSize)
-        XCTAssertEqual(
-            fitted.width / fitted.height,
-            productionSize.width / productionSize.height,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            LauncherDesignChooserLayout.thumbnailHeight,
-            fitted.height + LauncherDesignChooserLayout.thumbnailPadding * 2,
-            accuracy: 0.001
-        )
-        XCTAssertLessThan(fitted.width, productionSize.width)
-        XCTAssertLessThan(fitted.height, productionSize.height)
+        }
     }
 
     func testLauncherDesignChooserKeepsSelectionChromeOnTheClickedCard() {
