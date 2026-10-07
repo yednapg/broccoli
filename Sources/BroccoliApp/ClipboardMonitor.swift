@@ -33,11 +33,19 @@ final class ClipboardMonitor {
         installActivationObserver()
         let source = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         source.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(350))
-        source.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in self?.poll() }
-        }
+        // The timer runs off the main actor. A closure written directly in this method is
+        // isolated to the main actor and traps when the timer fires.
+        source.setEventHandler(handler: pollHandler())
         timer = source
         source.resume()
+    }
+
+    func pollHandler() -> @Sendable () -> Void {
+        { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.poll()
+            }
+        }
     }
 
     func update(preferences: ClipboardPreferences) {
@@ -53,7 +61,7 @@ final class ClipboardMonitor {
     }
 
     func stop() {
-        timer?.setEventHandler {}
+        timer?.setEventHandler(handler: ClipboardMonitor.inactiveTimerHandler)
         timer?.cancel()
         timer = nil
         if let activationObserver {
@@ -98,6 +106,8 @@ final class ClipboardMonitor {
             reloadSummaries()
         }
     }
+
+    private static let inactiveTimerHandler: @Sendable () -> Void = {}
 
     private func installActivationObserver() {
         guard activationObserver == nil else { return }
