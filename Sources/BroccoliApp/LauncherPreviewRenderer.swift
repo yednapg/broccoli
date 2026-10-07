@@ -598,10 +598,9 @@ final class LauncherPreviewContentView: NSView,
         }
         if let surface = subviews.first {
             (surface as? LauncherMinimalMaterialSurfaceView)?.updateAppearance(
-                isDark: next.isDark, opaqueBackground: next.surface == .opaque ? next.backgroundColor : nil)
-            effectiveAppearance.performAsCurrentDrawingAppearance {
-                if next.surface == .opaque { surface.layer?.backgroundColor = next.backgroundColor.cgColor }
-            }
+                isDark: next.isDark,
+                increasedContrast: next.environment.increasesContrast,
+                opaqueBackground: next.surface == .opaque ? next.backgroundColor : nil)
         }
         headerSeparator.color = next.headerSeparatorColor
         applyAdditiveInk()
@@ -739,6 +738,7 @@ final class LauncherPreviewContentView: NSView,
             let material = LauncherMinimalMaterialSurfaceView(
                 frame: bounds,
                 isDark: descriptor.isDark,
+                increasedContrast: descriptor.environment.increasesContrast,
                 opaqueBackground: descriptor.surface == .opaque ? descriptor.backgroundColor : nil
             )
             material.setContentView(content)
@@ -748,17 +748,6 @@ final class LauncherPreviewContentView: NSView,
         surface.frame = bounds
         surface.translatesAutoresizingMaskIntoConstraints = true
         surface.autoresizingMask = [.width, .height]
-        if descriptor.surface != .glass, descriptor.surface != .ultraThick {
-            surface.wantsLayer = true
-            surface.layer?.backgroundColor = descriptor.surface == .opaque
-                ? descriptor.backgroundColor.cgColor
-                : nil
-            surface.layer?.cornerRadius = descriptor.cornerRadius
-            surface.layer?.cornerCurve = descriptor.design == .minimal ? .circular : .continuous
-            surface.layer?.borderWidth = 0
-            surface.layer?.borderColor = nil
-            surface.layer?.masksToBounds = true
-        }
         addSubview(surface)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -778,7 +767,7 @@ final class LauncherPreviewContentView: NSView,
             )
             nativeSearchField.stringValue = fixture.query
         } else {
-            searchField.font = .systemFont(ofSize: descriptor.searchFontSize, weight: .regular)
+            searchField.font = descriptor.searchMetrics.font
         }
         searchField.textColor = descriptor.searchTextColor
         // LauncherNativeSearchFieldStyle configures a live field by default. Restore the

@@ -711,19 +711,19 @@ final class IconCacheTests: XCTestCase {
                 selected: false,
                 theme: theme
             )
-            XCTAssertTrue(
-                iconView.contentTintColor?.isEqual(NSColor.labelColor) == true,
-                "Unselected \(mode) action icon must use semantic labelColor"
+            XCTAssertNil(
+                iconView.contentTintColor,
+                "Unselected \(mode) action plates keep the drawn symbol color"
             )
             row.setSelected(true)
-            XCTAssertTrue(
-                iconView.contentTintColor?.isEqual(NSColor.alternateSelectedControlTextColor) == true,
-                "Selected \(mode) action icon must use semantic selected text color"
+            XCTAssertNil(
+                iconView.contentTintColor,
+                "Selected \(mode) action plates stay dark instead of turning into the selection color"
             )
-            XCTAssertTrue(iconView.allowsVibrancy, "Action templates should remain vibrant")
-            XCTAssertFalse(
+            XCTAssertFalse(iconView.allowsVibrancy, "A tinted plate would lose its dark background")
+            XCTAssertTrue(
                 iconView.wantsLayer,
-                "Template icons must stay in the HUD vibrancy path"
+                "The plate must draw above the selection instead of through HUD vibrancy"
             )
         }
 
@@ -894,27 +894,39 @@ final class IconCacheTests: XCTestCase {
     func testMinimalRowsBalanceNativeAndActionIconOpticalSizes() {
         XCTAssertEqual(
             ResultRowView.minimalIconCanvasSize(for: .application),
-            LauncherMinimalMetrics.resultNativeIconSize
+            LauncherMinimalMetrics.resultIconBox
         )
         XCTAssertEqual(
             ResultRowView.minimalIconCanvasSize(for: .action),
-            LauncherMinimalMetrics.resultIconSize
+            LauncherMinimalMetrics.resultIconBox
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalIconCanvasSize(for: .clipboard),
+            LauncherMinimalMetrics.resultIconBox
         )
         XCTAssertEqual(
             ResultRowView.minimalOpticalIconSize(for: .application),
-            LauncherMinimalMetrics.resultNativeIconOpticalSize
+            LauncherMinimalMetrics.resultIconBody
         )
         XCTAssertEqual(
             ResultRowView.minimalOpticalIconSize(for: .systemSetting),
-            LauncherMinimalMetrics.resultNativeIconOpticalSize
+            LauncherMinimalMetrics.resultIconBody
         )
         XCTAssertEqual(
             ResultRowView.minimalOpticalIconSize(for: .action),
-            LauncherMinimalMetrics.resultActionIconOpticalSize
+            LauncherMinimalMetrics.resultIconBody
         )
-        XCTAssertGreaterThan(
-            ResultRowView.minimalOpticalIconSize(for: .application),
-            ResultRowView.minimalOpticalIconSize(for: .action)
+        XCTAssertEqual(
+            ResultRowView.minimalOpticalIconSize(for: .clipboard),
+            LauncherMinimalMetrics.resultIconBody
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalIconCanvasSize(for: .file),
+            ResultRowView.minimalIconCanvasSize(for: .application)
+        )
+        XCTAssertEqual(
+            ResultRowView.minimalOpticalIconSize(for: .file),
+            ResultRowView.minimalOpticalIconSize(for: .application)
         )
     }
 
@@ -1121,6 +1133,74 @@ final class IconCacheTests: XCTestCase {
         XCTAssertEqual(titleLabel.frame.minX, actionTitleX, accuracy: 0.001)
     }
 
+    func testMinimalClipboardSymbolKeepsItsBottomStroke() throws {
+        _ = NSApplication.shared
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .minimal),
+            reducedTransparency: false,
+            increasedContrast: false
+        )
+        let row = ResultRowView()
+        row.frame = NSRect(x: 0, y: 0, width: 540, height: 50)
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        let entry = SearchEntry(
+            id: "command:clipboard",
+            kind: .clipboard,
+            title: "Clipboard History",
+            iconKey: "clipboard:command",
+            target: .clipboardCommand
+        )
+        row.configure(
+            result: RankedResult(entry: entry, score: 1),
+            icon: IconCache(startsNativeIconResolution: false).image(for: entry),
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        let bitmap = try renderedMinimalIconBitmap(try XCTUnwrap(iconView.image))
+        let bounds = try XCTUnwrap(nonTransparentBounds(in: bitmap))
+        XCTAssertGreaterThan(bounds.minY, 2)
+        XCTAssertLessThan(bounds.maxY, CGFloat(bitmap.pixelsHigh - 2))
+    }
+
+    func testMinimalActionSymbolSitsOnTheSettingsPlate() throws {
+        _ = NSApplication.shared
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .minimal),
+            reducedTransparency: false,
+            increasedContrast: false,
+            resolvedSystemDark: true
+        )
+        let row = ResultRowView()
+        row.frame = NSRect(x: 0, y: 0, width: 540, height: theme.rowHeight)
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        let entry = try XCTUnwrap(ActionRegistry.definition(id: "window.leftHalf")?.searchEntry)
+        row.configure(
+            result: RankedResult(entry: entry, score: 1),
+            icon: IconCache(startsNativeIconResolution: false).image(for: entry),
+            confirmation: false,
+            row: 0,
+            selected: true,
+            theme: theme
+        )
+        let image = try XCTUnwrap(iconView.image)
+        XCTAssertFalse(image.isTemplate, "The plate must keep its color on the blue selection")
+        let bitmap = try renderedMinimalIconBitmap(image)
+        let scale = CGFloat(bitmap.pixelsWide) / image.size.width
+        let tile = LauncherMinimalMetrics.resultIconBody
+        let plateX = Int((((image.size.width - tile) / 2) + 2) * scale)
+        let plateY = Int(image.size.height / 2 * scale)
+        let plate = try XCTUnwrap(bitmap.colorAt(x: plateX, y: plateY)?.usingColorSpace(.sRGB))
+        XCTAssertLessThan(plate.redComponent, 0.2)
+        XCTAssertLessThan(plate.greenComponent, 0.2)
+        XCTAssertLessThan(plate.blueComponent, 0.2)
+        XCTAssertGreaterThan(plate.alphaComponent, 0.9)
+        let bounds = try XCTUnwrap(nonTransparentBounds(in: bitmap))
+        XCTAssertEqual(bounds.height, tile * scale, accuracy: 2)
+        XCTAssertEqual(bounds.width, tile * scale, accuracy: 2)
+    }
+
     func testMinimalRowNormalizationRendersTheRequestedNativeAndActionPixelBounds() throws {
         _ = NSApplication.shared
         let theme = LauncherThemeController().descriptor(
@@ -1181,14 +1261,33 @@ final class IconCacheTests: XCTestCase {
         )
         let actionBounds = try XCTUnwrap(nonTransparentBounds(in: actionBitmap))
 
-        XCTAssertEqual(max(nativeBounds.width, nativeBounds.height), 70, accuracy: 1)
-        XCTAssertEqual(max(actionBounds.width, actionBounds.height), 33, accuracy: 2)
-        XCTAssertEqual(nativeIconFrame.size, NSSize(width: 35, height: 35))
-        XCTAssertEqual(actionIconFrame.size, NSSize(width: 30, height: 30))
+        XCTAssertEqual(
+            nativeBounds.height,
+            LauncherMinimalMetrics.resultIconBody * 2,
+            accuracy: 2
+        )
+        XCTAssertEqual(
+            actionBounds.height,
+            LauncherMinimalMetrics.resultIconBody * 2,
+            accuracy: 3
+        )
+        XCTAssertGreaterThan(actionBounds.minY, 1)
+        XCTAssertLessThan(actionBounds.maxY, CGFloat(actionBitmap.pixelsHigh - 1))
+        XCTAssertEqual(
+            nativeIconFrame.size,
+            NSSize(
+                width: LauncherMinimalMetrics.resultIconBox,
+                height: LauncherMinimalMetrics.resultIconBox
+            )
+        )
+        XCTAssertEqual(actionIconFrame.size, nativeIconFrame.size)
         XCTAssertEqual(nativeIconFrame.midX, actionIconFrame.midX, accuracy: 0.001)
         XCTAssertEqual(titleLabel.frame.minX, nativeTitleX, accuracy: 0.001)
-        XCTAssertGreaterThan(nativeBounds.width, actionBounds.width)
-        XCTAssertGreaterThan(nativeBounds.height, actionBounds.height)
+        XCTAssertGreaterThan(
+            actionBounds.minY,
+            1,
+            "The window symbol keeps its bottom stroke inside the shared icon box"
+        )
     }
 
     func testPublicBluetoothTemplateIsAvailableForSettingsBadge() {

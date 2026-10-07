@@ -259,6 +259,22 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         return longest
     }
 
+    func testMinimalWarmupPaysTheFirstTableDisplayWithoutOpeningTheBar() {
+        _ = NSApplication.shared
+        let controller = makeController(duration: 0.05)
+        controller.applyAppearance(.defaults(design: .minimal))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let compactHeight = window.frame.height
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertTrue(controller.hasWarmedExpansionDisplay)
+        XCTAssertEqual(window.frame.height, compactHeight, accuracy: 0.5)
+        XCTAssertFalse(controller.isResultViewportVisible)
+        XCTAssertFalse(controller.isExpansionAnimationInFlight)
+        XCTAssertTrue(controller.listedResultIDs.isEmpty)
+    }
+
     func testHeightMotionStepsBetweenEventsInsteadOfHoldingTheMainLoop() throws {
         _ = NSApplication.shared
         let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)

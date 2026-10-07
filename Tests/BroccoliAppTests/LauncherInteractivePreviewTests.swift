@@ -141,13 +141,14 @@ final class LauncherInteractivePreviewTests: XCTestCase {
         let labels = cellView.subviews.compactMap { $0 as? NSTextField }
         XCTAssertGreaterThanOrEqual(labels.count, 3)
         let titleAndSubtitleFrame = labels[0].frame.union(labels[1].frame)
+        let letterCenter = cellView.bounds.midY - LauncherMinimalMetrics.resultTextOpticalLift
         XCTAssertEqual(
             titleAndSubtitleFrame.midY,
-            cellView.bounds.midY,
+            letterCenter,
             accuracy: 0.5,
-            "The title and subtitle must center as one group at any row height"
+            "The title and subtitle share one group, shifted so the drawn letters meet the row center"
         )
-        XCTAssertEqual(labels[2].frame.midY, cellView.bounds.midY, accuracy: 0.5)
+        XCTAssertEqual(labels[2].frame.midY, letterCenter, accuracy: 0.5)
         let iconView = try XCTUnwrap(cellView.subviews.compactMap { $0 as? NSImageView }.first)
         XCTAssertEqual(iconView.frame.midY, cellView.bounds.midY, accuracy: 0.5)
 
@@ -178,8 +179,29 @@ final class LauncherInteractivePreviewTests: XCTestCase {
             accuracy: 0.001,
             "The final regular-height result must reach the shell bottom"
         )
-        XCTAssertEqual(minimalSurface.layer?.cornerRadius, LauncherMinimalMetrics.cornerRadius)
-        XCTAssertTrue(minimalSurface.layer?.masksToBounds == true)
+        XCTAssertFalse(minimalSurface.layer?.masksToBounds == true)
+        let minimalRimWidth = LauncherMinimalMetrics.rimWidth(
+            forBackingScale: minimalSurface.window?.backingScaleFactor
+                ?? NSScreen.main?.backingScaleFactor
+                ?? 2
+        )
+        XCTAssertEqual(
+            minimalSurface.materialClip.layer?.cornerRadius ?? 0,
+            LauncherMinimalMetrics.cornerRadius - LauncherMinimalMetrics.fillInset(
+                forBackingScale: minimalSurface.window?.backingScaleFactor
+                    ?? NSScreen.main?.backingScaleFactor
+                    ?? 2
+            ),
+            accuracy: 0.001
+        )
+        XCTAssertTrue(minimalSurface.materialClip.layer?.masksToBounds == true)
+        XCTAssertEqual(minimalSurface.rim.layer?.borderWidth ?? 0, 0, accuracy: 0.001)
+        XCTAssertTrue(minimalSurface.rim.isHidden)
+        XCTAssertFalse(minimalSurface.rim.layer?.masksToBounds == true)
+        XCTAssertEqual(
+            minimalSurface.rim.frame,
+            minimalSurface.bounds.insetBy(dx: minimalRimWidth / 2, dy: minimalRimWidth / 2)
+        )
     }
 
     func testInteractiveQueryUpdatesVisibleFixtureWithoutExternalSearch() {
@@ -235,7 +257,7 @@ final class LauncherInteractivePreviewTests: XCTestCase {
         XCTAssertEqual(editor.textContainer?.lineFragmentPadding, 0)
         XCTAssertEqual(
             editor.textContainerInset.width,
-            editor.string.isEmpty ? field.searchMetrics.emptyInsertionPointLeadingGap : 0,
+            field.searchMetrics.emptyInsertionPointLeadingGap,
             accuracy: 0.001
         )
         XCTAssertGreaterThan(clipView.frame.minX, field.searchButtonBounds.maxX)
@@ -267,10 +289,12 @@ final class LauncherInteractivePreviewTests: XCTestCase {
             )
 
             XCTAssertEqual(field.searchMetrics.fontSize, descriptor.searchFontSize, design.title)
+            let expectedTextInset = field.searchMetrics.symbolSize > 0
+                ? field.searchMetrics.symbolTextGap + field.searchMetrics.textLeadingCompensation
+                : field.searchMetrics.queryLeadingInset
             XCTAssertEqual(
                 field.searchTextBounds.minX - field.searchButtonBounds.maxX,
-                field.searchMetrics.symbolTextGap
-                    + field.searchMetrics.textLeadingCompensation,
+                expectedTextInset,
                 accuracy: 0.51,
                 design.title
             )

@@ -471,7 +471,11 @@ final class LauncherPanelPreparedViewTests: XCTestCase {
             controller.setMode(.main)
 
             XCTAssertTrue(controller.usesNativeSearchField, design.title)
-            XCTAssertEqual(controller.searchPlaceholder, "Search Broccoli", design.title)
+            XCTAssertEqual(
+                controller.searchPlaceholder,
+                design == .minimal ? nil : "Search Broccoli",
+                design.title
+            )
         }
     }
 

@@ -42,7 +42,7 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                         XCTAssertTrue(surface.glassClip.layer?.masksToBounds == true)
                         let minimal = LauncherThemeController().descriptor(
                             for: .defaults(design: .minimal), environment: environment)
-                        XCTAssertEqual(minimal.surface, transparency || contrast ? .opaque : .ultraThick)
+                        XCTAssertEqual(minimal.surface, dark || transparency || contrast ? .opaque : .ultraThick)
                     }
                 }
             }
@@ -168,6 +168,11 @@ final class NativeAppearanceRegressionTests: XCTestCase {
     }
 
     func testLiquidPanelWindowBoundaryMatchesSurfaceAcrossExpansion() throws {
+        func shadowValue(_ parameters: NSDictionary, _ key: String) -> Double {
+            if let number = parameters[key] as? NSNumber { return number.doubleValue }
+            if let text = parameters[key] as? String { return Double(text) ?? -1 }
+            return -1
+        }
         _ = NSApplication.shared
         let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
         let window = panel.visibilityIsolationWindow
@@ -218,8 +223,43 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                 try assertTransparentWindowCorners(root: boundary, clip: clip)
             }
         }
+        let glassShadow = try XCTUnwrap(window.value(forKey: "shadowParameters") as? NSDictionary)
+        XCTAssertEqual(shadowValue(glassShadow, "com.apple.WindowShadowDensityActive"), 0.3)
+        XCTAssertEqual(shadowValue(glassShadow, "com.apple.WindowShadowRimStyleHardActive"), 1)
         panel.applyAppearance(.defaults(design: .minimal))
-        XCTAssertFalse(window.hasShadow, "Minimal keeps its existing presentation")
+        XCTAssertTrue(window.hasShadow)
+        let minimalShadow = try XCTUnwrap(window.value(forKey: "shadowParameters") as? NSDictionary)
+        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowDensityActive"), 0.15)
+        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRadiusActive"), 12)
+        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRimDensityActive"), 0.15)
+        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRimStyleHardActive"), 0)
+        let minimalRoot = try XCTUnwrap(window.contentView)
+        minimalRoot.layoutSubtreeIfNeeded()
+        let minimalSurface = try XCTUnwrap(
+            descendants(minimalRoot).compactMap { $0 as? LauncherMinimalMaterialSurfaceView }.first
+        )
+        XCTAssertEqual(minimalSurface.frame, minimalRoot.bounds)
+        XCTAssertEqual(window.frame.size, minimalSurface.frame.size)
+        XCTAssertEqual(minimalSurface.layer?.shadowOpacity ?? 0, 0)
+        XCTAssertFalse(minimalSurface.layer?.masksToBounds == true)
+        XCTAssertTrue(minimalSurface.materialClip.layer?.masksToBounds == true)
+        XCTAssertEqual(minimalSurface.rim.layer?.borderWidth ?? 0, 0, accuracy: 0.001)
+        XCTAssertTrue(minimalSurface.rim.isHidden)
+        XCTAssertFalse(minimalSurface.rim.layer?.masksToBounds == true)
+        let minimalRimWidth = LauncherMinimalMetrics.rimWidth(
+            forBackingScale: minimalSurface.window?.backingScaleFactor ?? 2
+        )
+        XCTAssertEqual(
+            minimalSurface.rim.frame,
+            minimalSurface.bounds.insetBy(dx: minimalRimWidth / 2, dy: minimalRimWidth / 2)
+        )
+        let minimalFillInset = LauncherMinimalMetrics.fillInset(
+            forBackingScale: minimalSurface.window?.backingScaleFactor ?? 2
+        )
+        XCTAssertEqual(
+            minimalSurface.materialClip.frame,
+            minimalSurface.bounds.insetBy(dx: minimalFillInset, dy: minimalFillInset)
+        )
     }
 
     func testVisibleExpansionPreservesCompactSurfaceConfigurationAndFocus() async throws {
@@ -377,7 +417,8 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         _ = NSApplication.shared
         let environment = MutableAppearanceEnvironment(.init(reducesTransparency: false, increasesContrast: false))
         let renderer = LauncherPreviewRenderer(environmentProvider: { environment.value })
-        let preferences = LauncherAppearancePreferences.defaults(design: .minimal)
+        var preferences = LauncherAppearancePreferences.defaults(design: .minimal)
+        preferences.mode = .light
         let host = LauncherInteractivePreviewHostView(configuration: renderer.interactiveConfiguration(for: preferences),
                                                       interactive: true, fillsWidth: false)
         let content = try XCTUnwrap(host.content)

@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class LauncherScopeAndBadgeTests: XCTestCase {
-    func testScopeTokenCentersItsTitleAndSitsAheadOfTheMagnifier() throws {
+    func testScopeTokenFollowsTheFixedMagnifier() throws {
         _ = NSApplication.shared
         for metrics in [LauncherSearchMetrics.figmaLiquidGlass, .figmaMinimal] {
             let field = LauncherNativeSearchField(frame: NSRect(x: 0, y: 0, width: 600, height: 40))
@@ -23,21 +23,27 @@ final class LauncherScopeAndBadgeTests: XCTestCase {
                 )
                 tokenView.layoutSubtreeIfNeeded()
 
-                XCTAssertEqual(token.minX, field.bounds.minX, accuracy: 1,
-                               "The token keeps the field's leading edge")
                 XCTAssertEqual(
                     field.searchButtonBounds.minX,
-                    token.maxX + LauncherSearchGeometry.leadingAccessoryTextGap,
+                    plainButtonBounds.minX,
                     accuracy: 1,
-                    "The magnifier follows the token"
+                    "The magnifier stays at the field's leading edge"
                 )
-                XCTAssertGreaterThan(field.searchButtonBounds.minX, plainButtonBounds.minX)
-                XCTAssertEqual(token.midY, field.searchTextBounds.midY, accuracy: 0.5)
                 XCTAssertEqual(
-                    field.searchTextBounds.minX - field.searchButtonBounds.maxX,
-                    plainTextBounds.minX - plainButtonBounds.maxX,
+                    token.minX,
+                    field.searchButtonBounds.maxX + LauncherSearchGeometry.leadingAccessoryTextGap,
                     accuracy: 1,
-                    "The query keeps its gap after the magnifier"
+                    "The scope token follows the magnifier"
+                )
+                XCTAssertEqual(token.midY, field.searchTextBounds.midY, accuracy: 0.5)
+                let expectedQueryGap = metrics.symbolSize > 0
+                    ? plainTextBounds.minX - plainButtonBounds.maxX
+                    : metrics.symbolTextGap + metrics.textLeadingCompensation
+                XCTAssertEqual(
+                    field.searchTextBounds.minX - token.maxX,
+                    expectedQueryGap,
+                    accuracy: 1,
+                    "The query keeps its gap after the scope token"
                 )
                 XCTAssertEqual(tokenView.titleFrame.midY, tokenView.bounds.midY, accuracy: 0.5,
                                "\(title) must be vertically centered in its pill")
@@ -62,6 +68,68 @@ final class LauncherScopeAndBadgeTests: XCTestCase {
             XCTAssertNil(field.scopeTokenFrame)
             XCTAssertEqual(field.searchTextBounds, plainTextBounds)
             XCTAssertEqual(field.searchButtonBounds, plainButtonBounds)
+        }
+    }
+
+    func testTypingKeepsTheQueryOnTheEmptyCaret() throws {
+        _ = NSApplication.shared
+        for design in [LauncherDesign.liquidGlass, .minimal] {
+            for mode in [LauncherMode.main, .fileSearch(query: ""), .clipboard(query: "")] {
+            let controller = LauncherPanelController()
+            controller.applyAppearance(.defaults(design: design), force: true)
+            controller.showForAutomatedTests()
+            defer { controller.dismiss(notify: false) }
+            controller.setMode(mode)
+
+            func searchField(in view: NSView) -> LauncherNativeSearchField? {
+                if let field = view as? LauncherNativeSearchField { return field }
+                for child in view.subviews {
+                    if let field = searchField(in: child) { return field }
+                }
+                return nil
+            }
+
+            let content = try XCTUnwrap(controller.visibilityIsolationWindow.contentView)
+            let field = try XCTUnwrap(searchField(in: content))
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            var actualRange = NSRange(location: NSNotFound, length: 0)
+            content.layoutSubtreeIfNeeded()
+            let emptyCaret = editor.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: &actualRange)
+            let emptyClip = editor.superview?.frame ?? .zero
+            let emptyInset = editor.textContainerInset
+
+            let tokenBefore = field.scopeTokenFrame
+            let buttonBefore = field.searchButtonBounds
+            editor.string = "word"
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            field.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+            content.layoutSubtreeIfNeeded()
+            let afterChange = editor.firstRect(
+                forCharacterRange: NSRange(location: 0, length: 1),
+                actualRange: &actualRange
+            )
+
+            let cell = try XCTUnwrap(field.cell as? LauncherNativeSearchFieldCell)
+            cell.select(
+                withFrame: field.bounds,
+                in: field,
+                editor: editor,
+                delegate: field.delegate,
+                start: 0,
+                length: 0
+            )
+            let afterSelect = editor.firstRect(
+                forCharacterRange: NSRange(location: 0, length: 1),
+                actualRange: &actualRange
+            )
+
+            XCTAssertEqual(afterChange.minX, emptyCaret.minX, accuracy: 0.5, "\(design) \(mode)")
+            XCTAssertEqual(afterSelect.minX, emptyCaret.minX, accuracy: 0.5, "\(design) \(mode)")
+            XCTAssertEqual(editor.textContainerInset.width, emptyInset.width, accuracy: 0.001)
+            XCTAssertEqual(editor.superview?.frame.minX ?? -1, emptyClip.minX, accuracy: 0.5)
+            XCTAssertEqual(field.searchButtonBounds, buttonBefore)
+            XCTAssertEqual(field.scopeTokenFrame, tokenBefore)
+            }
         }
     }
 

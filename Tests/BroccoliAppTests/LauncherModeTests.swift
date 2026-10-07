@@ -41,6 +41,164 @@ final class LauncherModeTests: XCTestCase {
         XCTAssertTrue(controller.exitSubmode())
     }
 
+    func testEmptyBackspaceLeavesEverySubmodeAndKeepsMainSearchOpen() {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        var cancelled = 0
+        controller.onCancel = { cancelled += 1 }
+        let editor = NSTextView()
+
+        controller.setMode(.clipboard(query: ""))
+        XCTAssertTrue(controller.control(
+            NSTextField(),
+            textView: editor,
+            doCommandBy: #selector(NSResponder.deleteBackward(_:))
+        ))
+        XCTAssertEqual(cancelled, 1)
+
+        controller.setMode(.clipboard(query: "note"), initialQuery: "note")
+        XCTAssertFalse(controller.control(
+            NSTextField(),
+            textView: editor,
+            doCommandBy: #selector(NSResponder.deleteBackward(_:))
+        ))
+        XCTAssertEqual(cancelled, 1)
+
+        controller.setMode(.fileSearch(query: ""))
+        XCTAssertTrue(controller.control(
+            NSTextField(),
+            textView: editor,
+            doCommandBy: #selector(NSResponder.deleteBackward(_:))
+        ))
+        XCTAssertEqual(cancelled, 2)
+
+        controller.setMode(.main)
+        XCTAssertFalse(controller.control(
+            NSTextField(),
+            textView: editor,
+            doCommandBy: #selector(NSResponder.deleteBackward(_:))
+        ))
+        XCTAssertEqual(cancelled, 2)
+    }
+
+    /// The earlier coverage called `control(_:textView:doCommandBy:)` directly. That never
+    /// goes through the field editor, so a keystroke that replaced the editor's delegate
+    /// still passed. These events are delivered the way AppKit delivers them.
+    func testBackspaceAndEscapeReachTheMinimalFieldEditorAfterTyping() throws {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
+        var preferences = LauncherAppearancePreferences.defaults(design: .minimal)
+        preferences.mode = .dark
+        controller.applyAppearance(preferences, force: true)
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+
+        var queries: [String] = []
+        controller.onQueryChanged = { queries.append($0) }
+        var cancelled = 0
+        controller.onCancel = {
+            cancelled += 1
+            controller.dismiss(notify: false)
+        }
+
+        let window = controller.visibilityIsolationWindow
+        func searchField(in view: NSView) -> LauncherNativeSearchField? {
+            if let field = view as? LauncherNativeSearchField { return field }
+            for child in view.subviews {
+                if let field = searchField(in: child) { return field }
+            }
+            return nil
+        }
+        let field = try XCTUnwrap(searchField(in: try XCTUnwrap(window.contentView)))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+
+        editor.insertText("hi", replacementRange: editor.selectedRange())
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(editor.string, "hi")
+        XCTAssertEqual(queries.last, "hi")
+
+        func key(_ characters: String, code: UInt16) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: code
+            ))
+        }
+
+        let currentEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        currentEditor.keyDown(with: try key("\u{7F}", code: UInt16(kVK_Delete)))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(currentEditor.string, "h", "Backspace must delete one character")
+        XCTAssertEqual(queries.last, "h")
+
+        currentEditor.keyDown(with: try key("\u{7F}", code: UInt16(kVK_Delete)))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(currentEditor.string, "")
+        XCTAssertEqual(queries.last, "")
+        XCTAssertTrue(controller.isVisible, "Clearing the main query must not dismiss the launcher")
+
+        currentEditor.keyDown(with: try key("\u{1B}", code: UInt16(kVK_Escape)))
+        XCTAssertEqual(cancelled, 1)
+        XCTAssertFalse(controller.isVisible)
+    }
+
+    func testTabEntersTheHighlightedModeAndIgnoresOtherResults() {
+        _ = NSApplication.shared
+        let controller = LauncherPanelController()
+        let notes = RankedResult(
+            entry: SearchEntry(
+                id: "notes",
+                kind: .application,
+                title: "Notes",
+                iconKey: "/Applications/Notes.app",
+                target: .application(path: "/Applications/Notes.app", bundleIdentifier: nil)
+            ),
+            score: 900
+        )
+        let clipboard = RankedResult(
+            entry: SearchEntry(
+                id: "command:clipboard",
+                kind: .clipboard,
+                title: "Clipboard History",
+                keywords: ["clip"],
+                iconKey: "clipboard:command",
+                target: .clipboardCommand
+            ),
+            score: 800
+        )
+        var executed: RankedResult?
+        controller.onExecute = { executed = $0 }
+        controller.apply([notes, clipboard])
+
+        XCTAssertEqual(controller.selectedResultID, "notes")
+        XCTAssertTrue(controller.control(
+            NSTextField(),
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.insertTab(_:))
+        ))
+        XCTAssertNil(executed)
+
+        XCTAssertTrue(controller.control(
+            NSTextField(),
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.moveDown(_:))
+        ))
+        XCTAssertEqual(controller.selectedResultID, "command:clipboard")
+        XCTAssertTrue(controller.control(
+            NSTextField(),
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.insertTab(_:))
+        ))
+        XCTAssertEqual(executed, clipboard)
+    }
+
     func testKeyboardSelectionStopsAtBoundariesAndSkipsStatusRows() {
         let results = [
             result(id: "status", kind: .status),
