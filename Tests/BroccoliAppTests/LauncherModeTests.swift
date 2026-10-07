@@ -241,7 +241,11 @@ final class LauncherModeTests: XCTestCase {
 
     func testAutomationPreflightDecisionRoutesEveryPermissionState() {
         XCTAssertEqual(AutomationPreflightDecision.resolve(.allowed), .proceed)
-        XCTAssertEqual(AutomationPreflightDecision.resolve(.notRequested), .explainFirstUse)
+        XCTAssertEqual(
+            AutomationPreflightDecision.resolve(.notRequested),
+            .proceed,
+            "An idle System Events reports not-requested even after consent; Broccoli must not ask again"
+        )
         XCTAssertEqual(AutomationPreflightDecision.resolve(.denied), .recoverDenied)
         XCTAssertEqual(AutomationPreflightDecision.resolve(.targetUnavailable), .unavailable)
         XCTAssertEqual(AutomationPreflightDecision.resolve(.checking), .proceed)
