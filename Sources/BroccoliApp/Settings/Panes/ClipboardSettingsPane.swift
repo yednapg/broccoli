@@ -8,7 +8,6 @@ struct ClipboardSettingsPane: View {
     let onClearClipboard: () -> Void
     let onNavigate: (SettingsDestination) -> Void
 
-    @State private var clipboardConsent = false
     @State private var confirmClearClipboard = false
     @State private var ignoredAppsDraft: [IgnoredApplicationDraft] = []
     @State private var ignoredAppsEditorMessage: String?
@@ -20,13 +19,6 @@ struct ClipboardSettingsPane: View {
                 ignoredApplicationsDestination
             } else {
                 clipboard
-            }
-        }
-        .sheet(isPresented: $clipboardConsent) {
-            ClipboardConsentSheet(retentionDays: preferences.clipboard.retentionDays) {
-                var value = preferences.clipboard
-                value.enabled = true
-                preferences.clipboard = value
             }
         }
         .alert("Clear Clipboard History?", isPresented: $confirmClearClipboard) {
@@ -53,13 +45,7 @@ struct ClipboardSettingsPane: View {
 
             SpotlightSettingsCard("History") {
                 SpotlightSettingsRow(symbol: "clipboard", title: "Clipboard History", subtitle: "Store encrypted clipboard items on this Mac") {
-                    Toggle("", isOn: Binding(
-                        get: { preferences.clipboard.enabled },
-                        set: { enabled in
-                            if enabled { clipboardConsent = true }
-                            else { var value = preferences.clipboard; value.enabled = false; preferences.clipboard = value }
-                        }
-                    ))
+                    Toggle("", isOn: clipboardBinding(\.enabled))
                     .labelsHidden()
                     .settingsToggleAccessibility("Enable Clipboard History", isOn: preferences.clipboard.enabled)
                 }

@@ -353,68 +353,6 @@ extension AutomationPermissionState {
     }
 }
 
-struct ClipboardConsentSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var understood = false
-    let retentionDays: Int
-    let onEnable: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(spacing: 7) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 24, weight: .medium))
-                    .frame(width: 48, height: 48)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                    .accessibilityHidden(true)
-                Text("Enable Clipboard History?")
-                    .font(.system(size: 20, weight: .semibold))
-                    .accessibilityAddTraits(.isHeader)
-                Text("Copied content will be encrypted and stored only on this Mac.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity)
-            .accessibilityElement(children: .combine)
-            Form {
-                Section {
-                    SpotlightSettingsRow(symbol: "lock.shield", title: "Private and Secure", subtitle: "AES-GCM encryption with a key stored in Keychain")
-                    SpotlightSettingsRow(
-                        symbol: "clock",
-                        title: ClipboardConsentCopy.retentionTitle(days: retentionDays),
-                        subtitle: "Older items are removed automatically"
-                    )
-                    SpotlightSettingsRow(symbol: "eye.slash", title: "Sensitive Sources Excluded", subtitle: "Concealed data and known password apps are ignored")
-                }
-                Section {
-                    Toggle("I understand copied content will be stored on this Mac", isOn: $understood)
-                        .toggleStyle(.checkbox)
-                }
-            }
-            .formStyle(.grouped)
-            .scrollDisabled(true)
-            .frame(height: 245)
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Enable Clipboard History") {
-                    onEnable()
-                    dismiss()
-                }
-                .spotlightSettingsProminentGlassButtonStyle()
-                .keyboardShortcut(.defaultAction)
-                .disabled(!understood)
-            }
-        }
-        .padding(24)
-        .frame(width: 480)
-        .frame(minHeight: 410)
-    }
-}
-
 struct ExamplePill: View {
     let expression: String
     let detail: String

@@ -206,12 +206,6 @@ enum IgnoredApplicationsCopy {
     }
 }
 
-enum ClipboardConsentCopy {
-    static func retentionTitle(days: Int) -> String {
-        "\(days)-Day Retention"
-    }
-}
-
 struct IgnoredApplicationDraft: Identifiable {
     let bundleIdentifier: String
     let displayName: String
