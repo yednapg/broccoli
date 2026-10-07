@@ -439,6 +439,29 @@ final class LauncherModeTests: XCTestCase {
         ))
     }
 
+    func testClipboardPollHandlerCanRunOffTheMainActor() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("broccoli-clipboard-monitor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ClipboardStore(
+            databaseURL: directory.appendingPathComponent("clipboard.sqlite3"),
+            keyData: Data(repeating: 7, count: 32)
+        )
+        var preferences = ClipboardPreferences()
+        preferences.enabled = false
+        let monitor = ClipboardMonitor(store: store, preferences: preferences)
+        let handler = monitor.pollHandler()
+        let finished = expectation(description: "Clipboard poll handler returns off the main actor")
+
+        DispatchQueue.global(qos: .utility).async {
+            handler()
+            finished.fulfill()
+        }
+
+        await fulfillment(of: [finished], timeout: 2)
+        await Task.yield()
+    }
+
     func testClipboardRestorePreservesItemsAndRepresentations() throws {
         let text = Data("restored text".utf8)
         let richText = Data("{\\rtf1 restored}".utf8)
