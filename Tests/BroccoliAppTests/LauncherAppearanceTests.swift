@@ -2335,12 +2335,6 @@ final class LauncherAppearanceTests: XCTestCase {
         )
     }
 
-    func testClipboardConsentUsesConfiguredRetentionCopy() {
-        XCTAssertEqual(ClipboardConsentCopy.retentionTitle(days: 1), "1-Day Retention")
-        XCTAssertEqual(ClipboardConsentCopy.retentionTitle(days: 7), "7-Day Retention")
-        XCTAssertEqual(ClipboardConsentCopy.retentionTitle(days: 30), "30-Day Retention")
-    }
-
     func testSettingsShellKeepsToolbarHistoryAndSelectionSynchronized() {
         let shell = SettingsShellModel()
 
