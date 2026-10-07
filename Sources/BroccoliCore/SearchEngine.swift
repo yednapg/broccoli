@@ -4,6 +4,13 @@ public struct SearchEngine: Sendable {
     private struct Candidate {
         let result: RankedResult
         let localizedSortRank: Int
+        /// False when only the entry's hidden keywords matched the query.
+        var matchesTitle = true
+    }
+
+    private struct Match {
+        let score: Int
+        let matchesTitle: Bool
     }
 
     public init() {}
@@ -39,7 +46,7 @@ public struct SearchEngine: Sendable {
                     limit: limit
                 )
             }
-            return best.map(\.result)
+            return Self.groupedByKind(best.map(\.result))
         }
 
         let candidateIndices: any Sequence<Int>
@@ -116,10 +123,11 @@ public struct SearchEngine: Sendable {
         // ordered by how often and how recently it was chosen. Longer queries keep match
         // class ahead of usage.
         let selectionLeads = normalizedQuery.count == 1
+        var settings: [Candidate] = []
         for index in candidateIndices {
             let entry = snapshot.entries[index]
             guard preferences.includes(entry) else { continue }
-            guard let baseScore = matchScore(
+            guard let match = matchScore(
                 query: normalizedQuery,
                 compactQuery: compactQuery,
                 queryTokens: queryTokens,
@@ -132,19 +140,47 @@ public struct SearchEngine: Sendable {
             let selectionPriority = selectionLeads && adaptive > 0
                 ? Self.singleCharacterSelectionPriority
                 : 0
-            insert(
-                Candidate(
-                    result: RankedResult(
-                        entry: entry,
-                        score: baseScore + runningBonus + adaptive + selectionPriority
-                    ),
-                    localizedSortRank: snapshot.localizedSortRanks[index]
+            let candidate = Candidate(
+                result: RankedResult(
+                    entry: entry,
+                    score: match.score + runningBonus + adaptive + selectionPriority
                 ),
-                into: &best,
-                limit: limit
+                localizedSortRank: snapshot.localizedSortRanks[index],
+                matchesTitle: match.matchesTitle
             )
+            // Settings panes and their indexed topics match very broad queries. Keep a
+            // couple of the best ones so the list stays about the app or action the
+            // query names, and so a settings-only query does not become a long index.
+            if entry.kind == .systemSetting {
+                insert(candidate, into: &settings, limit: Self.maximumSettingsResults)
+            } else {
+                insert(candidate, into: &best, limit: limit)
+            }
         }
-        return best.map(\.result)
+        for setting in settings {
+            insert(setting, into: &best, limit: limit)
+        }
+        // Keywords are a fallback for entries whose names do not match. Once an entry of a
+        // kind matches by name, that kind's keyword-only matches are unrelated noise, such
+        // as the Appearance topic indexed under “wallpaper tint” for the query “wallpaper”.
+        let kindsMatchedByTitle = Set(best.lazy.filter(\.matchesTitle).map(\.result.entry.kind))
+        let relevant = best.filter {
+            $0.matchesTitle || !kindsMatchedByTitle.contains($0.result.entry.kind)
+        }
+        return Self.groupedByKind(relevant.map(\.result))
+    }
+
+    /// Keeps each kind together, in the order of its best result, so the list does not
+    /// alternate between actions and settings. Each group keeps its ranked order.
+    static func groupedByKind(_ results: [RankedResult]) -> [RankedResult] {
+        var kinds: [SearchKind] = []
+        var groups: [SearchKind: [RankedResult]] = [:]
+        for result in results {
+            let kind = result.entry.kind
+            if groups[kind] == nil { kinds.append(kind) }
+            groups[kind, default: []].append(result)
+        }
+        return kinds.flatMap { groups[$0] ?? [] }
     }
 
     private func matchScore(
@@ -152,11 +188,13 @@ public struct SearchEngine: Sendable {
         compactQuery: String,
         queryTokens: [String],
         entry: SearchEntry
-    ) -> Int? {
-        if entry.normalizedTitle == query { return 1_000 }
-        if !compactQuery.isEmpty, entry.compactTitle == compactQuery { return 1_000 }
-        if entry.normalizedTitle.hasPrefix(query) { return 800 }
-        if !compactQuery.isEmpty, entry.compactTitle.hasPrefix(compactQuery) { return 800 }
+    ) -> Match? {
+        func titleMatch(_ score: Int) -> Match { Match(score: score, matchesTitle: true) }
+        func keywordMatch(_ score: Int) -> Match { Match(score: score, matchesTitle: false) }
+        if entry.normalizedTitle == query { return titleMatch(1_000) }
+        if !compactQuery.isEmpty, entry.compactTitle == compactQuery { return titleMatch(1_000) }
+        if entry.normalizedTitle.hasPrefix(query) { return titleMatch(800) }
+        if !compactQuery.isEmpty, entry.compactTitle.hasPrefix(compactQuery) { return titleMatch(800) }
         // A bare number is much more likely to be the beginning of a calculation than a
         // request for every catalog item containing that digit. Keep genuinely numeric app
         // names (for example, 1Password) searchable through the direct-prefix checks above,
@@ -165,43 +203,54 @@ public struct SearchEngine: Sendable {
         if queryTokens.count > 1 {
             let keywordTokens = entry.keywords.flatMap(SearchNormalizer.tokens)
             var score = 400
+            var everyTokenInTitle = true
             for token in queryTokens {
                 if entry.tokens.contains(token) {
                     score += 150
                 } else if entry.tokens.contains(where: { $0.hasPrefix(token) }) {
                     score += 130
-                } else if entry.normalizedTitle.contains(token) {
+                } else if entry.kind != .systemSetting, entry.normalizedTitle.contains(token) {
                     score += 105
                 } else if keywordTokens.contains(token) {
                     score += 90
+                    everyTokenInTitle = false
                 } else if keywordTokens.contains(where: { $0.hasPrefix(token) }) {
                     score += 75
-                } else if entry.keywords.contains(where: { $0.contains(token) }) {
+                    everyTokenInTitle = false
+                } else if entry.keywords.contains(where: {
+                    SearchNormalizer.matchesFromWordStart(token, in: $0)
+                }) {
                     score += 60
+                    everyTokenInTitle = false
                 } else {
                     return nil
                 }
             }
-            return score
+            return Match(score: score, matchesTitle: everyTokenInTitle)
         }
         // Applications are a launcher's primary targets and are launched by partial name
         // words constantly, so one of their title tokens beginning with the query counts
         // as strongly as a direct title-prefix match; panes keep the token-prefix score.
         for token in entry.tokens where token.hasPrefix(query) {
-            return entry.kind == .application ? 800 : 650
+            return titleMatch(entry.kind == .application ? 800 : 650)
         }
-        if entry.acronym.hasPrefix(query) { return 600 }
+        if entry.acronym.hasPrefix(query) { return titleMatch(600) }
         // A single character is the start of a word, as in Spotlight. Letters buried inside
         // words (“emoji” for j) and metadata keywords would otherwise flood the list.
         if query.count == 1 { return nil }
-        if entry.normalizedTitle.contains(query) { return 450 }
-        if !compactQuery.isEmpty, entry.compactTitle.contains(compactQuery) { return 450 }
-        for keyword in entry.keywords where keyword.hasPrefix(query) { return 350 }
+        // Application names match inside the word, as Spotlight does for Xcode and “code”.
+        // A Settings title does not: the query has to start one of its words.
+        if entry.kind != .systemSetting, entry.normalizedTitle.contains(query) { return titleMatch(450) }
+        if SearchNormalizer.matchesFromWordStart(compactQuery, in: entry.title) { return titleMatch(450) }
+        for keyword in entry.keywords where keyword.hasPrefix(query) { return keywordMatch(350) }
         if !compactQuery.isEmpty,
-           entry.compactKeywords.contains(where: { $0.hasPrefix(compactQuery) }) { return 350 }
-        for keyword in entry.keywords where keyword.contains(query) { return 250 }
-        if !compactQuery.isEmpty,
-           entry.compactKeywords.contains(where: { $0.contains(compactQuery) }) { return 250 }
+           entry.compactKeywords.contains(where: { $0.hasPrefix(compactQuery) }) { return keywordMatch(350) }
+        if entry.keywords.contains(where: {
+            SearchNormalizer.tokens($0).contains { $0.hasPrefix(query) }
+        }) { return keywordMatch(250) }
+        if entry.keywords.contains(where: { SearchNormalizer.matchesFromWordStart(compactQuery, in: $0) }) {
+            return keywordMatch(250)
+        }
         return nil
     }
 
@@ -266,6 +315,9 @@ public struct SearchEngine: Sendable {
     /// Larger than the spread between any two match classes, so selection history orders
     /// single-character results without letting an unmatched entry in.
     private static let singleCharacterSelectionPriority = 1_000
+    /// Enough to offer the pane the query names, without filling the launcher with
+    /// every other System Settings topic that shares a word.
+    private static let maximumSettingsResults = 3
 
     private static func hasWordPrefix(_ entry: SearchEntry, _ query: String) -> Bool {
         entry.normalizedTitle.hasPrefix(query) || entry.tokens.contains { $0.hasPrefix(query) }

@@ -47,6 +47,55 @@ final class SearchTieBreakTests: XCTestCase {
         XCTAssertTrue(results.contains { $0.entry.id == "app:system-settings" })
     }
 
+    func testManyMatchingSettingsStayBehindApplications() {
+        let apps = [
+            SearchEntry(id: "app:soundsource", kind: .application, title: "SoundSource",
+                        target: .application(path: "/Applications/SoundSource.app", bundleIdentifier: nil)),
+            SearchEntry(id: "app:soundtrack", kind: .application, title: "Soundtrack",
+                        target: .application(path: "/Applications/Soundtrack.app", bundleIdentifier: nil)),
+        ]
+        let sound = SearchEntry(id: "setting:sound", kind: .systemSetting, title: "Sound",
+                                target: .setting(route: nil))
+        let topics = (0..<12).map { index in
+            SearchEntry(
+                id: "setting:sound-\(index)",
+                kind: .systemSetting,
+                title: "Sound option \(index)",
+                target: .setting(route: nil)
+            )
+        }
+        let results = engine.search(
+            query: "sound",
+            snapshot: .init(entries: apps + [sound] + topics),
+            usage: [:],
+            limit: 20
+        )
+
+        XCTAssertEqual(results.filter { $0.entry.kind == .application }.map(\.entry.id),
+                       ["app:soundsource", "app:soundtrack"])
+        XCTAssertEqual(results.filter { $0.entry.kind == .systemSetting }.map(\.entry.id),
+                       ["setting:sound", "setting:sound-0", "setting:sound-1"])
+    }
+
+    func testSettingsOnlyQueryKeepsTheBestTopics() {
+        let topics = (0..<12).map { index in
+            SearchEntry(
+                id: "setting:sound-\(index)",
+                kind: .systemSetting,
+                title: "Sound option \(index)",
+                target: .setting(route: nil)
+            )
+        }
+        let results = engine.search(
+            query: "sound",
+            snapshot: .init(entries: topics),
+            usage: [:],
+            limit: 20
+        )
+
+        XCTAssertEqual(results.map(\.entry.id), ["setting:sound-0", "setting:sound-1", "setting:sound-2"])
+    }
+
     func testExactTitleStillOutranksKindPriority() {
         let pane = SearchEntry(id: "setting:settings", kind: .systemSetting, title: "Settings",
                                target: .setting(route: nil))
