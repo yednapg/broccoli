@@ -120,6 +120,10 @@ enum LauncherMinimalMetrics {
     /// White at this opacity over the dark fill is only visible up close.
     static let darkRimOpacity: CGFloat = 0.06
     static let darkRimOpacityIncreasedContrast: CGFloat = 0.12
+    /// The rule between the search bar and the first result. 25% white read as a gray
+    /// stroke on the black fill; this sits just above that fill.
+    static let darkSeparatorOpacity: CGFloat = 0.10
+    static let darkSeparatorOpacityIncreasedContrast: CGFloat = 0.18
     /// The Dark fill. Dark never shows the material.
     static let darkOpaqueBackground = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
     /// The system borderless shadow is a 0.3-density, 8-point blur with a hard rim at 0.85.
@@ -211,13 +215,37 @@ enum LauncherLiquidGlassMetrics {
     static let darkRuleLift: CGFloat = 0.12
 }
 
-/// Motion values for transitions between launcher presentation states. The durations are
-/// shared by every design and mode; Reduce Motion replaces them with the instant commit.
+/// Motion for the launcher's height change while a search is showing. Opening and closing
+/// stay instant. Reduce Motion replaces these with the instant commit. Minimal is the
+/// quicker of the two so a changing result count does not linger.
 enum LauncherMotionMetrics {
-    static let expansionAnimationDuration: TimeInterval = 0.18
+    static let liquidGlassExpansionAnimationDuration: TimeInterval = 0.18
+    static let minimalExpansionAnimationDuration: TimeInterval = 0.08
     /// A shrink waits this long so a quick burst of keystrokes that briefly narrows the
     /// results does not collapse the panel and grow it again a moment later.
-    static let shrinkDelay: TimeInterval = 0.1
+    static let liquidGlassShrinkDelay: TimeInterval = 0.1
+    static let minimalShrinkDelay: TimeInterval = 0.05
+
+    static func expansionAnimationDuration(for design: LauncherDesign) -> TimeInterval {
+        switch design {
+        case .liquidGlass: liquidGlassExpansionAnimationDuration
+        case .minimal: minimalExpansionAnimationDuration
+        }
+    }
+
+    static func shrinkDelay(for design: LauncherDesign) -> TimeInterval {
+        switch design {
+        case .liquidGlass: liquidGlassShrinkDelay
+        case .minimal: minimalShrinkDelay
+        }
+    }
+
+    static func animationCurve(for design: LauncherDesign) -> NSAnimation.Curve {
+        switch design {
+        case .liquidGlass: .easeInOut
+        case .minimal: .easeOut
+        }
+    }
 }
 
 /// Search retains more matches than the Appearance viewport can show at once.
@@ -341,9 +369,13 @@ struct LauncherThemeDescriptor {
                 ? Self.additiveLift(LauncherLiquidGlassMetrics.darkRuleLift)
                 : searchIconColor.withAlphaComponent(0.25)
         }
-        return isDark
-            ? NSColor.white.withAlphaComponent(0.25)
-            : NSColor.black.withAlphaComponent(0.25)
+        if isDark {
+            let alpha = environment.increasesContrast
+                ? LauncherMinimalMetrics.darkSeparatorOpacityIncreasedContrast
+                : LauncherMinimalMetrics.darkSeparatorOpacity
+            return NSColor.white.withAlphaComponent(alpha)
+        }
+        return NSColor.black.withAlphaComponent(0.25)
     }
 
     var showsHeaderSeparator: Bool { true }

@@ -91,5 +91,18 @@ struct BroccoliMain: App {
         Settings {
             BroccoliSettingsSceneRoot(appDelegate: appDelegate)
         }
+        .commands {
+            // Command-Q closes Settings. Quitting stays an explicit menu item.
+            // Closing Settings never stops the launcher.
+            CommandGroup(replacing: .appTermination) {
+                Button("Close Broccoli Settings") {
+                    appDelegate.closeSettings()
+                }
+                .keyboardShortcut("q", modifiers: .command)
+                Button("Quit Broccoli") {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
     }
 }

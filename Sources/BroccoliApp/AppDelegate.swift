@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var lifecycleState = ApplicationLifecycleState()
     private let applicationIconController = ApplicationIconController()
     private var lastExternalApplication: NSRunningApplication?
+    private var commandQMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // AppKit otherwise logs an exception and keeps running. One raised inside a Swift
@@ -194,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         )
 
         coordinator.onOpenPreferences = { [weak self] section in self?.showPreferences(section: section) }
+        installSettingsCommandQMonitor()
 
         observePreferences()
         observeRunningApplications()
@@ -202,12 +204,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         systemSettingsCatalogService.start()
         configureClipboardIfNeeded()
 
-        let launchArguments = Set(ProcessInfo.processInfo.arguments.dropFirst())
-        if launchArguments.contains("--show-launcher") {
+        switch ApplicationLaunchRouter.presentation(
+            arguments: ProcessInfo.processInfo.arguments,
+            launchedAsLoginItem: ApplicationLaunchRouter.launchedAsLoginItem(
+                NSAppleEventManager.shared().currentAppleEvent
+            )
+        ) {
+        case .launcher:
             DispatchQueue.main.async { [weak self] in self?.coordinator.togglePanel() }
-        } else if launchArguments.contains("--show-settings") {
+        case .settings:
             DispatchQueue.main.async { [weak self] in self?.showPreferences() }
+        case .none:
+            break
         }
+    }
+
+    /// Opening Broccoli again, from Finder, Spotlight, Launchpad, or its own result, shows
+    /// Settings. Returning false keeps SwiftUI from revealing the suppressed launcher scene.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showPreferences()
+        return false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -230,6 +246,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         DispatchQueue.main.async {
             action()
             NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    /// Command-Q in Settings closes the window and leaves the launcher running.
+    func closeSettings() {
+        isSettingsPresentationPending = false
+        if let settingsWindow {
+            settingsWindow.close()
+        } else if lifecycleState.presentationMode == .settings {
+            settingsWindowDidClose()
+        }
+    }
+
+    private func installSettingsCommandQMonitor() {
+        commandQMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard SettingsCommandQ.closesSettings(
+                event: event,
+                settingsWindowIsKey: self.settingsWindow?.isKeyWindow == true
+            ) else { return event }
+            self.closeSettings()
+            return nil
         }
     }
 

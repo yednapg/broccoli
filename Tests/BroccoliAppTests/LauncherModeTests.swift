@@ -6,6 +6,52 @@ import BroccoliCore
 
 @MainActor
 final class LauncherModeTests: XCTestCase {
+    private final class MenuActionRecorder: NSObject {
+        var fired = false
+        @objc func record(_ sender: Any?) { fired = true }
+    }
+
+    /// Command-Q while the launcher holds focus quit Broccoli, which looked like a crash
+    /// because the launcher never activates the app and another app stays frontmost.
+    func testCommandQInTheLauncherClosesItWithoutReachingQuit() throws {
+        let application = NSApplication.shared
+        let recorder = MenuActionRecorder()
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(MenuActionRecorder.record(_:)), keyEquivalent: "q")
+        quitItem.target = recorder
+        let appMenu = NSMenu()
+        appMenu.addItem(quitItem)
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = appMenu
+        let mainMenu = NSMenu()
+        mainMenu.addItem(appMenuItem)
+        let originalMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = originalMenu }
+
+        let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        XCTAssertTrue(window.isVisible)
+
+        let commandQ = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "q",
+            charactersIgnoringModifiers: "q",
+            isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_Q)
+        ))
+        application.sendEvent(commandQ)
+
+        XCTAssertFalse(recorder.fired, "Command-Q must not reach the application's Quit item")
+        XCTAssertFalse(window.isVisible, "Command-Q closes the launcher instead")
+    }
+
     func testApplicationLaunchOpensTheRunningCopyBeforeTheCatalogPath() {
         let catalogPath = "/Applications/iScreenshot.app"
         let running = URL(fileURLWithPath: "/Users/me/Applications/iScreenshot.app")

@@ -1256,6 +1256,14 @@ private final class LauncherPanel: NSPanel {
             onCommand?(.preferences)
             return true
         }
+        // The launcher holds keyboard focus while another app stays frontmost, so Command-Q
+        // typed here would quit Broccoli instead of the app the user sees. It closes the
+        // launcher; the Quit Broccoli action and the Settings app menu still quit.
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "q" {
+            onCommand?(.dismiss)
+            return true
+        }
         if event.modifierFlags.contains(.command),
            let characters = event.charactersIgnoringModifiers,
            let row = LauncherNumericShortcut.row(
@@ -1961,12 +1969,13 @@ final class LauncherPanelResizeAnimation: NSAnimation {
 
     init(
         duration: TimeInterval,
+        curve: NSAnimation.Curve,
         step: @escaping @MainActor (CGFloat) -> Void,
         completion: @escaping @MainActor () -> Void
     ) {
         self.step = step
         self.completion = completion
-        super.init(duration: duration, animationCurve: .easeInOut)
+        super.init(duration: duration, animationCurve: curve)
         animationBlockingMode = .nonblocking
     }
 
@@ -3254,7 +3263,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
                 }
             }
             pendingExpansionTarget = frame
-            scheduleExpansionFlush(after: isShrinking ? LauncherMotionMetrics.shrinkDelay : 0)
+            scheduleExpansionFlush(after: isShrinking ? LauncherMotionMetrics.shrinkDelay(for: theme.design) : 0)
         } else {
             cancelPendingPanelMotion()
             releaseRowsHeldForClipping(clearResults: holdsRowsForCollapse)
@@ -3285,6 +3294,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         // frame between events, and a newer target restarts from the interpolated height.
         let animation = LauncherPanelResizeAnimation(
             duration: cachedExpansionAnimationDuration,
+            curve: LauncherMotionMetrics.animationCurve(for: theme.design),
             step: { [weak self] progress in
                 guard let self else { return }
                 let height = startHeight + (targetHeight - startHeight) * progress
@@ -3321,7 +3331,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         expansionAnimationDuration?()
             ?? (environmentProvider().reducesMotion
                 ? 0
-                : LauncherMotionMetrics.expansionAnimationDuration)
+                : LauncherMotionMetrics.expansionAnimationDuration(for: theme.design))
     }
 
     /// The instant commit used for first presentation, dismissal, accessibility fallbacks,

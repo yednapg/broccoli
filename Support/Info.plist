@@ -28,6 +28,8 @@
     <string>26.0</string>
     <key>LSMultipleInstancesProhibited</key>
     <true/>
+    <key>LSUIElement</key>
+    <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Broccoli uses System Events only for the Dark Mode and power actions you explicitly run.</string>
     <key>NSHumanReadableCopyright</key>

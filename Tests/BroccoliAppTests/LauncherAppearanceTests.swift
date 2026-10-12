@@ -783,7 +783,13 @@ final class LauncherAppearanceTests: XCTestCase {
         assertColor(light.headerSeparatorColor, red: 0, green: 0, blue: 0, alpha: 0.25)
         assertColor(dark.searchTextColor, red: 1, green: 1, blue: 1, alpha: 1)
         assertColor(dark.searchIconColor, red: 1, green: 1, blue: 1, alpha: 0.85)
-        assertColor(dark.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.25)
+        assertColor(dark.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.10)
+        let contrastedDark = controller.descriptor(
+            for: darkPreferences,
+            reducedTransparency: false,
+            increasedContrast: true
+        )
+        assertColor(contrastedDark.headerSeparatorColor, red: 1, green: 1, blue: 1, alpha: 0.18)
         assertColor(
             reducedLight.backgroundColor,
             equals: NSColor(calibratedWhite: 0.93, alpha: 1)
@@ -2770,7 +2776,7 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertFalse(shell.cancelSearch())
     }
 
-    func testApplicationBundleDeclaresNormalSwiftUIAppMode() throws {
+    func testApplicationBundleRunsInTheBackgroundUntilSettingsOpens() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -2781,7 +2787,7 @@ final class LauncherAppearanceTests: XCTestCase {
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         )
 
-        XCTAssertNil(info["LSUIElement"])
+        XCTAssertEqual(info["LSUIElement"] as? Bool, true)
         XCTAssertEqual(info["CFBundleIconName"] as? String, "Broccoli")
     }
 

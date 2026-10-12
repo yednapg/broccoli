@@ -259,6 +259,53 @@ final class LauncherExpansionAnimationTests: XCTestCase {
         return longest
     }
 
+    func testMinimalSearchResizeIsQuickerThanLiquidGlass() async throws {
+        XCTAssertEqual(
+            LauncherMotionMetrics.expansionAnimationDuration(for: .minimal),
+            0.08,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            LauncherMotionMetrics.expansionAnimationDuration(for: .liquidGlass),
+            0.18,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(LauncherMotionMetrics.shrinkDelay(for: .minimal), 0.05, accuracy: 0.0001)
+        XCTAssertEqual(LauncherMotionMetrics.shrinkDelay(for: .liquidGlass), 0.1, accuracy: 0.0001)
+        XCTAssertEqual(LauncherMotionMetrics.animationCurve(for: .minimal), .easeOut)
+        XCTAssertEqual(LauncherMotionMetrics.animationCurve(for: .liquidGlass), .easeInOut)
+
+        _ = NSApplication.shared
+        let controller = LauncherPanelController(environmentProvider: {
+            LauncherAppearanceEnvironment(
+                reducesTransparency: false,
+                increasesContrast: false,
+                reducesMotion: false
+            )
+        })
+        controller.applyAppearance(.defaults(design: .minimal))
+        controller.showForAutomatedTests()
+        defer { controller.dismiss(notify: false) }
+        let window = controller.visibilityIsolationWindow
+        let theme = LauncherThemeController().descriptor(for: .defaults(design: .minimal))
+        let full = LauncherPreviewFixture.standard.results
+        let expanded = theme.panelHeight(resultCount: full.count)
+
+        controller.setMode(.main, initialQuery: "fixture")
+        controller.apply(full)
+        XCTAssertTrue(controller.isExpansionAnimationInFlight,
+                      "A visible Minimal search still resizes instead of snapping the window")
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertFalse(controller.isExpansionAnimationInFlight,
+                       "Minimal's 80 ms growth should have finished inside 150 ms")
+        XCTAssertEqual(window.frame.height, expanded, accuracy: 0.5)
+
+        controller.apply(Array(full.prefix(1)))
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertLessThan(window.frame.height, expanded - 1,
+                          "Minimal must already be shrinking 80 ms after a shorter result list")
+    }
+
     func testMinimalWarmupPaysTheFirstTableDisplayWithoutOpeningTheBar() {
         _ = NSApplication.shared
         let controller = makeController(duration: 0.05)
@@ -277,7 +324,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
 
     func testHeightMotionStepsBetweenEventsInsteadOfHoldingTheMainLoop() throws {
         _ = NSApplication.shared
-        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        let controller = makeController(duration: LauncherMotionMetrics.liquidGlassExpansionAnimationDuration)
         controller.applyAppearance(.defaults(design: .liquidGlass))
         controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
@@ -315,7 +362,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
 
     func testEveryMotionStepKeepsTheContentFlushWithTheFixedTopEdge() throws {
         _ = NSApplication.shared
-        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        let controller = makeController(duration: LauncherMotionMetrics.liquidGlassExpansionAnimationDuration)
         controller.applyAppearance(.defaults(design: .liquidGlass))
         controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
@@ -383,7 +430,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
 
     func testFullCollapseClipsRowsOnlyAtTheWindowEdgeAndFadesTheDivider() throws {
         _ = NSApplication.shared
-        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        let controller = makeController(duration: LauncherMotionMetrics.liquidGlassExpansionAnimationDuration)
         controller.applyAppearance(.defaults(design: .liquidGlass))
         controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
@@ -447,7 +494,7 @@ final class LauncherExpansionAnimationTests: XCTestCase {
 
     func testGrowthStartsFromTheCompactBarAndRevealsRowsOnlyAtTheWindowEdge() throws {
         _ = NSApplication.shared
-        let controller = makeController(duration: LauncherMotionMetrics.expansionAnimationDuration)
+        let controller = makeController(duration: LauncherMotionMetrics.liquidGlassExpansionAnimationDuration)
         controller.applyAppearance(.defaults(design: .liquidGlass))
         controller.showForAutomatedTests()
         defer { controller.dismiss(notify: false) }
