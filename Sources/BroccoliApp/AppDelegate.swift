@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var distributedObservers: [NSObjectProtocol] = []
     private var diagnosticsStore: DiagnosticsStore!
     private var clipboardMonitor: ClipboardMonitor?
+    private var clipboardKeyGate = ClipboardKeyRequestGate()
     private var currencyRateService: CurrencyRateService?
     private var supportDirectory: URL!
     private var shortcutRegistrationError: String?
@@ -378,16 +379,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         applyWindowManagementPreferences(preferences.windowManagement)
     }
 
+    /// The key is read off the main thread: the keychain can wait on a permission prompt, and
+    /// the launcher and every shortcut must keep working meanwhile.
     private func configureClipboardIfNeeded() {
-        guard preferences.clipboard.enabled else {
+        guard clipboardKeyGate.beginRequest(
+            historyEnabled: preferences.clipboard.enabled,
+            historyRunning: clipboardMonitor != nil
+        ) else {
             clipboardMonitor?.update(preferences: preferences.clipboard)
             return
         }
-        guard clipboardMonitor == nil else {
-            clipboardMonitor?.update(preferences: preferences.clipboard)
-            return
+        Task { @MainActor [weak self] in
+            let keyData = await Task.detached(priority: .utility) {
+                try? ClipboardKeyProvider.loadOrCreate()
+            }.value
+            guard let self else { return }
+            self.clipboardKeyGate.finish(succeeded: keyData != nil)
+            guard let keyData, self.preferences.clipboard.enabled, self.clipboardMonitor == nil else { return }
+            self.startClipboardHistory(keyData: keyData)
         }
-        guard let keyData = try? ClipboardKeyProvider.loadOrCreate() else { return }
+    }
+
+    private func startClipboardHistory(keyData: Data) {
         let databaseURL = supportDirectory.appendingPathComponent("clipboard.sqlite3")
         let clipboardStore: ClipboardStore
         do {

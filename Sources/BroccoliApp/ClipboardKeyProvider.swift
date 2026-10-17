@@ -1,6 +1,31 @@
 import Foundation
 import Security
 
+/// Decides when Broccoli asks the keychain for the clipboard key. The keychain can wait on a
+/// permission prompt, so there is only one request at a time, and a refused or failed request
+/// is not repeated on every settings change, which would bring the prompt back each time.
+/// Turning clipboard history off and on again asks once more.
+struct ClipboardKeyRequestGate {
+    private(set) var isRequesting = false
+    private(set) var hasFailed = false
+
+    /// Whether to ask the keychain now. Turning history off clears an earlier failure.
+    mutating func beginRequest(historyEnabled: Bool, historyRunning: Bool) -> Bool {
+        guard historyEnabled else {
+            hasFailed = false
+            return false
+        }
+        guard !historyRunning, !isRequesting, !hasFailed else { return false }
+        isRequesting = true
+        return true
+    }
+
+    mutating func finish(succeeded: Bool) {
+        isRequesting = false
+        hasFailed = !succeeded
+    }
+}
+
 enum ClipboardKeyProvider {
     private static let service = "dev.gauravpandey.broccoli.clipboard"
     private static let account = "history-encryption-key-v1"
