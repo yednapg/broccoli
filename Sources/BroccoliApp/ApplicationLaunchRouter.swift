@@ -19,10 +19,12 @@ enum ApplicationLaunchRouter {
         return launchedAsLoginItem ? .none : .settings
     }
 
-    /// macOS marks a login-item launch by including this parameter on the open event.
+    /// macOS marks a login-item launch on the open event. Login launches carry the marker as
+    /// the value of `keyAEPropData`; the SDK header also describes it as its own parameter.
     static func launchedAsLoginItem(_ event: NSAppleEventDescriptor?) -> Bool {
         guard let event, event.eventID == kAEOpenApplication else { return false }
-        return event.paramDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
+        return event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+            || event.paramDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
     }
 }
 

@@ -64,6 +64,34 @@ final class ApplicationLifecycleTests: XCTestCase {
         )
     }
 
+    func testLoginItemLaunchRecognizesTheMarkerMacOSSendsAtLogin() {
+        func openEvent(propertyData: OSType) -> NSAppleEventDescriptor {
+            let event = NSAppleEventDescriptor(
+                eventClass: AEEventClass(kCoreEventClass),
+                eventID: AEEventID(kAEOpenApplication),
+                targetDescriptor: nil,
+                returnID: AEReturnID(kAutoGenerateReturnID),
+                transactionID: AETransactionID(kAnyTransactionID)
+            )
+            event.setParam(NSAppleEventDescriptor(enumCode: propertyData), forKeyword: keyAEPropData)
+            return event
+        }
+
+        let login = openEvent(propertyData: OSType(keyAELaunchedAsLogInItem))
+        XCTAssertTrue(ApplicationLaunchRouter.launchedAsLoginItem(login))
+        XCTAssertEqual(
+            ApplicationLaunchRouter.presentation(
+                arguments: ["/Applications/Broccoli.app"],
+                launchedAsLoginItem: ApplicationLaunchRouter.launchedAsLoginItem(login)
+            ),
+            .none,
+            "Signing in must not open Settings"
+        )
+        XCTAssertFalse(ApplicationLaunchRouter.launchedAsLoginItem(
+            openEvent(propertyData: OSType(keyAELaunchedAsServiceItem))
+        ))
+    }
+
     func testCommandQClosesSettingsOnlyWhileThatWindowIsKey() throws {
         let commandQ = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown,
