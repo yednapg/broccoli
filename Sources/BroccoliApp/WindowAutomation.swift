@@ -10,7 +10,8 @@ enum WindowSnapZone {
     static let cornerLength: CGFloat = 48
 
     /// `point` and `display` are in Accessibility coordinates; `display` is the full display
-    /// frame, including the menu bar and Dock.
+    /// frame, including the menu bar and Dock. The middle of the bottom edge does not snap:
+    /// that is where the pointer goes to reveal a hidden Dock.
     static func action(at point: CGPoint, in display: CGRect) -> WindowAction? {
         guard display.insetBy(dx: -1, dy: -1).contains(point) else { return nil }
         let nearLeft = point.x <= display.minX + edgeMargin
@@ -32,28 +33,69 @@ enum WindowSnapZone {
             return leftCorner ? .topLeftQuarter : rightCorner ? .topRightQuarter : .maximize
         }
         if nearBottom {
-            if leftCorner { return .bottomLeftQuarter }
-            if rightCorner { return .bottomRightQuarter }
-            let share = (point.x - display.minX) / max(1, display.width)
-            return share < 1.0 / 3.0 ? .firstThird : share < 2.0 / 3.0 ? .bottomHalf : .lastThird
+            return leftCorner ? .bottomLeftQuarter : rightCorner ? .bottomRightQuarter : nil
         }
         return nil
     }
 }
 
+/// macOS's own tiling of dragged windows, from Desktop & Dock settings. Broccoli snaps a
+/// dragged window only while this is off, so a window never snaps twice.
+enum MacOSWindowTiling {
+    private static let domain = "com.apple.WindowManager" as CFString
+    /// “Drag windows to screen edges to tile” and “Drag windows to menu bar to fill screen”.
+    private static let dragKeys = ["EnableTilingByEdgeDrag", "EnableTopTilingByEdgeDrag"] as [CFString]
+
+    /// Both settings are on unless the user or Broccoli turned them off.
+    static var tilesDraggedWindows: Bool {
+        CFPreferencesAppSynchronize(domain)
+        return dragKeys.contains { key in
+            (CFPreferencesCopyAppValue(key, domain) as? NSNumber)?.boolValue ?? true
+        }
+    }
+
+    /// Turns macOS's drag tiling off, or back to its default of on, and reports whether macOS
+    /// now has that setting.
+    @discardableResult
+    static func setTilesDraggedWindows(_ enabled: Bool) -> Bool {
+        for key in dragKeys {
+            CFPreferencesSetAppValue(key, enabled ? nil : kCFBooleanFalse, domain)
+        }
+        CFPreferencesAppSynchronize(domain)
+        return tilesDraggedWindows == enabled
+    }
+
+    static func openDesktopAndDockSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
 /// Snaps a window into a layout when the user drags it to a display edge or corner, showing
-/// where it will land before the mouse button is released.
+/// where it will land before the mouse button is released. It follows the window under the
+/// pointer through the window server, so a drag that is not moving a window, such as selecting
+/// text, costs a few window-list reads and never queries the application.
 @MainActor
 final class WindowDragSnapController {
+    private struct Drag {
+        let window: OnScreenWindow
+        let startedAt: TimeInterval
+        var isMovingWindow = false
+    }
+
+    /// The window server moves a dragged window a frame or two behind the pointer. A drag that
+    /// has not moved the window for this long is not a window drag.
+    private static let movementWait: TimeInterval = 0.3
+
     private let windowManager: WindowManager
     private let overlay = WindowSnapOverlay()
     private var monitors: [Any] = []
-    private var dragEventCount = 0
-    private var targetPID: pid_t?
-    private var baseline: CGRect?
-    private var isSampling = false
-    private var isMovingWindow = false
+    private var mouseDownLocation: CGPoint?
+    private var drag: Drag?
+    private var ignoresGesture = false
     private var zone: WindowAction?
+    private var displays: [(display: CGRect, usable: CGRect)] = []
+    private var layoutOptions = WindowLayoutOptions.standard
 
     var ignoredBundleIdentifiers: Set<String> = []
     var isEnabled = false {
@@ -84,11 +126,9 @@ final class WindowDragSnapController {
     }
 
     private func reset() {
-        dragEventCount = 0
-        targetPID = nil
-        baseline = nil
-        isSampling = false
-        isMovingWindow = false
+        mouseDownLocation = nil
+        drag = nil
+        ignoresGesture = false
         zone = nil
         overlay.hide()
     }
@@ -97,112 +137,173 @@ final class WindowDragSnapController {
         switch type {
         case .leftMouseDown:
             reset()
+            mouseDownLocation = Self.pointerLocation()
         case .leftMouseDragged:
-            dragEventCount += 1
-            if !isMovingWindow {
-                confirmWindowMovement()
-            } else {
+            guard !ignoresGesture else { return }
+            if drag == nil {
+                beginDrag()
+            } else if drag?.isMovingWindow == true {
                 updateZone()
+            } else {
+                confirmWindowMovement()
             }
         case .leftMouseUp:
-            if isMovingWindow, let zone, let targetPID {
-                Task { [windowManager] in
-                    try? await windowManager.perform(.action(zone), targetPID: targetPID)
-                }
-            }
+            snapDraggedWindow()
             reset()
         default:
             break
         }
     }
 
-    /// A drag only snaps when it is moving the focused window: its origin changes while its
-    /// size stays the same. Selecting text or resizing a window never snaps.
-    private func confirmWindowMovement() {
-        guard !isSampling, dragEventCount >= 2 else { return }
-        if targetPID == nil {
-            guard let application = NSWorkspace.shared.frontmostApplication,
-                  application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-                  !(application.bundleIdentifier.map(ignoredBundleIdentifiers.contains) ?? false) else {
-                dragEventCount = -.max
-                return
-            }
-            targetPID = application.processIdentifier
+    /// Finds the window the button went down on. By the first drag event a fast drag can already
+    /// have carried the pointer off a title bar, but the window has barely moved.
+    private func beginDrag() {
+        // Option-drag is macOS's own tiling gesture.
+        guard !NSEvent.modifierFlags.contains(.option),
+              let window = OnScreenWindow.frontmost(at: mouseDownLocation ?? Self.pointerLocation()),
+              !(NSRunningApplication(processIdentifier: window.processIdentifier)?
+                .bundleIdentifier.map(ignoredBundleIdentifiers.contains) ?? false) else {
+            ignoresGesture = true
+            return
         }
-        guard baseline == nil || dragEventCount >= 6 else { return }
-        isSampling = true
-        let processIdentifier = targetPID
-        Task { [weak self, windowManager] in
-            let frame = await windowManager.focusedWindowFrame(targetPID: processIdentifier)
-            guard let self, self.targetPID == processIdentifier else { return }
-            self.isSampling = false
-            guard let frame else { return }
-            guard let baseline = self.baseline else {
-                self.baseline = frame
+        drag = Drag(window: window, startedAt: ProcessInfo.processInfo.systemUptime)
+    }
+
+    /// The window is being dragged when it moves without changing size. Resizing it, or dragging
+    /// for a moment without moving it, ends the gesture for snapping.
+    private func confirmWindowMovement() {
+        guard let drag, let bounds = OnScreenWindow.bounds(of: drag.window.windowID) else {
+            ignoresGesture = true
+            return
+        }
+        let start = drag.window.bounds
+        let sameSize = abs(bounds.width - start.width) < 2 && abs(bounds.height - start.height) < 2
+        let moved = abs(bounds.minX - start.minX) > 3 || abs(bounds.minY - start.minY) > 3
+        let waited = ProcessInfo.processInfo.systemUptime - drag.startedAt
+        if !sameSize || (!moved && waited > Self.movementWait) {
+            ignoresGesture = true
+        } else if moved {
+            guard !MacOSWindowTiling.tilesDraggedWindows else {
+                ignoresGesture = true
                 return
             }
-            let moved = abs(frame.minX - baseline.minX) > 3 || abs(frame.minY - baseline.minY) > 3
-            let sameSize = abs(frame.width - baseline.width) < 2 && abs(frame.height - baseline.height) < 2
-            if moved && sameSize {
-                self.isMovingWindow = true
-                self.updateZone()
-            } else if !sameSize {
-                self.dragEventCount = -.max
-            }
+            self.drag?.isMovingWindow = true
+            displays = Self.displays(usable: windowManager.screenFrames())
+            layoutOptions = windowManager.layoutOptionsProvider()
+            updateZone()
         }
     }
 
     private func updateZone() {
-        guard let primary = NSScreen.screens.first else { return }
-        let location = NSEvent.mouseLocation
-        let point = CGPoint(x: location.x, y: primary.frame.maxY - location.y)
-        let usableFrames = windowManager.screenFrames()
-        for (index, screen) in NSScreen.screens.enumerated() where index < usableFrames.count {
-            let display = WindowScreenGeometry.accessibilityFrame(for: screen.frame, primaryScreenFrame: primary.frame)
-            guard display.insetBy(dx: -1, dy: -1).contains(point) else { continue }
-            zone = WindowSnapZone.action(at: point, in: display)
-            guard let zone, let baseline else {
-                overlay.hide()
-                return
-            }
-            let target = WindowGeometry.frame(
-                for: zone,
-                window: baseline,
-                screen: usableFrames[index],
-                options: windowManager.layoutOptionsProvider()
-            )
-            overlay.show(appKitFrame: WindowScreenGeometry.accessibilityFrame(
-                for: target,
-                primaryScreenFrame: primary.frame
-            ))
+        guard let drag else { return }
+        let pointer = Self.pointerLocation()
+        let match = displays.first { $0.display.insetBy(dx: -1, dy: -1).contains(pointer) }
+        let newZone = NSEvent.modifierFlags.contains(.option)
+            ? nil
+            : match.flatMap { WindowSnapZone.action(at: pointer, in: $0.display) }
+        guard newZone != zone else { return }
+        zone = newZone
+        guard let newZone, let match, let primary = NSScreen.screens.first else {
+            overlay.hide()
             return
         }
-        zone = nil
-        overlay.hide()
+        let target = WindowGeometry.frame(
+            for: newZone,
+            window: drag.window.bounds,
+            screen: match.usable,
+            options: layoutOptions
+        )
+        overlay.show(appKitFrame: WindowScreenGeometry.appKitFrame(for: target, primaryScreenFrame: primary.frame))
+    }
+
+    private func snapDraggedWindow() {
+        guard let drag, drag.isMovingWindow, let zone, !NSEvent.modifierFlags.contains(.option) else { return }
+        let frame = OnScreenWindow.bounds(of: drag.window.windowID)
+        Task { [windowManager] in
+            try? await windowManager.perform(
+                .action(zone),
+                targetPID: drag.window.processIdentifier,
+                windowFrame: frame
+            )
+        }
+    }
+
+    private static func pointerLocation() -> CGPoint {
+        let location = NSEvent.mouseLocation
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        return CGPoint(x: location.x, y: primaryHeight - location.y)
+    }
+
+    private static func displays(usable: [CGRect]) -> [(display: CGRect, usable: CGRect)] {
+        guard let primary = NSScreen.screens.first else { return [] }
+        return zip(NSScreen.screens, usable).map { screen, usable in
+            (WindowScreenGeometry.accessibilityFrame(for: screen.frame, primaryScreenFrame: primary.frame), usable)
+        }
     }
 }
 
-/// The translucent footprint shown where a dragged window will snap.
+/// The footprint shown where a dragged window will snap: an accent tint with a window's
+/// corners that fades in and follows the zone.
 @MainActor
 final class WindowSnapOverlay {
+    private static let animationDuration: TimeInterval = 0.12
+    private static let cornerRadius: CGFloat = 16
+
     private var panel: NSPanel?
+    /// Counts presentations so a fade-out that finishes after the overlay was shown again
+    /// does not hide it.
+    private var presentation = 0
 
     func show(appKitFrame frame: CGRect) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        if let layer = panel.contentView?.layer {
-            // Resolve the accent color for the current appearance on every presentation.
-            panel.contentView?.effectiveAppearance.performAsCurrentDrawingAppearance {
-                layer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
-                layer.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
-            }
+        presentation += 1
+        applyStyle(to: panel)
+        let animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if !panel.isVisible {
+            panel.setFrame(frame, display: true)
+            panel.alphaValue = animates ? 0 : 1
+            panel.orderFrontRegardless()
         }
-        panel.setFrame(frame, display: true)
-        panel.orderFrontRegardless()
+        guard animates else {
+            panel.setFrame(frame, display: true)
+            panel.alphaValue = 1
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.animationDuration
+            panel.animator().setFrame(frame, display: true)
+            panel.animator().alphaValue = 1
+        }
     }
 
     func hide() {
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible else { return }
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            panel.orderOut(nil)
+            return
+        }
+        let hiding = presentation
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.animationDuration
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self, weak panel] in
+            MainActor.assumeIsolated {
+                guard self?.presentation == hiding else { return }
+                panel?.orderOut(nil)
+            }
+        }
+    }
+
+    private func applyStyle(to panel: NSPanel) {
+        guard let view = panel.contentView, let layer = view.layer else { return }
+        let increasesContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        // Resolve the accent color for the current appearance on every presentation.
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(increasesContrast ? 0.3 : 0.2).cgColor
+            layer.borderColor = NSColor.controlAccentColor.withAlphaComponent(increasesContrast ? 1 : 0.8).cgColor
+        }
+        layer.borderWidth = increasesContrast ? 3 : 2
     }
 
     private func makePanel() -> NSPanel {
@@ -222,8 +323,8 @@ final class WindowSnapOverlay {
         panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
         let view = NSView()
         view.wantsLayer = true
-        view.layer?.cornerRadius = 10
-        view.layer?.borderWidth = 2
+        view.layer?.cornerRadius = Self.cornerRadius
+        view.layer?.cornerCurve = .continuous
         view.setAccessibilityElement(false)
         panel.contentView = view
         return panel

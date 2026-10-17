@@ -26,6 +26,21 @@ enum WindowActionGroup: String, CaseIterable, Sendable {
     var actions: [WindowAction] {
         WindowAction.allCases.filter { $0.group == self }
     }
+
+    /// Arranging every window and automatic tiling are hidden until they are as dependable as
+    /// the single-window layouts. Their saved settings stay readable.
+    var isAvailable: Bool {
+        switch self {
+        case .arrange, .tiling: false
+        case .fillAndCenter, .resize, .displays, .halvesAndQuarters, .thirds: true
+        }
+    }
+}
+
+enum WindowManagementFeatures {
+    /// Custom layouts and workspaces are hidden for the same reason as automatic tiling. Their
+    /// saved layouts, workspaces, and shortcuts stay readable.
+    static let customizationsAvailable = false
 }
 
 enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
@@ -64,6 +79,8 @@ enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
 
     var actionID: String { "window.\(rawValue)" }
     var hotKeyBindingID: String { actionID }
+
+    static var available: [WindowAction] { allCases.filter(\.group.isAvailable) }
 
     var group: WindowActionGroup {
         switch self {
@@ -196,29 +213,50 @@ enum WindowAction: String, Codable, CaseIterable, Hashable, Sendable {
     }
 
     /// Only the original layouts ship with shortcuts. There are not enough memorable key
-    /// combinations for every action, so the rest start unassigned.
+    /// combinations for every action, so the rest start unassigned. Control-Option stays clear
+    /// of macOS shortcuts, text editing, and the tab shortcuts applications use.
     var defaultShortcut: HotKeyConfiguration? {
-        let command = UInt32(cmdKey)
-        let commandOption = UInt32(cmdKey | optionKey)
+        let controlOption = UInt32(controlKey | optionKey)
         switch self {
         case .leftHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: command)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: controlOption)
         case .rightHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_RightArrow), modifiers: command)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_RightArrow), modifiers: controlOption)
         case .topHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: commandOption)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: controlOption)
         case .bottomHalf:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: commandOption)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: controlOption)
         case .maximize:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: command)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_Return), modifiers: controlOption)
         case .minimized:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_DownArrow), modifiers: command)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_Return), modifiers: controlOption | UInt32(shiftKey))
         case .center:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_C), modifiers: commandOption)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_C), modifiers: controlOption)
         case .nextDisplay:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_RightArrow), modifiers: commandOption)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_RightArrow), modifiers: controlOption | UInt32(cmdKey))
         case .previousDisplay:
-            return HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: commandOption)
+            return HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: controlOption | UInt32(cmdKey))
+        default:
+            return nil
+        }
+    }
+
+    /// The Control-Option shortcut Use Recommended Shortcuts gives this action: its default, or
+    /// a matching one for an action the user assigned a shortcut to.
+    var recommendedShortcut: HotKeyConfiguration? {
+        if let defaultShortcut { return defaultShortcut }
+        let controlOption = UInt32(controlKey | optionKey)
+        switch self {
+        case .maximizeHeight:
+            return HotKeyConfiguration(keyCode: UInt32(kVK_UpArrow), modifiers: controlOption | UInt32(shiftKey))
+        case .maximizeWidth:
+            return HotKeyConfiguration(keyCode: UInt32(kVK_RightArrow), modifiers: controlOption | UInt32(shiftKey))
+        case .makeLarger:
+            return HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_Equal), modifiers: controlOption)
+        case .makeSmaller:
+            return HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_Minus), modifiers: controlOption)
+        case .restore:
+            return HotKeyConfiguration(keyCode: UInt32(kVK_Delete), modifiers: controlOption)
         default:
             return nil
         }
@@ -283,6 +321,9 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
     var customLayouts: [CustomWindowLayout] = []
     var workspaces: [WindowWorkspace] = []
     var dragToSnapEnabled = false
+    /// Broccoli turned off macOS's tiling of dragged windows when Snap by Dragging was turned
+    /// on, so it offers to turn it back on when Snap by Dragging is turned off.
+    var macOSDragTilingTurnedOffByBroccoli = false
     var automaticTilingEnabled = false
 
     init(
@@ -350,6 +391,12 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
             + workspaces.map { .workspace($0.id) }
     }
 
+    /// The targets that are offered and registered. A hidden target keeps its saved shortcut
+    /// but neither registers it nor blocks another target from using it.
+    var availableShortcutTargets: [WindowShortcutTarget] {
+        shortcutTargets.filter(\.isAvailable)
+    }
+
     func title(for target: WindowShortcutTarget) -> String {
         switch target {
         case .action(let action): action.title
@@ -360,7 +407,7 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
 
     /// The title of the window target other than `target` that already uses `configuration`.
     func owner(of configuration: HotKeyConfiguration, excluding target: WindowShortcutTarget) -> String? {
-        shortcutTargets.first { $0 != target && shortcut(for: $0) == configuration }.map(title(for:))
+        availableShortcutTargets.first { $0 != target && shortcut(for: $0) == configuration }.map(title(for:))
     }
 
     var layoutOptions: WindowLayoutOptions {
@@ -419,6 +466,21 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
                 claimed.append(configuration)
             }
         }
+    }
+
+    /// Moves the window shortcuts to the recommended Control-Option set. Actions that ship with
+    /// a shortcut get theirs, an action the user assigned gets its recommended shortcut when it
+    /// has one, and any other shortcut macOS keeps for itself is removed.
+    mutating func useRecommendedShortcuts(reserved: MacOSReservedShortcuts) {
+        for action in WindowAction.allCases {
+            if let recommended = action.recommendedShortcut,
+               action.defaultShortcut != nil || shortcuts[action] != nil {
+                setShortcut(recommended, for: action)
+            } else if let current = shortcuts[action], reserved.owner(of: current) != nil {
+                setShortcut(nil, for: action)
+            }
+        }
+        sanitize()
     }
 
     /// Pressing a half or quarter again cycles its size. Installations saved before that
@@ -485,7 +547,7 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case shortcutsEnabled, shortcuts, unassignedShortcuts, resizeStep, almostMaximizeFraction
         case repeatBehavior, repeatedSizeCycleAdopted, screenEdgeGap, windowGap, ignoredBundleIdentifiers
-        case customLayouts, workspaces, dragToSnapEnabled, automaticTilingEnabled
+        case customLayouts, workspaces, dragToSnapEnabled, macOSDragTilingTurnedOffByBroccoli, automaticTilingEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -514,6 +576,10 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
         customLayouts = Self.decodeLossy(CustomWindowLayout.self, from: container, forKey: .customLayouts)
         workspaces = Self.decodeLossy(WindowWorkspace.self, from: container, forKey: .workspaces)
         dragToSnapEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .dragToSnapEnabled)) ?? false
+        macOSDragTilingTurnedOffByBroccoli = (try? container.decodeIfPresent(
+            Bool.self,
+            forKey: .macOSDragTilingTurnedOffByBroccoli
+        )) ?? false
         automaticTilingEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .automaticTilingEnabled)) ?? false
     }
 
@@ -532,6 +598,7 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
         try container.encode(customLayouts, forKey: .customLayouts)
         try container.encode(workspaces, forKey: .workspaces)
         try container.encode(dragToSnapEnabled, forKey: .dragToSnapEnabled)
+        try container.encode(macOSDragTilingTurnedOffByBroccoli, forKey: .macOSDragTilingTurnedOffByBroccoli)
         try container.encode(automaticTilingEnabled, forKey: .automaticTilingEnabled)
     }
 
@@ -578,8 +645,10 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
 }
 
 enum WindowShortcutRegistrationSummary {
-    static func message(failedTitles: [String]) -> String? {
-        switch failedTitles.count {
+    /// `reserved` pairs each window target's title with the macOS feature that keeps its
+    /// shortcut. Those shortcuts are not registered.
+    static func message(failedTitles: [String], reserved: [(title: String, owner: String)] = []) -> String? {
+        let failed: String? = switch failedTitles.count {
         case 0:
             nil
         case 1:
@@ -587,6 +656,16 @@ enum WindowShortcutRegistrationSummary {
         default:
             "\(failedTitles.count) shortcuts are already in use or unavailable: \(failedTitles.joined(separator: ", "))."
         }
+        let kept: String? = switch reserved.count {
+        case 0:
+            nil
+        case 1:
+            "macOS keeps the \(reserved[0].title) shortcut for \(reserved[0].owner)."
+        default:
+            "macOS keeps \(reserved.count) of these shortcuts for itself: \(reserved.map(\.title).joined(separator: ", "))."
+        }
+        let parts = [failed, kept].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 }
 
@@ -606,6 +685,13 @@ enum WindowShortcutTarget: Hashable, Sendable {
 
     static let layoutPrefix = "window.layout."
     static let workspacePrefix = "window.workspace."
+
+    var isAvailable: Bool {
+        switch self {
+        case .action(let action): action.group.isAvailable
+        case .layout, .workspace: WindowManagementFeatures.customizationsAvailable
+        }
+    }
 
     /// Parses the launcher and hot-key identifier form, such as `window.leftHalf` or
     /// `window.layout.<UUID>`.

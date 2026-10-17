@@ -63,6 +63,7 @@ struct SettingsDetailView: View {
                 initialWindowShortcutError: context.initialWindowShortcutError,
                 onWindowShortcutChanged: context.onWindowShortcutChanged,
                 onWindowShortcutsEnabledChanged: context.onWindowShortcutsEnabledChanged,
+                onUseRecommendedWindowShortcuts: context.onUseRecommendedWindowShortcuts,
                 onCaptureWorkspace: context.onCaptureWorkspace
             )
         case .actions:

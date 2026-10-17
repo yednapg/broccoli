@@ -44,7 +44,7 @@ enum ActionRegistry {
         ActionDefinition(id: "audio.volumeUp", title: "Volume Up", aliases: ["audio", "sound", "louder", "increase volume"], risk: .safe, permission: .none, keepsPanelOpen: true),
         ActionDefinition(id: "audio.volumeDown", title: "Volume Down", aliases: ["audio", "sound", "quieter", "decrease volume"], risk: .safe, permission: .none, keepsPanelOpen: true),
         ActionDefinition(id: "screensaver.start", title: "Start Screen Saver", aliases: ["screen saver", "display", "idle"], risk: .safe, permission: .none, keepsPanelOpen: false),
-    ] + WindowAction.allCases.map { action in
+    ] + WindowAction.available.map { action in
         ActionDefinition(id: action.actionID, title: action.title, aliases: action.aliases, risk: .safe, permission: .accessibility, keepsPanelOpen: false)
     } + [
         ActionDefinition(id: "catalog.refresh", title: "Refresh Applications", aliases: ["reload", "reindex", "apps"], risk: .safe, permission: .none, keepsPanelOpen: false),

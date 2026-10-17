@@ -6,10 +6,14 @@ struct WindowManagementSettingsPane: View {
     let initialWindowShortcutError: String?
     let onWindowShortcutChanged: (WindowShortcutTarget, HotKeyConfiguration?) -> WindowShortcutChangeResult
     let onWindowShortcutsEnabledChanged: (Bool) -> String?
+    let onUseRecommendedWindowShortcuts: () -> String?
     let onCaptureWorkspace: (String) async -> String?
 
     @State private var windowShortcutStatus = ""
     @State private var accessibilityTrusted = AccessibilityPermissionChecker.isTrusted
+    @State private var macOSTilesDraggedWindows = MacOSWindowTiling.tilesDraggedWindows
+    @State private var tilingPrompt: MacOSTilingPrompt?
+    @State private var confirmsRecommendedShortcuts = false
     @State private var editingLayout: EditingLayout?
     @State private var isSavingWorkspace = false
     @State private var ignoredAppsMessage: String?
@@ -20,6 +24,13 @@ struct WindowManagementSettingsPane: View {
         var id: UUID { layout.id }
     }
 
+    /// macOS also snaps dragged windows unless its own setting is off, so turning on Snap by
+    /// Dragging offers to turn that off, and turning Snap by Dragging off offers to undo it.
+    private enum MacOSTilingPrompt {
+        case turnOff
+        case turnBackOn
+    }
+
     var body: some View {
         windows
             .onAppear {
@@ -27,9 +38,40 @@ struct WindowManagementSettingsPane: View {
                     windowShortcutStatus = initialWindowShortcutError ?? "Shortcuts ready"
                 }
                 accessibilityTrusted = AccessibilityPermissionChecker.isTrusted
+                macOSTilesDraggedWindows = MacOSWindowTiling.tilesDraggedWindows
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 accessibilityTrusted = AccessibilityPermissionChecker.isTrusted
+                macOSTilesDraggedWindows = MacOSWindowTiling.tilesDraggedWindows
+            }
+            .alert(
+                tilingPrompt == .turnBackOn ? "Turn macOS Window Tiling Back On?" : "Turn Off macOS Window Tiling?",
+                isPresented: Binding(get: { tilingPrompt != nil }, set: { if !$0 { tilingPrompt = nil } }),
+                presenting: tilingPrompt
+            ) { prompt in
+                switch prompt {
+                case .turnOff:
+                    Button("Turn Off macOS Tiling") { turnOffMacOSTiling() }
+                    Button("Keep macOS Tiling", role: .cancel) { setDragToSnap(false) }
+                case .turnBackOn:
+                    Button("Turn On") { restoreMacOSTiling(turnOn: true) }
+                    Button("Leave Off", role: .cancel) { restoreMacOSTiling(turnOn: false) }
+                }
+            } message: { prompt in
+                switch prompt {
+                case .turnOff:
+                    Text("macOS also snaps windows you drag to a screen edge or the menu bar, so a window could snap twice. Broccoli can turn that off in Desktop & Dock settings, where you can turn it back on at any time.")
+                case .turnBackOn:
+                    Text("Broccoli turned off macOS's tiling of dragged windows when you turned on Snap by Dragging.")
+                }
+            }
+            .alert("Use Recommended Shortcuts?", isPresented: $confirmsRecommendedShortcuts) {
+                Button("Use Recommended") {
+                    windowShortcutStatus = onUseRecommendedWindowShortcuts() ?? "Shortcuts ready"
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Window shortcuts move to Control-Option keys, such as ⌃⌥← for Left Half and ⌃⌥↩ for Maximize, which apps and text editing don't use. This replaces your current window shortcuts.")
             }
             .sheet(item: $editingLayout) { editing in
                 CustomWindowLayoutEditor(
@@ -101,33 +143,25 @@ struct WindowManagementSettingsPane: View {
                     EmptyView()
                 }
                 .foregroundStyle(windowShortcutReadiness.color)
+                SpotlightSettingsRow(
+                    symbol: "keyboard",
+                    title: "Recommended Shortcuts",
+                    subtitle: "Control-Option keys that apps and text editing don't use"
+                ) {
+                    Button("Use Recommended…") { confirmsRecommendedShortcuts = true }
+                }
             }
 
             sizesCard
             behaviorCard
-            SettingsFootnote(
-                symbol: "info.circle",
-                text: "If macOS also tiles windows you drag to a screen edge, turn off “Drag windows to screen edges to tile” in Desktop & Dock settings."
-            )
             ignoredApplicationsCard
-            customLayoutsCard
-            workspacesCard
+            if WindowManagementFeatures.customizationsAvailable {
+                customLayoutsCard
+                workspacesCard
+            }
 
-            ForEach(WindowActionGroup.allCases, id: \.self) { group in
+            ForEach(WindowActionGroup.allCases.filter(\.isAvailable), id: \.self) { group in
                 SpotlightSettingsCard(group.title) {
-                    if group == .tiling {
-                        SpotlightSettingsRow(
-                            title: "Tile Windows Automatically",
-                            subtitle: "Two windows split the screen. Three stack the extras. Four or more divide it evenly"
-                        ) {
-                            Toggle("", isOn: windowManagementBinding(\.automaticTilingEnabled))
-                                .labelsHidden()
-                                .settingsToggleAccessibility(
-                                    "Tile Windows Automatically",
-                                    isOn: preferences.windowManagement.automaticTilingEnabled
-                                )
-                        }
-                    }
                     ForEach(group.actions, id: \.self) { action in
                         shortcutRow(
                             for: .action(action),
@@ -212,14 +246,19 @@ struct WindowManagementSettingsPane: View {
             }
             SpotlightSettingsRow(
                 title: "Snap by Dragging",
-                subtitle: "Drag a window to a screen edge or corner to snap it into place"
+                subtitle: preferences.windowManagement.dragToSnapEnabled && macOSTilesDraggedWindows
+                    ? "Paused while macOS tiles dragged windows. Turn this off and on again to change that"
+                    : "Drag a window to a screen edge or corner to snap it into place"
             ) {
-                Toggle("", isOn: windowManagementBinding(\.dragToSnapEnabled))
-                    .labelsHidden()
-                    .settingsToggleAccessibility(
-                        "Snap by Dragging",
-                        isOn: preferences.windowManagement.dragToSnapEnabled
-                    )
+                Toggle("", isOn: Binding(
+                    get: { preferences.windowManagement.dragToSnapEnabled },
+                    set: changeDragToSnap
+                ))
+                .labelsHidden()
+                .settingsToggleAccessibility(
+                    "Snap by Dragging",
+                    isOn: preferences.windowManagement.dragToSnapEnabled
+                )
             }
         }
     }
@@ -249,7 +288,7 @@ struct WindowManagementSettingsPane: View {
             }
             SettingsFootnote(
                 symbol: "hand.raised",
-                text: "While an ignored application is in front, it receives window shortcut keys itself. Snapping and automatic tiling also leave its windows alone."
+                text: "While an ignored application is in front, it receives window shortcut keys itself. Snapping by dragging also leaves its windows alone."
             )
         }
     }
@@ -436,11 +475,53 @@ struct WindowManagementSettingsPane: View {
     }
 
     private func applyWindowShortcutsEnabled(_ enabled: Bool) {
-        if let error = onWindowShortcutsEnabledChanged(enabled) {
-            windowShortcutStatus = error
-            return
+        windowShortcutStatus = onWindowShortcutsEnabledChanged(enabled) ?? "Shortcuts ready"
+        if enabled, preferences.windowManagement.dragToSnapEnabled {
+            offerToTurnOffMacOSTiling()
         }
-        windowShortcutStatus = "Shortcuts ready"
+    }
+
+    private func changeDragToSnap(_ enabled: Bool) {
+        if enabled {
+            setDragToSnap(true)
+            offerToTurnOffMacOSTiling()
+        } else {
+            setDragToSnap(false)
+            if preferences.windowManagement.macOSDragTilingTurnedOffByBroccoli {
+                tilingPrompt = .turnBackOn
+            }
+        }
+    }
+
+    private func offerToTurnOffMacOSTiling() {
+        macOSTilesDraggedWindows = MacOSWindowTiling.tilesDraggedWindows
+        if macOSTilesDraggedWindows { tilingPrompt = .turnOff }
+    }
+
+    private func setDragToSnap(_ enabled: Bool) {
+        var value = preferences.windowManagement
+        value.dragToSnapEnabled = enabled
+        preferences.windowManagement = value
+    }
+
+    /// When macOS does not take the change, Desktop & Dock settings opens so it can be made
+    /// there. Snap by Dragging stays on and waits until macOS's tiling is off.
+    private func turnOffMacOSTiling() {
+        let turnedOff = MacOSWindowTiling.setTilesDraggedWindows(false)
+        macOSTilesDraggedWindows = MacOSWindowTiling.tilesDraggedWindows
+        var value = preferences.windowManagement
+        value.dragToSnapEnabled = true
+        value.macOSDragTilingTurnedOffByBroccoli = turnedOff
+        preferences.windowManagement = value
+        if !turnedOff { MacOSWindowTiling.openDesktopAndDockSettings() }
+    }
+
+    private func restoreMacOSTiling(turnOn: Bool) {
+        if turnOn { MacOSWindowTiling.setTilesDraggedWindows(true) }
+        macOSTilesDraggedWindows = MacOSWindowTiling.tilesDraggedWindows
+        var value = preferences.windowManagement
+        value.macOSDragTilingTurnedOffByBroccoli = false
+        preferences.windowManagement = value
     }
 
     private func applyWindowShortcutChange(

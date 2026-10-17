@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class WindowManagementTests: XCTestCase {
+    private static let simulatedScreen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+
     func testWindowPermissionUsesCurrentSystemSettingsName() {
         XCTAssertEqual(
             WindowManagementPermissionPresentation.settingsName(forMajorVersion: 26),
@@ -114,27 +116,106 @@ final class WindowManagementTests: XCTestCase {
             ),
             CGRect(x: -1440, y: 174, width: 1440, height: 876)
         )
-    }
-
-    func testOriginFittingShiftsRightAlignedOverflowInward() {
-        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
         XCTAssertEqual(
-            WindowScreenGeometry.originFittingSnappedFrame(
-                applied: CGRect(x: 840, y: 30, width: 845, height: 1_013),
-                screen: screen
+            WindowScreenGeometry.appKitFrame(
+                for: CGRect(x: -1440, y: 174, width: 1440, height: 876),
+                primaryScreenFrame: CGRect(x: 0, y: 0, width: 1680, height: 1050)
             ),
-            CGPoint(x: 835, y: 30)
+            CGRect(x: -1440, y: 0, width: 1440, height: 876)
         )
     }
 
-    func testOriginFittingLeavesLeftAlignedMaximizeInPlace() {
+    func testCenterPlacesBroccoliSettingsOnItsOwnScreen() {
+        let primary = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let secondary = CGRect(x: 1440, y: 0, width: 1440, height: 900)
+        let screens = [primary, secondary].map {
+            WindowScreenGeometry.accessibilityFrame(for: $0, primaryScreenFrame: primary)
+        }
+        let settings = CGRect(x: 1600, y: 40, width: 980, height: 680)
+
+        let centered = BroccoliWindowFramePlacement.appKitFrame(
+            for: .center,
+            current: settings,
+            accessibilityScreens: screens,
+            primaryScreenFrame: primary,
+            options: .standard
+        )
+
+        XCTAssertEqual(centered?.size, settings.size)
+        XCTAssertEqual(centered?.midX, secondary.midX)
+        XCTAssertEqual(centered?.midY, secondary.midY)
+        XCTAssertNil(
+            BroccoliWindowFramePlacement.appKitFrame(
+                for: .tileAll,
+                current: settings,
+                accessibilityScreens: screens,
+                primaryScreenFrame: primary,
+                options: .standard
+            )
+        )
+    }
+
+    func testLeftHalfCentersAFixedSizeSettingsWindowInTheLeftHalf() {
+        let screen = CGRect(x: 0, y: 0, width: 1_680, height: 1_050)
+        let accessibilityScreens = [WindowScreenGeometry.accessibilityFrame(for: screen, primaryScreenFrame: screen)]
+        func placed(width: CGFloat) -> CGRect? {
+            BroccoliWindowFramePlacement.appKitFrame(
+                for: .leftHalf,
+                current: CGRect(x: 900, y: 200, width: width, height: 732),
+                accessibilityScreens: accessibilityScreens,
+                primaryScreenFrame: screen,
+                options: .standard,
+                keepsSize: true
+            )
+        }
+
+        XCTAssertEqual(placed(width: 700), CGRect(x: 70, y: 159, width: 700, height: 732))
+        XCTAssertEqual(placed(width: 980)?.minX, 0, "Wider than the half, so it stays on screen")
+    }
+
+    func testAlignedRightHalfStaysAgainstTheRightEdge() {
+        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let rightHalf = CGRect(x: 840, y: 30, width: 840, height: 1_020)
+        XCTAssertEqual(
+            WindowScreenGeometry.frame(aligning: CGSize(width: 845, height: 1_013), to: rightHalf, screen: screen).origin,
+            CGPoint(x: 835, y: 30),
+            "A grid-snapped window that came out wider moves back onto the screen"
+        )
+        XCTAssertEqual(
+            WindowScreenGeometry.frame(aligning: CGSize(width: 833, height: 1_013), to: rightHalf, screen: screen).origin,
+            CGPoint(x: 847, y: 30),
+            "One that came out narrower stays flush with the right edge"
+        )
+    }
+
+    func testAlignedMaximizeKeepsTheTopLeftCorner() {
         let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
         XCTAssertEqual(
-            WindowScreenGeometry.originFittingSnappedFrame(
-                applied: CGRect(x: 0, y: 30, width: 1_681, height: 1_013),
+            WindowScreenGeometry.frame(aligning: CGSize(width: 1_681, height: 1_013), to: screen, screen: screen).origin,
+            CGPoint(x: 0, y: 30)
+        )
+    }
+
+    func testAlignedCenteredLayoutStaysCentered() {
+        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let almostMaximized = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        let placed = WindowScreenGeometry.frame(aligning: CGSize(width: 1_498, height: 910), to: almostMaximized, screen: screen)
+        XCTAssertEqual(placed.midX, almostMaximized.midX)
+        XCTAssertEqual(placed.midY, almostMaximized.midY)
+    }
+
+    func testAlignedStepResizeKeepsAnAxisTheApplicationWouldNotResize() {
+        let screen = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
+        let current = CGRect(x: 300, y: 200, width: 740, height: 600)
+        let larger = CGRect(x: 285, y: 185, width: 770, height: 630)
+        XCTAssertEqual(
+            WindowScreenGeometry.frame(
+                aligning: CGSize(width: 740, height: 630),
+                to: larger,
+                keepingUnchangedAxesOf: current,
                 screen: screen
             ),
-            CGPoint(x: 0, y: 30)
+            CGRect(x: 300, y: 185, width: 740, height: 630)
         )
     }
 
@@ -173,16 +254,20 @@ final class WindowManagementTests: XCTestCase {
         let preferences = WindowManagementPreferences()
         XCTAssertFalse(preferences.shortcutsEnabled)
         XCTAssertEqual(preferences.shortcuts, [
-            .leftHalf: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(cmdKey)),
-            .rightHalf: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(cmdKey)),
-            .topHalf: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | cmdKey)),
-            .bottomHalf: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(optionKey | cmdKey)),
-            .maximize: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(cmdKey)),
-            .minimized: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(cmdKey)),
-            .center: .init(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey | cmdKey)),
-            .nextDisplay: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(optionKey | cmdKey)),
-            .previousDisplay: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | cmdKey)),
+            .leftHalf: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey)),
+            .rightHalf: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey)),
+            .topHalf: .init(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(controlKey | optionKey)),
+            .bottomHalf: .init(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey)),
+            .maximize: .init(keyCode: UInt32(kVK_Return), modifiers: UInt32(controlKey | optionKey)),
+            .minimized: .init(keyCode: UInt32(kVK_Return), modifiers: UInt32(controlKey | optionKey | shiftKey)),
+            .center: .init(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey | optionKey)),
+            .nextDisplay: .init(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
+            .previousDisplay: .init(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         ])
+        let reserved = MacOSReservedShortcuts.resolve(symbolicHotKeys: nil)
+        for configuration in preferences.shortcuts.values {
+            XCTAssertNil(reserved.owner(of: configuration), "\(configuration.displayName) belongs to macOS")
+        }
 
         let encoded = try PropertyListEncoder().encode(preferences)
         let decoded = try PropertyListDecoder().decode(
@@ -277,12 +362,149 @@ final class WindowManagementTests: XCTestCase {
     }
 
     func testEveryWindowLayoutIsASearchableAccessibilityAction() {
-        for action in WindowAction.allCases {
+        for action in WindowAction.available {
             let definition = ActionRegistry.definition(id: action.actionID)
             XCTAssertEqual(definition?.title, action.title)
             XCTAssertEqual(definition?.permission, .accessibility)
             XCTAssertTrue(ActionRegistry.defaultEnabledActionIDs.contains(action.actionID))
         }
+    }
+
+    /// Arranging every window, automatic tiling, custom layouts, and workspaces are hidden: not
+    /// searchable, not runnable, and their saved shortcuts neither register nor block others.
+    func testHiddenWindowFeaturesStayOutOfTheWay() throws {
+        XCTAssertEqual(
+            Set(WindowAction.allCases.filter { !WindowAction.available.contains($0) }),
+            [.tileAll, .cascadeAll, .rotateLayout, .retileWindows, .toggleFloating]
+        )
+        XCTAssertNil(ActionRegistry.definition(id: WindowAction.tileAll.actionID))
+
+        let manager = WindowManager()
+        let layout = CustomWindowLayout(name: "Left Wide")
+        manager.customLayoutProvider = { _ in layout }
+        XCTAssertNil(manager.request(for: .layout(layout.id)))
+        XCTAssertNil(manager.request(for: .action(.tileAll)))
+        XCTAssertEqual(manager.request(for: .action(.leftHalf)), .action(.leftHalf))
+
+        var preferences = WindowManagementPreferences()
+        let shortcut = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(controlKey | optionKey))
+        preferences.setShortcut(shortcut, for: .tileAll)
+        XCTAssertNil(preferences.owner(of: shortcut, excluding: .action(.leftHalf)))
+        XCTAssertFalse(preferences.availableShortcutTargets.contains(.action(.tileAll)))
+    }
+
+    func testMacOSShortcutsIncludeDefaultsTheUserNeverChanged() {
+        let reserved = MacOSReservedShortcuts.resolve(symbolicHotKeys: nil)
+        let screenshot = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_4), modifiers: UInt32(shiftKey | cmdKey))
+        XCTAssertEqual(reserved.owner(of: screenshot), "screenshots")
+        let forceQuit = HotKeyConfiguration(keyCode: UInt32(kVK_Escape), modifiers: UInt32(optionKey | cmdKey))
+        XCTAssertEqual(reserved.owner(of: forceQuit), "Force Quit")
+        let leftHalf = HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey))
+        XCTAssertNil(reserved.owner(of: leftHalf))
+    }
+
+    /// Keyboard settings stores only what the user changed: a turned-off shortcut is free and
+    /// a moved one is reserved at its new keys.
+    func testMacOSShortcutsFollowTheUsersKeyboardSettings() {
+        let reserved = MacOSReservedShortcuts.resolve(symbolicHotKeys: [
+            "30": ["enabled": false],
+            "64": ["enabled": true, "value": ["parameters": [32, 49, 1 << 19], "type": "standard"]],
+            "60": ["enabled": false, "value": ["parameters": [32, 49, 1 << 18], "type": "standard"]],
+        ])
+        XCTAssertNil(reserved.owner(of: HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_4), modifiers: UInt32(shiftKey | cmdKey))))
+        XCTAssertEqual(reserved.owner(of: HotKeyConfiguration(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))), "Spotlight")
+        XCTAssertNil(reserved.owner(of: HotKeyConfiguration(keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey))))
+        XCTAssertNil(reserved.owner(of: HotKeyConfiguration(keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey))))
+        XCTAssertEqual(
+            reserved.owner(of: HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_3), modifiers: UInt32(shiftKey | cmdKey))),
+            "screenshots"
+        )
+    }
+
+    /// The shortcuts saved on the development Mac when the plan was made: the old Command
+    /// defaults plus extras on Finder's Home and Close Window keys.
+    func testRecommendedShortcutsReplaceConflictingOnes() {
+        func key(_ code: Int, _ modifiers: Int) -> HotKeyConfiguration {
+            HotKeyConfiguration(keyCode: UInt32(code), modifiers: UInt32(modifiers))
+        }
+        var preferences = WindowManagementPreferences(
+            shortcutsEnabled: true,
+            shortcuts: [
+                .leftHalf: key(kVK_LeftArrow, cmdKey),
+                .rightHalf: key(kVK_RightArrow, cmdKey),
+                .maximize: key(kVK_UpArrow, cmdKey),
+                .minimized: key(kVK_DownArrow, cmdKey),
+                .topHalf: key(kVK_UpArrow, shiftKey | cmdKey),
+                .bottomHalf: key(kVK_DownArrow, shiftKey | cmdKey),
+                .center: key(kVK_ANSI_C, optionKey | cmdKey),
+                .nextDisplay: key(kVK_RightArrow, optionKey | cmdKey),
+                .previousDisplay: key(kVK_LeftArrow, optionKey | cmdKey),
+                .maximizeHeight: key(kVK_ANSI_H, shiftKey | cmdKey),
+                .maximizeWidth: key(kVK_ANSI_W, shiftKey | cmdKey),
+                .makeLarger: key(kVK_ANSI_Equal, shiftKey | cmdKey),
+                .makeSmaller: key(kVK_ANSI_Minus, shiftKey | cmdKey),
+            ],
+            unassignedShortcuts: [.restore, .topLeftQuarter]
+        )
+
+        preferences.useRecommendedShortcuts(reserved: MacOSReservedShortcuts.resolve(symbolicHotKeys: nil))
+
+        XCTAssertTrue(preferences.shortcutsEnabled)
+        for action in [WindowAction.leftHalf, .rightHalf, .topHalf, .bottomHalf, .maximize, .minimized, .center, .nextDisplay, .previousDisplay] {
+            XCTAssertEqual(preferences.shortcut(for: action), action.defaultShortcut, "\(action)")
+        }
+        XCTAssertEqual(preferences.shortcut(for: .maximizeHeight), key(kVK_UpArrow, controlKey | optionKey | shiftKey))
+        XCTAssertEqual(preferences.shortcut(for: .maximizeWidth), key(kVK_RightArrow, controlKey | optionKey | shiftKey))
+        XCTAssertEqual(preferences.shortcut(for: .makeLarger), key(kVK_ANSI_Equal, controlKey | optionKey))
+        XCTAssertEqual(preferences.shortcut(for: .makeSmaller), key(kVK_ANSI_Minus, controlKey | optionKey))
+        XCTAssertNil(preferences.shortcut(for: .restore), "Left unassigned")
+        XCTAssertNil(preferences.shortcut(for: .topLeftQuarter))
+    }
+
+    func testRecommendedShortcutsRemoveOnesMacOSKeeps() {
+        let screenshot = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_4), modifiers: UInt32(shiftKey | cmdKey))
+        var preferences = WindowManagementPreferences()
+        preferences.setShortcut(screenshot, for: .topLeftQuarter)
+
+        preferences.useRecommendedShortcuts(reserved: MacOSReservedShortcuts.resolve(symbolicHotKeys: nil))
+
+        XCTAssertNil(preferences.shortcut(for: .topLeftQuarter))
+    }
+
+    func testRegistrationSummaryNamesShortcutsMacOSKeeps() {
+        XCTAssertEqual(
+            WindowShortcutRegistrationSummary.message(failedTitles: [], reserved: [("Maximize Height", "screenshots")]),
+            "macOS keeps the Maximize Height shortcut for screenshots."
+        )
+        XCTAssertEqual(
+            WindowShortcutRegistrationSummary.message(
+                failedTitles: ["Left Half"],
+                reserved: [("Maximize Height", "screenshots"), ("Restore Previous Size", "Spotlight")]
+            ),
+            "The Left Half shortcut is already in use or unavailable. macOS keeps 2 of these shortcuts for itself: Maximize Height, Restore Previous Size."
+        )
+    }
+
+    func testMacOSTilingChoiceSurvivesSavingAndOlderSettingsDefaultToOff() throws {
+        var preferences = WindowManagementPreferences()
+        preferences.macOSDragTilingTurnedOffByBroccoli = true
+        let decoded = try PropertyListDecoder().decode(
+            WindowManagementPreferences.self,
+            from: PropertyListEncoder().encode(preferences)
+        )
+        XCTAssertTrue(decoded.macOSDragTilingTurnedOffByBroccoli)
+
+        let older = try PropertyListDecoder().decode(
+            WindowManagementPreferences.self,
+            from: PropertyListEncoder().encode(["shortcutsEnabled": true])
+        )
+        XCTAssertFalse(older.macOSDragTilingTurnedOffByBroccoli)
+    }
+
+    func testVoiceOverKeysAreControlAndOptionTogether() {
+        XCTAssertTrue(HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey)).usesVoiceOverKeys)
+        XCTAssertTrue(HotKeyConfiguration(keyCode: UInt32(kVK_Return), modifiers: UInt32(controlKey | optionKey | shiftKey)).usesVoiceOverKeys)
+        XCTAssertFalse(HotKeyConfiguration(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | cmdKey)).usesVoiceOverKeys)
     }
 
     func testWindowActionTargetsFrontmostExternalApplication() {
@@ -434,6 +656,42 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(mainWindowReadCount, 0)
     }
 
+    /// A floating panel the user is acting on, such as an inspector, is moved like a window.
+    func testWindowLookupAcceptsAFocusedFloatingPanel() throws {
+        let application = AXUIElementCreateApplication(100)
+        let panel = AXUIElementCreateApplication(200)
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { element, attribute in
+                if CFEqual(element, application), CFEqual(attribute, kAXFocusedWindowAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: panel)
+                }
+                if CFEqual(attribute, kAXRoleAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: kAXWindowRole as CFString)
+                }
+                if CFEqual(attribute, kAXSubroleAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: kAXFloatingWindowSubrole as CFString)
+                }
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            }
+        )
+
+        XCTAssertTrue(CFEqual(try operation.resolveFocusedWindow(in: application), panel))
+    }
+
+    func testAlmostMaximizeCentersBroccoliSettingsInsteadOfMinimizingIt() {
+        let screen = CGRect(x: 0, y: 0, width: 1_680, height: 1_050)
+        let placed = BroccoliWindowFramePlacement.appKitFrame(
+            for: .minimized,
+            current: CGRect(x: 100, y: 100, width: 980, height: 680),
+            accessibilityScreens: [WindowScreenGeometry.accessibilityFrame(for: screen, primaryScreenFrame: screen)],
+            primaryScreenFrame: screen,
+            options: .standard,
+            keepsSize: true
+        )
+        XCTAssertEqual(placed?.size, CGSize(width: 980, height: 680))
+        XCTAssertEqual(placed?.midX, screen.midX)
+    }
+
     func testWindowLookupRejectsFocusedSheetWithoutResizingMainWindow() throws {
         let application = AXUIElementCreateApplication(100)
         let sheet = AXUIElementCreateApplication(200)
@@ -549,64 +807,50 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(retryCount, 1)
     }
 
-    func testFrameWriteRetriesWhenDockTransitionTemporarilyClampsTheSize() throws {
-        let window = AXUIElementCreateApplication(100)
-        let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
-        var appliedPosition = CGPoint(x: 120, y: 90)
-        var appliedSize = CGSize(width: 1_200, height: 800)
+    /// A window that is still launching can ignore the first size request. It must get the
+    /// layout, not be mistaken for a fixed-size window and centered at its old size.
+    func testWindowThatIgnoresOneWidthRequestStillGetsTheLayout() throws {
+        let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
+        let target = CGRect(x: 0, y: 30, width: 840, height: 1_020)
+        var applied = original
         var sizeWriteCount = 0
-        var settlementWaitCount = 0
-
         let operation = WindowAccessibilityOperation(
             attributeReader: { _, attribute in
                 if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var value = appliedPosition
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgPoint, &value)
-                    )
+                    var value = applied.origin
+                    return AccessibilityAttributeRead(error: .success, value: AXValueCreate(.cgPoint, &value))
                 }
                 if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var value = appliedSize
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgSize, &value)
-                    )
+                    var value = applied.size
+                    return AccessibilityAttributeRead(error: .success, value: AXValueCreate(.cgSize, &value))
                 }
                 return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
             },
             attributeWriter: { _, attribute, value in
                 let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
                 if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    AXValueGetValue(accessibilityValue, .cgPoint, &appliedPosition)
+                    AXValueGetValue(accessibilityValue, .cgPoint, &applied.origin)
                     return .success
                 }
                 if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var requestedSize = CGSize.zero
-                    AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
                     sizeWriteCount += 1
-                    appliedSize = sizeWriteCount == 1
-                        ? CGSize(width: requestedSize.width, height: requestedSize.height - 80)
-                        : requestedSize
+                    if sizeWriteCount > 1 {
+                        AXValueGetValue(accessibilityValue, .cgSize, &applied.size)
+                    }
                     return .success
                 }
                 return .attributeUnsupported
             },
-            retryWaiter: { _ in
-                XCTFail("Successful accessibility reads and writes must not use error retries")
-            },
-            frameSettlementWaiter: { _ in settlementWaitCount += 1 }
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
         )
 
-        try operation.setFrame(target, of: window)
+        try operation.setFrame(target, of: AXUIElementCreateApplication(100))
 
-        XCTAssertEqual(appliedPosition, target.origin)
-        XCTAssertEqual(appliedSize, target.size)
-        XCTAssertEqual(sizeWriteCount, 2)
-        XCTAssertEqual(settlementWaitCount, 7)
+        XCTAssertEqual(applied, target)
     }
 
-    func testFrameWriteReportsPersistentClampInsteadOfReturningSuccess() throws {
+    func testFrameWriteCentersAPersistentlyClampedWindowAtItsOwnSize() throws {
         let window = AXUIElementCreateApplication(100)
         let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
         let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
@@ -652,15 +896,88 @@ final class WindowManagementTests: XCTestCase {
             frameSettlementWaiter: { _ in }
         )
 
-        XCTAssertThrowsError(try operation.setFrame(target, of: window)) { error in
-            guard case let WindowManagementError.frameRejected(expected, actual) = error else {
-                return XCTFail("Expected a rejected frame, got \(error)")
-            }
-            XCTAssertEqual(expected, target)
-            XCTAssertEqual(actual.size, rejectedSize)
+        try operation.setFrame(target, of: window)
+
+        XCTAssertEqual(appliedSize, original.size)
+        XCTAssertEqual(appliedPosition, CGPoint(x: 240, y: 140), "Centered in the requested frame")
+        XCTAssertEqual(sizeWriteCount, 4, "The layout before and after the move, then its own size the same way")
+    }
+
+    /// A newer press replaces a request that has not written anything yet.
+    func testCancelledRequestWritesNothing() {
+        let window = SimulatedWindow(frame: CGRect(x: 120, y: 90, width: 740, height: 600), screen: Self.simulatedScreen)
+        XCTAssertThrowsError(
+            try window.makeOperation().setFrame(
+                CGRect(x: 0, y: 30, width: 840, height: 1_020),
+                of: window.element,
+                from: window.frame,
+                screen: Self.simulatedScreen,
+                incremental: false,
+                deadline: ProcessInfo.processInfo.systemUptime + 4,
+                checkCancellation: { throw CancellationError() }
+            )
+        ) { error in
+            XCTAssertTrue(error is CancellationError)
         }
-        XCTAssertEqual(CGRect(origin: appliedPosition, size: appliedSize), original)
-        XCTAssertEqual(sizeWriteCount, 3)
+        XCTAssertEqual(window.writes, [])
+    }
+
+    /// Once a request starts writing it finishes, so the window is never left half-placed or
+    /// put back where it started.
+    func testRequestThatStartedWritingFinishes() throws {
+        let window = SimulatedWindow(frame: CGRect(x: 120, y: 90, width: 740, height: 600), screen: Self.simulatedScreen)
+        let target = CGRect(x: 0, y: 30, width: 840, height: 1_020)
+        var checks = 0
+        try window.makeOperation().setFrame(
+            target,
+            of: window.element,
+            from: window.frame,
+            screen: Self.simulatedScreen,
+            incremental: false,
+            deadline: ProcessInfo.processInfo.systemUptime + 4,
+            checkCancellation: {
+                checks += 1
+                if checks > 1 { throw CancellationError() }
+            }
+        )
+        XCTAssertEqual(window.frame, target)
+    }
+
+    /// Accessibility answers for Broccoli's own windows on the worker's thread, where AppKit
+    /// traps a frame change. The worker must refuse instead of crashing Broccoli.
+    func testWindowWorkerNeverTargetsBroccolisOwnWindows() {
+        let ownProcess = ProcessInfo.processInfo.processIdentifier
+        let operation = WindowAccessibilityOperation(
+            attributeReader: { _, attribute in
+                if CFEqual(attribute, kAXFocusedApplicationAttribute as CFString) {
+                    return AccessibilityAttributeRead(error: .success, value: AXUIElementCreateApplication(ownProcess))
+                }
+                XCTFail("Read \(attribute) from Broccoli's own process")
+                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
+            },
+            attributeWriter: { _, attribute, _ in
+                XCTFail("Wrote \(attribute) to Broccoli's own process")
+                return .success
+            },
+            messagingTimeoutSetter: { _, _ in .success },
+            retryWaiter: { _ in },
+            frameSettlementWaiter: { _ in }
+        )
+
+        for targetPID in [ownProcess, nil] {
+            XCTAssertThrowsError(
+                try operation.perform(
+                    .leftHalf,
+                    targetPID: targetPID,
+                    screens: [CGRect(x: 0, y: 30, width: 1_680, height: 1_020)],
+                    checkCancellation: {}
+                )
+            ) { error in
+                guard case WindowManagementError.noWindow = error else {
+                    return XCTFail("Expected noWindow, got \(error)")
+                }
+            }
+        }
     }
 
     func testFrameWriteSuspendsEnhancedUserInterfaceThenRestoresIt() throws {
@@ -690,7 +1007,7 @@ final class WindowManagementTests: XCTestCase {
     }
 
     func testFrameWriteRestoresEnhancedUserInterfaceWhenFrameIsRejected() {
-        let original = CGRect(x: 84, y: 81, width: 1_512, height: 918)
+        let original = CGRect(x: 120, y: 90, width: 1_200, height: 800)
         let target = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
         let probe = EnhancedUserInterfaceProbe(frame: original, enhancedUserInterface: true)
         probe.rejectsFrames = true
@@ -733,7 +1050,7 @@ final class WindowManagementTests: XCTestCase {
 
             XCTAssertNoThrow(try operation.setFrame(item.target, of: AXUIElementCreateApplication(100)))
             XCTAssertEqual(probe.appliedFrame, item.snapped)
-            XCTAssertEqual(probe.sizeWriteCount, 1)
+            XCTAssertEqual(probe.sizeWriteCount, 2, "Before and after the move")
         }
     }
 
@@ -749,7 +1066,7 @@ final class WindowManagementTests: XCTestCase {
 
         XCTAssertEqual(probe.appliedFrame.origin, CGPoint(x: 835, y: 30))
         XCTAssertEqual(probe.appliedFrame.size, snapped.size)
-        XCTAssertEqual(probe.sizeWriteCount, 1)
+        XCTAssertEqual(probe.sizeWriteCount, 2)
     }
 
     func testFrameWriteKeepsCompleteSnapInsteadOfRollingBack() throws {
@@ -764,72 +1081,7 @@ final class WindowManagementTests: XCTestCase {
         XCTAssertEqual(probe.sizeWriteCount, 2)
     }
 
-    func testFrameWriteMovesExpandedAxisToDynamicScreenOriginBeforeSizing() throws {
-        let window = AXUIElementCreateApplication(100)
-        // Use a second MacBook-sized display instead of the development Mac's 1680 x 1050
-        // geometry. The behavior must derive entirely from the supplied target frame.
-        let target = CGRect(x: 756, y: 26, width: 756, height: 956)
-        let original = CGRect(x: 76, y: 74, width: 1_360, height: 860)
-        var appliedFrame = original
-        var pendingPosition: CGPoint?
-        var positionWrites: [CGPoint] = []
-
-        let operation = WindowAccessibilityOperation(
-            attributeReader: { _, attribute in
-                if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var value = appliedFrame.origin
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgPoint, &value)
-                    )
-                }
-                if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var value = appliedFrame.size
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgSize, &value)
-                    )
-                }
-                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
-            },
-            attributeWriter: { _, attribute, value in
-                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
-                if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var requestedPosition = CGPoint.zero
-                    AXValueGetValue(accessibilityValue, .cgPoint, &requestedPosition)
-                    positionWrites.append(requestedPosition)
-                    pendingPosition = requestedPosition
-                    return .success
-                }
-                if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var requestedSize = CGSize.zero
-                    AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
-                    let availableHeight = target.maxY - appliedFrame.minY
-                    appliedFrame.size = CGSize(
-                        width: requestedSize.width,
-                        height: min(requestedSize.height, availableHeight)
-                    )
-                    return .success
-                }
-                return .attributeUnsupported
-            },
-            retryWaiter: { _ in },
-            frameSettlementWaiter: { _ in
-                if let pendingPosition {
-                    appliedFrame.origin = pendingPosition
-                }
-                pendingPosition = nil
-            }
-        )
-
-        try operation.setFrame(target, of: window)
-
-        XCTAssertEqual(appliedFrame, target)
-        XCTAssertEqual(positionWrites.first, CGPoint(x: original.minX, y: target.minY))
-        XCTAssertEqual(positionWrites.last, target.origin)
-    }
-
-    func testFrameWriteShrinksBeforeApplyingFinalPosition() throws {
+    func testFrameWriteSizesBeforeAndAfterTheMove() throws {
         let window = AXUIElementCreateApplication(100)
         let target = CGRect(x: 84, y: 81, width: 1_512, height: 918)
         var appliedFrame = CGRect(x: 0, y: 30, width: 1_680, height: 1_020)
@@ -874,130 +1126,7 @@ final class WindowManagementTests: XCTestCase {
         try operation.setFrame(target, of: window)
 
         XCTAssertEqual(appliedFrame, target)
-        XCTAssertEqual(writes, ["size", "position"])
-    }
-
-    func testFrameWriteAlignsLeftEdgeBeforeExpandingWidth() throws {
-        let window = AXUIElementCreateApplication(100)
-        let target = CGRect(x: 0, y: 30, width: 1_680, height: 510)
-        var appliedFrame = CGRect(x: 84, y: 81, width: 1_512, height: 918)
-        var pendingPosition: CGPoint?
-
-        let operation = WindowAccessibilityOperation(
-            attributeReader: { _, attribute in
-                if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var value = appliedFrame.origin
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgPoint, &value)
-                    )
-                }
-                if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var value = appliedFrame.size
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgSize, &value)
-                    )
-                }
-                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
-            },
-            attributeWriter: { _, attribute, value in
-                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
-                if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var requestedPosition = CGPoint.zero
-                    AXValueGetValue(accessibilityValue, .cgPoint, &requestedPosition)
-                    pendingPosition = requestedPosition
-                    return .success
-                }
-                if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var requestedSize = CGSize.zero
-                    AXValueGetValue(accessibilityValue, .cgSize, &requestedSize)
-                    appliedFrame.size = CGSize(
-                        width: min(requestedSize.width, 1_680 - appliedFrame.minX),
-                        height: requestedSize.height
-                    )
-                    return .success
-                }
-                return .attributeUnsupported
-            },
-            retryWaiter: { _ in },
-            frameSettlementWaiter: { _ in
-                if let pendingPosition {
-                    appliedFrame.origin = pendingPosition
-                }
-                pendingPosition = nil
-            }
-        )
-
-        try operation.setFrame(target, of: window)
-
-        XCTAssertEqual(appliedFrame, target)
-    }
-
-    func testFrameWriteWaitsForTargetOwnedAnimationBeforeReapplying() throws {
-        let window = AXUIElementCreateApplication(100)
-        let target = CGRect(x: 0, y: 30, width: 840, height: 1_020)
-        let animatedFrames = [
-            CGRect(x: 24, y: 54, width: 1_632, height: 972),
-            CGRect(x: 18, y: 50, width: 1_400, height: 980),
-            CGRect(x: 12, y: 46, width: 1_100, height: 988),
-            CGRect(x: 24, y: 54, width: 1_632, height: 972),
-            CGRect(x: 24, y: 54, width: 1_632, height: 972),
-            CGRect(x: 24, y: 54, width: 1_632, height: 972),
-        ]
-        var appliedFrame = CGRect(x: 84, y: 81, width: 1_512, height: 918)
-        var sizeWriteCount = 0
-        var animationReadIndex = 0
-
-        let operation = WindowAccessibilityOperation(
-            attributeReader: { _, attribute in
-                if CFEqual(attribute, kAXPositionAttribute as CFString),
-                   sizeWriteCount == 1 {
-                    appliedFrame = animatedFrames[min(animationReadIndex, animatedFrames.count - 1)]
-                    animationReadIndex += 1
-                }
-                if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var value = appliedFrame.origin
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgPoint, &value)
-                    )
-                }
-                if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var value = appliedFrame.size
-                    return AccessibilityAttributeRead(
-                        error: .success,
-                        value: AXValueCreate(.cgSize, &value)
-                    )
-                }
-                return AccessibilityAttributeRead(error: .attributeUnsupported, value: nil)
-            },
-            attributeWriter: { _, attribute, value in
-                let accessibilityValue = unsafeDowncast(value, to: AXValue.self)
-                if CFEqual(attribute, kAXPositionAttribute as CFString) {
-                    var position = CGPoint.zero
-                    AXValueGetValue(accessibilityValue, .cgPoint, &position)
-                    appliedFrame.origin = position
-                    return .success
-                }
-                if CFEqual(attribute, kAXSizeAttribute as CFString) {
-                    var size = CGSize.zero
-                    AXValueGetValue(accessibilityValue, .cgSize, &size)
-                    appliedFrame.size = size
-                    sizeWriteCount += 1
-                    return .success
-                }
-                return .attributeUnsupported
-            },
-            retryWaiter: { _ in },
-            frameSettlementWaiter: { _ in }
-        )
-
-        try operation.setFrame(target, of: window)
-
-        XCTAssertEqual(appliedFrame, target)
-        XCTAssertEqual(sizeWriteCount, 2)
-        XCTAssertGreaterThanOrEqual(animationReadIndex, 5)
+        XCTAssertEqual(writes, ["size", "position", "size"])
     }
 
     func testFrameWriteAcceptsHarmlessWindowServerPositionNormalization() throws {

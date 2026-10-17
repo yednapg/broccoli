@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var catalogService: ApplicationCatalogService!
     private var systemSettingsCatalogService: SystemSettingsCatalogService!
     private var effectiveAppearanceObservation: NSKeyValueObservation?
+    private var voiceOverObservation: NSKeyValueObservation?
     private weak var settingsWindow: NSWindow?
     private var settingsWindowCloseObserver: NSObjectProtocol?
     private var openSettingsAction: (() -> Void)?
@@ -128,7 +129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             clipboardMonitor: nil
         )
         coordinator.onResolveWindowTarget = { [weak self] preferredApplication in
-            self?.resolveWindowActionTarget(preferredApplication: preferredApplication)
+            self?.resolveWindowActionTarget(preferredApplication)
+        }
+        coordinator.onPlaceOwnWindow = { [weak self] action in
+            self?.placeSettingsWindow(action) ?? false
         }
         windowManager.layoutOptionsProvider = { [weak self] in
             self?.preferences.windowManagement.layoutOptions ?? .standard
@@ -184,6 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             onWindowShortcutsEnabledChanged: { [weak self] enabled in
                 self?.setWindowShortcutsEnabled(enabled)
             },
+            onUseRecommendedWindowShortcuts: { [weak self] in
+                self?.useRecommendedWindowShortcuts()
+            },
             onCaptureWorkspace: { [weak self] name in
                 await self?.captureWorkspace(named: name)
             },
@@ -201,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         observePreferences()
         observeRunningApplications()
         observeDisplayPreferences()
+        observeWindowManagementEnvironment()
         catalogService.start()
         systemSettingsCatalogService.start()
         configureClipboardIfNeeded()
@@ -484,6 +492,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         })
     }
 
+    /// Window features depend on Accessibility access and VoiceOver as well as preferences.
+    /// Access granted while Broccoli runs starts drag snapping without a relaunch.
+    private func observeWindowManagementEnvironment() {
+        voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.windowShortcutRegistrationError = self.registerWindowShortcutsIfEnabled()
+            }
+        }
+        distributedObservers.append(DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.accessibility.api"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // macOS posts this before the new access state is readable.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                self.applyWindowManagementPreferences(self.preferences.windowManagement)
+            }
+        })
+        workspaceObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.applyWindowManagementPreferences(self.preferences.windowManagement)
+            }
+        })
+    }
+
     private func updateApplicationIcon() {
         applicationIconController.restoreBundleIcon()
     }
@@ -513,18 +554,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// Registers every assigned window shortcut independently. One conflicting shortcut must
-    /// not take the others down with it; the returned message names the ones that failed.
+    /// not take the others down with it; the returned message names the ones that failed and
+    /// the ones macOS keeps for itself, which are left unregistered.
     private func registerWindowShortcuts() -> String? {
         let windowPreferences = preferences.windowManagement
-        let targets = windowPreferences.shortcutTargets
+        let reserved = MacOSReservedShortcuts.current
+        let targets = windowPreferences.availableShortcutTargets
         let currentBindingIDs = Set(targets.map(\.bindingID))
         for staleBindingID in registeredWindowBindingIDs.subtracting(currentBindingIDs) {
             hotKey.unregister(staleBindingID)
         }
         registeredWindowBindingIDs = []
         var failedTitles: [String] = []
+        var reservedTargets: [(title: String, owner: String)] = []
         for target in targets {
             guard let configuration = windowPreferences.shortcut(for: target) else {
+                hotKey.unregister(target.bindingID)
+                continue
+            }
+            if let owner = reserved.owner(of: configuration) {
+                hotKey.unregister(target.bindingID)
+                reservedTargets.append((windowPreferences.title(for: target), owner))
+                continue
+            }
+            guard !isPausedForVoiceOver(configuration) else {
                 hotKey.unregister(target.bindingID)
                 continue
             }
@@ -536,16 +589,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 failedTitles.append(windowPreferences.title(for: target))
             }
         }
-        return WindowShortcutRegistrationSummary.message(failedTitles: failedTitles)
+        return WindowShortcutRegistrationSummary.message(failedTitles: failedTitles, reserved: reservedTargets)
     }
 
     private func registerWindowShortcut(
         _ target: WindowShortcutTarget,
         configuration: HotKeyConfiguration
     ) throws {
-        try hotKey.register(configuration, for: target.bindingID) { [weak self] in
+        let repeatsWhileHeld = if case .action(let action) = target { action.isIncremental } else { false }
+        try hotKey.register(configuration, for: target.bindingID, repeatsWhileHeld: repeatsWhileHeld) { [weak self] in
             self?.performWindowTarget(target)
         }
+    }
+
+    /// Window shortcuts that use VoiceOver's keys step aside while it runs.
+    private func isPausedForVoiceOver(_ configuration: HotKeyConfiguration) -> Bool {
+        NSWorkspace.shared.isVoiceOverEnabled && configuration.usesVoiceOverKeys
+    }
+
+    private func useRecommendedWindowShortcuts() -> String? {
+        var value = preferences.windowManagement
+        value.useRecommendedShortcuts(reserved: MacOSReservedShortcuts.current)
+        preferences.windowManagement = value
+        let message = registerWindowShortcutsIfEnabled()
+        windowShortcutRegistrationError = message
+        return message
     }
 
     private func unregisterWindowShortcuts() {
@@ -571,6 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         dragSnapController.isEnabled = windowPreferences.dragToSnapEnabled
             && AccessibilityPermissionChecker.isTrusted
         tilingController.isEnabled = windowPreferences.automaticTilingEnabled
+            && WindowActionGroup.tiling.isAvailable
             && AccessibilityPermissionChecker.isTrusted
         tilingController.scheduleRetile()
         updateWindowShortcutPause(for: NSWorkspace.shared.frontmostApplication)
@@ -602,12 +671,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if configuration == preferences.hotKey {
                 return .rejected("That shortcut already opens Broccoli.")
             }
+            if let owner = MacOSReservedShortcuts.current.owner(of: configuration) {
+                return .rejected("macOS uses that shortcut for \(owner).")
+            }
             if let owner = preferences.windowManagement.owner(of: configuration, excluding: target) {
                 return .rejected("That shortcut is already used by \(owner).")
             }
         }
         if preferences.windowManagement.shortcutsEnabled, !windowShortcutsPausedForIgnoredApp {
-            if let configuration {
+            if let configuration, !isPausedForVoiceOver(configuration) {
                 do {
                     try registerWindowShortcut(target, configuration: configuration)
                 } catch {
@@ -637,7 +709,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             NSSound.beep()
             return
         }
-        let targetPID = resolveWindowActionTarget(preferredApplication: frontmost)
+        // While Broccoli is in front, the shortcut is for its own window. It must never fall
+        // through to the application that was in front before.
+        if frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            if case .action(let action) = target, placeSettingsWindow(action) { return }
+            NSSound.beep()
+            return
+        }
+        guard let targetPID = resolveWindowActionTarget(frontmost) else {
+            NSSound.beep()
+            return
+        }
         // A layout is latest-request-wins in the shared Accessibility worker. Cancel the
         // awaiting task as well so an older hot-key action cannot report or restore state after
         // a newer layout. Step actions queue instead, so each repeated press still applies.
@@ -706,16 +788,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         lastExternalApplication = nil
     }
 
-    private func resolveWindowActionTarget(
-        preferredApplication: NSRunningApplication?
-    ) -> pid_t? {
-        let frontmostApplication = NSWorkspace.shared.frontmostApplication
-        return WindowActionTargetResolver.processIdentifier(
-            candidates: [
-                windowActionTargetCandidate(for: preferredApplication),
-                windowActionTargetCandidate(for: frontmostApplication),
-                windowActionTargetCandidate(for: lastExternalApplication),
-            ].compactMap { $0 },
+    /// Places Broccoli's Settings window for a window action taken while Broccoli is in front.
+    /// Settings cannot be resized, so it keeps its size and is centered in the layout.
+    private func placeSettingsWindow(_ action: WindowAction) -> Bool {
+        guard let settingsWindow,
+              settingsWindow.isVisible,
+              !settingsWindow.isMiniaturized,
+              let primaryScreen = NSScreen.screens.first else { return false }
+        let original = settingsWindow.frame
+        let screens = windowManager.screenFrames()
+        func frame(keepsSize: Bool) -> CGRect? {
+            BroccoliWindowFramePlacement.appKitFrame(
+                for: action,
+                current: original,
+                accessibilityScreens: screens,
+                primaryScreenFrame: primaryScreen.frame,
+                options: preferences.windowManagement.layoutOptions,
+                keepsSize: keepsSize
+            )
+        }
+        let keepsSize = !settingsWindow.styleMask.contains(.resizable)
+        guard let requested = frame(keepsSize: keepsSize) else { return false }
+        settingsWindow.setFrame(requested, display: true, animate: false)
+        // SwiftUI can hold the scene at its content size while the window reports itself as
+        // resizable. Then keep that size, centered, as for any window that refuses a size.
+        let applied = settingsWindow.frame.size
+        if !keepsSize,
+           abs(applied.width - requested.width) > 1 || abs(applied.height - requested.height) > 1,
+           let centered = frame(keepsSize: true) {
+            settingsWindow.setFrame(centered, display: true, animate: false)
+        }
+        return true
+    }
+
+    /// The application in front is the only target. Falling back to an earlier application
+    /// would move a window the user is not looking at.
+    private func resolveWindowActionTarget(_ frontmost: NSRunningApplication?) -> pid_t? {
+        WindowActionTargetResolver.processIdentifier(
+            candidates: [windowActionTargetCandidate(for: frontmost)].compactMap { $0 },
             broccoliBundleIdentifier: Bundle.main.bundleIdentifier,
             broccoliProcessIdentifier: ProcessInfo.processInfo.processIdentifier
         )

@@ -125,13 +125,15 @@ final class WindowLayoutTests: XCTestCase {
         for action in WindowAction.allCases {
             XCTAssertTrue(action.group.actions.contains(action))
             XCTAssertFalse(action.aliases.isEmpty, "\(action) needs search keywords")
+            XCTAssertEqual(WindowAction(actionID: action.actionID), action)
+            XCTAssertEqual(ActionRegistry.definition(id: action.actionID) != nil, action.group.isAvailable)
+        }
+        for action in WindowAction.available {
             XCTAssertNotEqual(
                 NativeIconCatalog.resolvedActionSymbolName(forActionID: action.actionID),
                 "bolt",
                 "\(action) fell back to the generic action symbol"
             )
-            XCTAssertEqual(WindowAction(actionID: action.actionID), action)
-            XCTAssertNotNil(ActionRegistry.definition(id: action.actionID))
         }
         XCTAssertNil(WindowAction(actionID: "audio.toggleMute"))
     }
@@ -287,17 +289,59 @@ final class WindowLayoutTests: XCTestCase {
         let target = CGRect(x: 100, y: 100, width: 370, height: 270)
         let probe = MinimumWidthProbe(frame: original, minimumWidth: 400)
 
-        XCTAssertNoThrow(try probe.makeOperation().setFrame(target, of: AXUIElementCreateApplication(100), acceptsPartialAxis: true))
+        XCTAssertNoThrow(try probe.makeOperation().setFrame(target, of: AXUIElementCreateApplication(100), incremental: true))
         XCTAssertEqual(probe.appliedFrame, CGRect(x: 100, y: 100, width: 400, height: 270))
     }
 
-    func testLayoutStillRollsBackAHalfAppliedFrame() {
+    func testLayoutKeepsTheSizeOfAWindowThatRefusesIt() throws {
         let original = CGRect(x: 100, y: 100, width: 400, height: 300)
         let target = CGRect(x: 100, y: 100, width: 370, height: 270)
         let probe = MinimumWidthProbe(frame: original, minimumWidth: 400)
 
-        XCTAssertThrowsError(try probe.makeOperation().setFrame(target, of: AXUIElementCreateApplication(100)))
-        XCTAssertEqual(probe.appliedFrame, original)
+        XCTAssertNoThrow(try probe.makeOperation().setFrame(target, of: AXUIElementCreateApplication(100)))
+        XCTAssertEqual(probe.appliedFrame, original, "Not stretched on the axis it accepted")
+    }
+
+    /// System Settings keeps a fixed width. Layouts keep its whole size and center it in the
+    /// frame they ask for, on every press, without remembering it as a fixed-size window.
+    func testLayoutsCenterAFixedWidthWindowAtItsOwnSize() throws {
+        let screen = CGRect(x: 90, y: 30, width: 1_590, height: 990)
+        let size = CGSize(width: 740, height: 826)
+        let probe = MinimumWidthProbe(
+            frame: CGRect(origin: CGPoint(x: 940, y: 30), size: size),
+            minimumWidth: 740,
+            maximumWidth: 740
+        )
+        let operation = probe.makeOperation(focusedWindow: AXUIElementCreateApplication(200))
+        func perform(_ action: WindowAction) throws {
+            try operation.perform(action, targetPID: 100, screens: [screen], checkCancellation: {})
+        }
+
+        try perform(.leftHalf)
+        XCTAssertEqual(probe.appliedFrame, CGRect(origin: CGPoint(x: 117.5, y: 112), size: size))
+
+        try perform(.leftHalf)
+        XCTAssertEqual(probe.appliedFrame.size, size)
+        XCTAssertEqual(probe.appliedFrame.minY, 112)
+
+        try perform(.rightHalf)
+        XCTAssertEqual(probe.appliedFrame, CGRect(origin: CGPoint(x: 912.5, y: 112), size: size))
+
+        try perform(.maximize)
+        XCTAssertEqual(probe.appliedFrame, CGRect(origin: CGPoint(x: 515, y: 112), size: size))
+    }
+
+    func testCenteringKeepsTheWindowOnScreen() {
+        let screen = CGRect(x: 0, y: 30, width: 1_000, height: 800)
+        let size = CGSize(width: 600, height: 500)
+        func placed(_ target: CGRect) -> CGRect {
+            WindowScreenGeometry.frame(centering: size, in: target, screen: screen)
+        }
+
+        XCTAssertEqual(placed(CGRect(x: 0, y: 30, width: 500, height: 800)).origin, CGPoint(x: 0, y: 180))
+        XCTAssertEqual(placed(CGRect(x: 500, y: 30, width: 500, height: 800)).origin, CGPoint(x: 400, y: 180))
+        XCTAssertEqual(placed(screen).origin, CGPoint(x: 200, y: 180))
+        XCTAssertEqual(placed(CGRect(x: 500, y: 30, width: 500, height: 400)).origin, CGPoint(x: 400, y: 30))
     }
 
     func testActionAtItsLimitDoesNotWriteToTheWindow() throws {
@@ -332,15 +376,19 @@ private struct ForeignWindowPreferences: Encodable {
     let shortcuts: [ForeignWindowAction: HotKeyConfiguration]
 }
 
-/// A window that refuses to become narrower than `minimumWidth` but accepts any height.
+/// A window that keeps its width between `minimumWidth` and `maximumWidth` but accepts
+/// any height.
 private final class MinimumWidthProbe {
     var appliedFrame: CGRect
     let minimumWidth: CGFloat
+    let maximumWidth: CGFloat
     var writeCount = 0
+    var sizeWrites: [CGSize] = []
 
-    init(frame: CGRect, minimumWidth: CGFloat) {
+    init(frame: CGRect, minimumWidth: CGFloat, maximumWidth: CGFloat = .greatestFiniteMagnitude) {
         appliedFrame = frame
         self.minimumWidth = minimumWidth
+        self.maximumWidth = maximumWidth
     }
 
     func makeOperation(focusedWindow: AXUIElement? = nil) -> WindowAccessibilityOperation {
@@ -377,7 +425,11 @@ private final class MinimumWidthProbe {
                 if CFEqual(attribute, kAXSizeAttribute as CFString) {
                     var size = CGSize.zero
                     AXValueGetValue(accessibilityValue, .cgSize, &size)
-                    appliedFrame.size = CGSize(width: max(size.width, minimumWidth), height: size.height)
+                    sizeWrites.append(size)
+                    appliedFrame.size = CGSize(
+                        width: min(max(size.width, minimumWidth), maximumWidth),
+                        height: size.height
+                    )
                     return .success
                 }
                 return .attributeUnsupported

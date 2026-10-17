@@ -160,22 +160,80 @@ enum WindowScreenGeometry {
         )
     }
 
-    static func originFittingSnappedFrame(
-        applied: CGRect,
+    /// Accessibility and AppKit frames meet at the primary display's top edge, so the same
+    /// conversion turns either coordinate space back into the other.
+    static func appKitFrame(
+        for accessibilityFrame: CGRect,
+        primaryScreenFrame: CGRect
+    ) -> CGRect {
+        self.accessibilityFrame(for: accessibilityFrame, primaryScreenFrame: primaryScreenFrame)
+    }
+
+    /// Where a window that took a different size than a layout asked for belongs, such as a
+    /// terminal rounded to its character grid. On each axis it starts where a layout spanning
+    /// the whole screen starts, keeps to the side of the screen the layout leans toward, or stays
+    /// centered when the layout is centered, and its top-left corner stays on screen. `current`
+    /// keeps a step resize from moving the window along an axis the application would not resize.
+    static func frame(
+        aligning size: CGSize,
+        to target: CGRect,
+        keepingUnchangedAxesOf current: CGRect? = nil,
         screen: CGRect
-    ) -> CGPoint {
-        var origin = applied.origin
-        // A terminal-style resize increment can grow a right-aligned window past the screen
-        // edge. Shift inward only when that move stays on the opposite edge; do not push a
-        // left-aligned maximize one pixel offscreen to chase a one-pixel overflow, and do not
-        // fight window-server origin normalization of a few points.
-        if applied.maxX > screen.maxX, applied.minX > screen.minX {
-            origin.x = max(screen.minX, screen.maxX - applied.width)
+    ) -> CGRect {
+        func origin(
+            length: CGFloat,
+            target: (start: CGFloat, length: CGFloat),
+            current: (start: CGFloat, length: CGFloat)?,
+            screen: (start: CGFloat, length: CGFloat)
+        ) -> CGFloat {
+            let targetMid = target.start + target.length / 2
+            let screenMid = screen.start + screen.length / 2
+            let spansScreen = abs(target.start - screen.start) <= 1
+                && abs(target.start + target.length - (screen.start + screen.length)) <= 1
+            let proposed: CGFloat
+            if let current, abs(length - current.length) <= 1 {
+                proposed = current.start
+            } else if spansScreen {
+                proposed = target.start
+            } else if abs(targetMid - screenMid) <= 1 {
+                proposed = targetMid - length / 2
+            } else if targetMid < screenMid {
+                proposed = target.start
+            } else {
+                proposed = target.start + target.length - length
+            }
+            return max(screen.start, min(proposed, screen.start + screen.length - length))
         }
-        if applied.maxY > screen.maxY, applied.minY > screen.minY {
-            origin.y = max(screen.minY, screen.maxY - applied.height)
+        return CGRect(
+            x: origin(
+                length: size.width,
+                target: (target.minX, target.width),
+                current: current.map { ($0.minX, $0.width) },
+                screen: (screen.minX, screen.width)
+            ),
+            y: origin(
+                length: size.height,
+                target: (target.minY, target.height),
+                current: current.map { ($0.minY, $0.height) },
+                screen: (screen.minY, screen.height)
+            ),
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    /// A window that keeps its own size is centered in the frame a layout asked for, so Left
+    /// Half puts it in the middle of the left half. Its top and leading edges stay on screen.
+    static func frame(centering size: CGSize, in target: CGRect, screen: CGRect) -> CGRect {
+        func origin(length: CGFloat, targetMid: CGFloat, screenMin: CGFloat, screenMax: CGFloat) -> CGFloat {
+            max(screenMin, min(targetMid - length / 2, screenMax - length))
         }
-        return origin
+        return CGRect(
+            x: origin(length: size.width, targetMid: target.midX, screenMin: screen.minX, screenMax: screen.maxX),
+            y: origin(length: size.height, targetMid: target.midY, screenMin: screen.minY, screenMax: screen.maxY),
+            width: size.width,
+            height: size.height
+        )
     }
 }
 
@@ -204,6 +262,53 @@ struct WindowActionTargetCandidate: Equatable, Sendable {
     let processIdentifier: pid_t?
     let bundleIdentifier: String?
     let isTerminated: Bool
+}
+
+/// Places a window Broccoli itself owns, such as Settings, through AppKit on the main thread.
+/// Accessibility would answer for this process on the window worker's thread, where AppKit
+/// cannot change a frame.
+enum BroccoliWindowFramePlacement {
+    /// `keepsSize` is for a window that cannot be resized: it keeps its size and is centered
+    /// in the layout's frame, the same as an application window that refuses a size.
+    static func appKitFrame(
+        for action: WindowAction,
+        current: CGRect,
+        accessibilityScreens: [CGRect],
+        primaryScreenFrame: CGRect,
+        options: WindowLayoutOptions,
+        keepsSize: Bool = false
+    ) -> CGRect? {
+        switch action {
+        case .nextDisplay, .previousDisplay, .restore, .tileAll, .cascadeAll,
+             .rotateLayout, .retileWindows, .toggleFloating:
+            return nil
+        default:
+            break
+        }
+        guard !accessibilityScreens.isEmpty else { return nil }
+        let currentAccessibilityFrame = WindowScreenGeometry.accessibilityFrame(
+            for: current,
+            primaryScreenFrame: primaryScreenFrame
+        )
+        let screenIndex = WindowAccessibilityOperation.screenIndex(
+            containing: currentAccessibilityFrame,
+            in: accessibilityScreens
+        )
+        let screen = accessibilityScreens[screenIndex]
+        let layout = WindowGeometry.frame(
+            for: action,
+            window: currentAccessibilityFrame,
+            screen: screen,
+            options: options
+        )
+        let placed = keepsSize
+            ? WindowScreenGeometry.frame(centering: currentAccessibilityFrame.size, in: layout, screen: screen)
+            : layout
+        return WindowScreenGeometry.appKitFrame(
+            for: placed,
+            primaryScreenFrame: primaryScreenFrame
+        )
+    }
 }
 
 enum WindowActionTargetResolver {
@@ -253,6 +358,13 @@ struct AccessibilityAttributeRead {
     let value: CFTypeRef?
 }
 
+/// What a single-window request did, for diagnostics.
+struct WindowActionOutcome: Sendable {
+    let processIdentifier: pid_t
+    let requested: CGRect
+    let result: CGRect
+}
+
 final class WindowAccessibilityOperation: @unchecked Sendable {
     typealias AttributeReader = (AXUIElement, CFString) -> AccessibilityAttributeRead
     typealias AttributeWriter = (AXUIElement, CFString, CFTypeRef) -> AXError
@@ -261,16 +373,17 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     typealias FrameSettlementWaiter = (Int) -> Void
     typealias UptimeProvider = () -> TimeInterval
 
+    private static let logger = Logger(subsystem: "dev.gauravpandey.broccoli", category: "WindowManagement")
     private static let maximumAccessibilityAttempts = 2
-    private static let maximumFrameApplicationAttempts = 3
-    private static let maximumFrameStabilityPolls = 10
-    private static let requiredStableFrameSamples = 2
-    private static let frameOriginTolerance: CGFloat = 8
     // Terminal, iTerm, and similar grid-snapping windows round to a character cell. A typical
-    // cell is about 7–16 pt; keep this large enough to accept that rounding without treating an
-    // 80 pt one-axis clamp as success.
+    // cell is about 7–16 pt; within this distance a window took the size it was asked for.
     private static let frameSizeTolerance: CGFloat = 24
-    private static let frameStabilityTolerance: CGFloat = 1
+    // A window whose width did not change at all, when the layout asked for a width this much
+    // different, refused it even if its own width is near the layout's, like System Settings at
+    // 740 pt in a 720 pt half. Character cells are narrower, so a terminal already at the
+    // layout's width is not mistaken for a fixed one.
+    private static let fixedWidthTolerance: CGFloat = 12
+    private static let frameTolerance: CGFloat = 1
     static let enhancedUserInterfaceAttribute = "AXEnhancedUserInterface" as CFString
 
     enum WindowCandidateResolution {
@@ -287,6 +400,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
     let attributeWriter: AttributeWriter
     let messagingTimeoutSetter: MessagingTimeoutSetter
     private let retryWaiter: RetryWaiter
+    /// Waits between polls while a workspace's applications open their windows.
     let frameSettlementWaiter: FrameSettlementWaiter
     let uptimeProvider: UptimeProvider
     let messagingTimeout: Float
@@ -341,13 +455,14 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         self.settableChecker = settableChecker
     }
 
+    @discardableResult
     func perform(
         _ action: WindowAction,
         targetPID: pid_t?,
         screens: [CGRect],
         options: WindowLayoutOptions = .standard,
         checkCancellation: () throws -> Void
-    ) throws {
+    ) throws -> WindowActionOutcome? {
         try perform(
             .action(action),
             targetPID: targetPID,
@@ -358,19 +473,23 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         )
     }
 
+    /// `windowFrame` names the window by where it is on screen, such as one the user just
+    /// dragged. Without it, the request acts on the application's focused window.
+    @discardableResult
     func perform(
         _ request: WindowRequest,
         targetPID: pid_t?,
+        windowFrame: CGRect? = nil,
         screens: [CGRect],
         options: WindowLayoutOptions,
         pointerScreenIndex: Int?,
         checkCancellation: () throws -> Void
-    ) throws {
+    ) throws -> WindowActionOutcome? {
         guard !screens.isEmpty else { throw WindowManagementError.unsupported }
         switch request {
         case .workspace(let workspace):
             try applyWorkspace(workspace, screens: screens, checkCancellation: checkCancellation)
-            return
+            return nil
         case .action(let action):
             switch action.group {
             case .arrange:
@@ -382,7 +501,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                     pointerScreenIndex: pointerScreenIndex,
                     checkCancellation: checkCancellation
                 )
-                return
+                return nil
             case .tiling:
                 try performTilingCommand(
                     action,
@@ -391,7 +510,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                     options: options,
                     checkCancellation: checkCancellation
                 )
-                return
+                return nil
             case .halvesAndQuarters, .thirds, .fillAndCenter,
                  .resize, .displays:
                 break
@@ -403,6 +522,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         let deadline = uptimeProvider() + actionTimeout
         let window = try focusedWindow(
             targetPID: targetPID,
+            windowFrame: windowFrame,
             deadline: deadline,
             checkCancellation: checkCancellation
         )
@@ -428,19 +548,21 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         case .frame(let spec):
             targetFrame = WindowGeometry.frame(for: spec, window: currentFrame, screen: layoutScreen, options: options)
         case .workspace:
-            return
+            return nil
         case .action(let action):
             appliedAction = action
             switch action {
             case .restore:
-                guard let stored else { return }
+                guard let stored else { return nil }
                 targetFrame = stored.restoreFrame
                 layoutScreen = screens[Self.screenIndex(containing: targetFrame, in: screens)]
             case .nextDisplay, .previousDisplay:
-                guard screens.count > 1 else { return }
-                let offset = action == .nextDisplay ? 1 : -1
-                let destinationIndex = (currentScreenIndex + offset + screens.count) % screens.count
-                layoutScreen = screens[destinationIndex]
+                guard screens.count > 1 else { return nil }
+                layoutScreen = screens[Self.neighboringScreenIndex(
+                    of: currentScreenIndex,
+                    in: screens,
+                    forward: action == .nextDisplay
+                )]
                 targetFrame = WindowGeometry.movedFrame(
                     window: currentFrame,
                     from: screens[currentScreenIndex],
@@ -451,7 +573,6 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                    options.repeatBehavior == .cycleSizes, action.cyclesSize {
                     cycleIndex = (stored.cycleIndex + 1) % WindowGeometry.cycleFractions.count
                 }
-                appliedAction = action
                 targetFrame = WindowGeometry.frame(
                     for: action,
                     window: currentFrame,
@@ -463,34 +584,37 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         }
 
         // A step action at its limit, or a layout the window already has, needs no write.
-        guard !Self.framesMatch(
-            targetFrame,
-            currentFrame,
-            originTolerance: 0.5,
-            sizeTolerance: 0.5
-        ) else { return }
-        try setFrame(
-            targetFrame,
-            of: window,
-            screen: layoutScreen,
-            acceptsPartialAxis: request.isIncremental,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
+        let result = Self.framesMatch(targetFrame, currentFrame, originTolerance: 0.5, sizeTolerance: 0.5)
+            ? currentFrame
+            : try setFrame(
+                targetFrame,
+                of: window,
+                from: currentFrame,
+                screen: layoutScreen,
+                incremental: request.isIncremental,
+                deadline: deadline,
+                checkCancellation: checkCancellation
+            )
 
         if appliedAction == .restore {
             history.remove(key)
-            return
+        } else {
+            // Recorded even when nothing moved, so pressing a half the window already fills
+            // still cycles to the next size.
+            history.record(
+                WindowHistory.Entry(
+                    restoreFrame: continuing ? (stored?.restoreFrame ?? currentFrame) : currentFrame,
+                    lastApplied: result,
+                    lastAction: appliedAction,
+                    cycleIndex: cycleIndex
+                ),
+                for: key
+            )
         }
-        let applied = (try? frame(of: window, deadline: deadline, checkCancellation: {})) ?? targetFrame
-        history.record(
-            WindowHistory.Entry(
-                restoreFrame: continuing ? (stored?.restoreFrame ?? currentFrame) : currentFrame,
-                lastApplied: applied,
-                lastAction: appliedAction,
-                cycleIndex: cycleIndex
-            ),
-            for: key
+        return WindowActionOutcome(
+            processIdentifier: key.processIdentifier,
+            requested: targetFrame,
+            result: result
         )
     }
 
@@ -500,8 +624,21 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         } ?? 0
     }
 
+    /// The display after or before `index` in the order the displays are arranged: left to
+    /// right, and top to bottom for displays that share a left edge.
+    static func neighboringScreenIndex(of index: Int, in screens: [CGRect], forward: Bool) -> Int {
+        let order = screens.indices.sorted { left, right in
+            screens[left].minX != screens[right].minX
+                ? screens[left].minX < screens[right].minX
+                : screens[left].minY < screens[right].minY
+        }
+        guard let position = order.firstIndex(of: index) else { return index }
+        return order[(position + (forward ? 1 : -1) + order.count) % order.count]
+    }
+
     func focusedWindow(
         targetPID: pid_t?,
+        windowFrame: CGRect? = nil,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
     ) throws -> AXUIElement {
@@ -511,22 +648,41 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         guard timeoutError == .success else {
             throw WindowManagementError.operationFailed(timeoutError)
         }
-        return try focusedWindow(
+        let application = try targetApplication(
             targetPID: targetPID,
             systemElement: system,
             deadline: deadline,
             checkCancellation: checkCancellation
         )
+        if let windowFrame,
+           let window = try window(
+            in: application,
+            at: windowFrame,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+           ) {
+            return window
+        }
+        return try resolveFocusedWindow(
+            in: application,
+            deadline: deadline,
+            checkCancellation: checkCancellation
+        )
     }
 
-    private func focusedWindow(
+    private func targetApplication(
         targetPID: pid_t?,
         systemElement: AXUIElement,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
     ) throws -> AXUIElement {
+        // Accessibility answers a request for this process's own windows on the calling
+        // thread, and AppKit traps a frame change off the main thread. Broccoli places its
+        // own windows through AppKit instead.
+        let ownProcess = ProcessInfo.processInfo.processIdentifier
         let application: AXUIElement
         if let targetPID {
+            guard targetPID != ownProcess else { throw WindowManagementError.noWindow }
             application = AXUIElementCreateApplication(targetPID)
         } else {
             let value: CFTypeRef
@@ -544,13 +700,38 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                 throw WindowManagementError.noWindow
             }
             application = unsafeDowncast(value, to: AXUIElement.self)
+            var focusedProcess: pid_t = 0
+            if AXUIElementGetPid(application, &focusedProcess) == .success,
+               focusedProcess == ownProcess {
+                throw WindowManagementError.noWindow
+            }
         }
+        return application
+    }
 
-        return try resolveFocusedWindow(
-            in: application,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
+    /// The application's window at `frame`, for a window known by where it is on screen.
+    private func window(
+        in application: AXUIElement,
+        at frame: CGRect,
+        deadline: TimeInterval,
+        checkCancellation: () throws -> Void
+    ) throws -> AXUIElement? {
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
+        let read = attributeReader(application, kAXWindowsAttribute as CFString)
+        guard read.error == .success, let windows = read.value as? [AXUIElement] else { return nil }
+        for window in windows {
+            guard let candidateFrame = try? self.frame(of: window, deadline: deadline, checkCancellation: checkCancellation),
+                  Self.framesMatch(candidateFrame, frame, originTolerance: 4, sizeTolerance: 4) else { continue }
+            if case .accepted = try windowCandidateResolution(
+                window,
+                acceptsPanels: true,
+                deadline: deadline,
+                checkCancellation: checkCancellation
+            ) {
+                return window
+            }
+        }
+        return nil
     }
 
     func resolveFocusedWindow(in application: AXUIElement) throws -> AXUIElement {
@@ -584,6 +765,7 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                     let candidate = unsafeDowncast(value, to: AXUIElement.self)
                     switch try windowCandidateResolution(
                         candidate,
+                        acceptsPanels: true,
                         deadline: deadline,
                         checkCancellation: checkCancellation
                     ) {
@@ -595,6 +777,9 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
                         // geometry. Do not resize the main window behind a modal surface: AppKit
                         // can accept only one dimension and leave the window half-resized.
                         if attribute == kAXFocusedWindowAttribute {
+                            Self.logger.notice(
+                                "Focused window refused: \(self.kindDescription(of: candidate), privacy: .public)"
+                            )
                             throw WindowManagementError.unsupported
                         }
                         finalErrors.append(.attributeUnsupported)
@@ -617,8 +802,12 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         throw WindowManagementError.noWindow
     }
 
+    /// Standard windows are always candidates. `acceptsPanels` also takes floating panels and
+    /// windows with an unusual subrole, for a window the user acts on directly, but never a
+    /// dialog or alert, which keeps the geometry its application gives it.
     func windowCandidateResolution(
         _ window: AXUIElement,
+        acceptsPanels: Bool = false,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
     ) throws -> WindowCandidateResolution {
@@ -646,9 +835,20 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
               CFGetTypeID(subroleValue) == CFStringGetTypeID() else {
             return .accepted
         }
-        return CFEqual(subroleValue, kAXStandardWindowSubrole as CFString)
-            ? .accepted
-            : .rejected
+        if CFEqual(subroleValue, kAXStandardWindowSubrole as CFString) { return .accepted }
+        guard acceptsPanels else { return .rejected }
+        let isModal = [kAXDialogSubrole, kAXSystemDialogSubrole].contains {
+            CFEqual(subroleValue, $0 as CFString)
+        }
+        return isModal ? .rejected : .accepted
+    }
+
+    /// The window's role and subrole, for logging why a window was refused.
+    private func kindDescription(of window: AXUIElement) -> String {
+        func string(_ attribute: String) -> String {
+            (attributeReader(window, attribute as CFString).value as? String) ?? "none"
+        }
+        return "role \(string(kAXRoleAttribute)), subrole \(string(kAXSubroleAttribute))"
     }
 
     func frame(
@@ -679,43 +879,124 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         return CGRect(origin: position, size: size)
     }
 
+    @discardableResult
     func setFrame(
         _ frame: CGRect,
         of window: AXUIElement,
         screen: CGRect? = nil,
-        acceptsPartialAxis: Bool = false
-    ) throws {
-        try setFrame(
+        incremental: Bool = false
+    ) throws -> CGRect {
+        let deadline = uptimeProvider() + actionTimeout
+        let current = try self.frame(of: window, deadline: deadline, checkCancellation: {})
+        return try setFrame(
             frame,
             of: window,
+            from: current,
             screen: screen ?? frame,
-            acceptsPartialAxis: acceptsPartialAxis,
-            deadline: uptimeProvider() + actionTimeout,
+            incremental: incremental,
+            deadline: deadline,
             checkCancellation: {}
         )
     }
 
-    /// `acceptsPartialAxis` keeps a result where the application honored only one axis. A
-    /// step resize at an application's minimum width should still change the height; a
-    /// layout such as Left Half must not be left half-applied.
+    /// Writes the size, the position, and the size again, then keeps what the application
+    /// accepted and returns where the window ended up. A window that will not take a layout's
+    /// size keeps its own size, centered in the requested area, rather than being stretched on
+    /// the axis it did accept. `incremental` instead keeps whatever a step resize achieved, so
+    /// a window at its minimum width still changes height.
+    @discardableResult
     func setFrame(
         _ frame: CGRect,
         of window: AXUIElement,
+        from current: CGRect,
         screen: CGRect,
-        acceptsPartialAxis: Bool,
+        incremental: Bool,
         deadline: TimeInterval,
         checkCancellation: () throws -> Void
-    ) throws {
+    ) throws -> CGRect {
+        // A newer request can replace this one only before the first write. The writes take a
+        // few milliseconds, and stopping between them would leave the window half-placed.
+        try checkReady(deadline: deadline, checkCancellation: checkCancellation)
         let restoreEnhancedUserInterface = suspendEnhancedUserInterface(of: window)
         defer { restoreEnhancedUserInterface() }
-        try applyFrame(
-            frame,
-            of: window,
-            screen: screen,
-            acceptsPartialAxis: acceptsPartialAxis,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
+
+        let writeError = write(frame, to: window, resizing: !Self.sizesMatch(frame.size, current.size, tolerance: 0.5))
+        if let writeError { throw WindowManagementError.operationFailed(writeError) }
+        var result = try self.frame(of: window, deadline: .infinity, checkCancellation: {})
+
+        // The window refused the layout when it took the size on one axis but not the other,
+        // like System Settings with its fixed width, or did not change size at all. A window
+        // that changed on both axes but stopped short, such as one at its maximum size, keeps
+        // what it reached.
+        let keptFixedWidth = abs(result.width - current.width) <= Self.frameTolerance
+            && abs(frame.width - current.width) > Self.fixedWidthTolerance
+        let tookWidth = abs(result.width - frame.width) <= Self.frameSizeTolerance && !keptFixedWidth
+        let tookHeight = abs(result.height - frame.height) <= Self.frameSizeTolerance
+        let refused = tookWidth != tookHeight
+            || (!tookWidth && Self.sizesMatch(result.size, current.size, tolerance: Self.frameTolerance))
+        let placed: CGRect
+        if Self.sizesMatch(result.size, frame.size, tolerance: 0.5) {
+            placed = CGRect(origin: frame.origin, size: result.size)
+        } else if incremental {
+            placed = WindowScreenGeometry.frame(
+                aligning: result.size,
+                to: frame,
+                keepingUnchangedAxesOf: current,
+                screen: screen
+            )
+        } else if refused {
+            placed = WindowScreenGeometry.frame(centering: current.size, in: frame, screen: screen)
+        } else {
+            placed = WindowScreenGeometry.frame(aligning: result.size, to: frame, screen: screen)
+        }
+        if !Self.framesMatch(result, placed, originTolerance: Self.frameTolerance, sizeTolerance: Self.frameTolerance) {
+            _ = write(placed, to: window, resizing: !Self.sizesMatch(result.size, placed.size, tolerance: Self.frameTolerance))
+            result = try self.frame(of: window, deadline: .infinity, checkCancellation: {})
+        }
+        // Nothing changed and the window is not where this layout puts it: the application
+        // refused the request outright.
+        if Self.framesMatch(result, current, originTolerance: Self.frameTolerance, sizeTolerance: Self.frameTolerance),
+           !Self.framesMatch(result, placed, originTolerance: Self.frameTolerance, sizeTolerance: Self.frameTolerance) {
+            throw WindowManagementError.frameRejected(expected: frame, actual: result)
+        }
+        return result
+    }
+
+    /// Writes the size, the position, and the size again, and returns an error only when
+    /// neither the size nor the position could be written. An application keeps a window on
+    /// screen from where it is, so a size written before the move can be cut short near an
+    /// edge; writing it again after the move applies it in full, and writing it first keeps a
+    /// shrinking window from being pushed off screen.
+    private func write(_ frame: CGRect, to window: AXUIElement, resizing: Bool) -> AXError? {
+        let sizeError = resizing ? write(frame.size, to: window) : .success
+        let positionError = write(frame.origin, to: window)
+        guard sizeError == .success || positionError == .success else { return positionError }
+        if resizing, sizeError == .success { _ = write(frame.size, to: window) }
+        return nil
+    }
+
+    private func write(_ size: CGSize, to window: AXUIElement) -> AXError {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return .illegalArgument }
+        return write(kAXSizeAttribute as CFString, value, to: window)
+    }
+
+    private func write(_ origin: CGPoint, to window: AXUIElement) -> AXError {
+        var origin = origin
+        guard let value = AXValueCreate(.cgPoint, &origin) else { return .illegalArgument }
+        return write(kAXPositionAttribute as CFString, value, to: window)
+    }
+
+    private func write(_ attribute: CFString, _ value: CFTypeRef, to element: AXUIElement) -> AXError {
+        var error = AXError.failure
+        for attempt in 1...Self.maximumAccessibilityAttempts {
+            error = attributeWriter(element, attribute, value)
+            guard error != .success,
+                  attempt < Self.maximumAccessibilityAttempts,
+                  Self.isRetryable(error) else { break }
+            retryWaiter(attempt)
+        }
+        return error
     }
 
     /// Chromium- and Firefox-based applications report frame writes as successful but ignore
@@ -738,257 +1019,8 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
         }
     }
 
-    private func applyFrame(
-        _ frame: CGRect,
-        of window: AXUIElement,
-        screen: CGRect,
-        acceptsPartialAxis: Bool,
-        deadline: TimeInterval,
-        checkCancellation: () throws -> Void
-    ) throws {
-        var position = frame.origin
-        var size = frame.size
-        guard let positionValue = AXValueCreate(.cgPoint, &position),
-              let sizeValue = AXValueCreate(.cgSize, &size) else {
-            throw WindowManagementError.unsupported
-        }
-
-        let originalFrame = try self.frame(
-            of: window,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
-        var finalAppliedFrame = originalFrame
-        var previousAttemptFrame: CGRect?
-        for attempt in 1...Self.maximumFrameApplicationAttempts {
-            let expandsWidth = frame.width > finalAppliedFrame.width + Self.frameSizeTolerance
-            let expandsHeight = frame.height > finalAppliedFrame.height + Self.frameSizeTolerance
-            if expandsWidth || expandsHeight {
-                // AX size changes grow from the current top-left corner. Move each expanding
-                // axis to its destination edge first so the target application measures the
-                // available space from the actual screen boundary. Keep a shrinking axis where
-                // it is until after the size change to avoid temporarily pushing it offscreen.
-                var stagingPosition = CGPoint(
-                    x: expandsWidth ? frame.minX : finalAppliedFrame.minX,
-                    y: expandsHeight ? frame.minY : finalAppliedFrame.minY
-                )
-                guard let stagingPositionValue = AXValueCreate(.cgPoint, &stagingPosition) else {
-                    throw WindowManagementError.unsupported
-                }
-                try writeAttribute(
-                    kAXPositionAttribute as CFString,
-                    value: stagingPositionValue,
-                    to: window,
-                    deadline: deadline,
-                    checkCancellation: checkCancellation
-                )
-                frameSettlementWaiter(0)
-                try checkReady(deadline: deadline, checkCancellation: checkCancellation)
-            }
-            try writeAttribute(
-                kAXSizeAttribute as CFString,
-                value: sizeValue,
-                to: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-            // Size changes can preserve a different edge depending on the target application.
-            // Always finish with the requested top-left origin after the new size is in place.
-            try writeAttribute(
-                kAXPositionAttribute as CFString,
-                value: positionValue,
-                to: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-
-            // A successful AX write only means that the target accepted the message. AppKit or
-            // the target can still animate or restore a different frame on a later run-loop
-            // turn, so confirm the result twice instead of trusting an immediate readback.
-            frameSettlementWaiter(0)
-            finalAppliedFrame = try self.frame(
-                of: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-            if Self.framesApproximatelyMatch(finalAppliedFrame, frame) {
-                frameSettlementWaiter(1)
-                finalAppliedFrame = try self.frame(
-                    of: window,
-                    deadline: deadline,
-                    checkCancellation: checkCancellation
-                )
-                if Self.framesApproximatelyMatch(finalAppliedFrame, frame) {
-                    applyFittedOrigin(
-                        applied: finalAppliedFrame,
-                        screen: screen,
-                        of: window,
-                        deadline: deadline,
-                        checkCancellation: checkCancellation
-                    )
-                    return
-                }
-            }
-            guard attempt < Self.maximumFrameApplicationAttempts else { break }
-
-            // Do not fight a target-owned launch or layout animation with rapid writes. Wait
-            // until its frame is quiet, then reapply the user's newest requested layout.
-            finalAppliedFrame = try waitForStableFrame(
-                of: window,
-                startingAt: finalAppliedFrame,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-            if let previousAttemptFrame,
-               Self.framesMatch(
-                finalAppliedFrame,
-                previousAttemptFrame,
-                originTolerance: Self.frameStabilityTolerance,
-                sizeTolerance: Self.frameStabilityTolerance
-               ) {
-                // The target is rounding or clamping to the same frame on every write. Further
-                // attempts only jitter the window.
-                break
-            }
-            previousAttemptFrame = finalAppliedFrame
-        }
-
-        if Self.framesApproximatelyMatch(finalAppliedFrame, frame) {
-            applyFittedOrigin(
-                applied: finalAppliedFrame,
-                screen: screen,
-                of: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-            return
-        }
-        if Self.framesMatch(
-            finalAppliedFrame,
-            originalFrame,
-            originTolerance: Self.frameStabilityTolerance,
-            sizeTolerance: Self.frameStabilityTolerance
-        ) {
-            throw WindowManagementError.frameRejected(expected: frame, actual: finalAppliedFrame)
-        }
-        if !acceptsPartialAxis, Self.isPartialAxisFailure(expected: frame, actual: finalAppliedFrame) {
-            restoreFrame(
-                originalFrame,
-                of: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-            throw WindowManagementError.frameRejected(expected: frame, actual: finalAppliedFrame)
-        }
-        applyFittedOrigin(
-            applied: finalAppliedFrame,
-            screen: screen,
-            of: window,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
-    }
-
-    private func applyFittedOrigin(
-        applied: CGRect,
-        screen: CGRect,
-        of window: AXUIElement,
-        deadline: TimeInterval,
-        checkCancellation: () throws -> Void
-    ) {
-        let origin = WindowScreenGeometry.originFittingSnappedFrame(
-            applied: applied,
-            screen: screen
-        )
-        guard abs(origin.x - applied.minX) > 0.5 || abs(origin.y - applied.minY) > 0.5 else {
-            return
-        }
-        var position = origin
-        guard let positionValue = AXValueCreate(.cgPoint, &position) else { return }
-        try? writeAttribute(
-            kAXPositionAttribute as CFString,
-            value: positionValue,
-            to: window,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
-        frameSettlementWaiter(0)
-    }
-
-    private func restoreFrame(
-        _ frame: CGRect,
-        of window: AXUIElement,
-        deadline: TimeInterval,
-        checkCancellation: () throws -> Void
-    ) {
-        var position = frame.origin
-        var size = frame.size
-        guard let positionValue = AXValueCreate(.cgPoint, &position),
-              let sizeValue = AXValueCreate(.cgSize, &size) else { return }
-
-        // A failed target frame may still have changed one dimension. Best-effort rollback keeps
-        // that partial result from becoming the user's new window geometry.
-        try? writeAttribute(
-            kAXSizeAttribute as CFString,
-            value: sizeValue,
-            to: window,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
-        try? writeAttribute(
-            kAXPositionAttribute as CFString,
-            value: positionValue,
-            to: window,
-            deadline: deadline,
-            checkCancellation: checkCancellation
-        )
-    }
-
-    private func waitForStableFrame(
-        of window: AXUIElement,
-        startingAt initialFrame: CGRect,
-        deadline: TimeInterval,
-        checkCancellation: () throws -> Void
-    ) throws -> CGRect {
-        var previousFrame = initialFrame
-        var stableSampleCount = 0
-
-        for poll in 1...Self.maximumFrameStabilityPolls {
-            frameSettlementWaiter(poll)
-            let currentFrame = try frame(
-                of: window,
-                deadline: deadline,
-                checkCancellation: checkCancellation
-            )
-            if Self.framesMatch(
-                currentFrame,
-                previousFrame,
-                originTolerance: Self.frameStabilityTolerance,
-                sizeTolerance: Self.frameStabilityTolerance
-            ) {
-                stableSampleCount += 1
-                if stableSampleCount >= Self.requiredStableFrameSamples { return currentFrame }
-            } else {
-                stableSampleCount = 0
-            }
-            previousFrame = currentFrame
-        }
-        return previousFrame
-    }
-
-    private static func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        framesMatch(
-            lhs,
-            rhs,
-            originTolerance: frameOriginTolerance,
-            sizeTolerance: frameSizeTolerance
-        )
-    }
-
-    private static func isPartialAxisFailure(expected: CGRect, actual: CGRect) -> Bool {
-        let widthMatches = abs(actual.width - expected.width) <= frameSizeTolerance
-        let heightMatches = abs(actual.height - expected.height) <= frameSizeTolerance
-        return widthMatches != heightMatches
+    private static func sizesMatch(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
+        abs(lhs.width - rhs.width) <= tolerance && abs(lhs.height - rhs.height) <= tolerance
     }
 
     static func framesMatch(
@@ -1021,26 +1053,6 @@ final class WindowAccessibilityOperation: @unchecked Sendable {
             retryWaiter(attempt)
         }
         if Self.representsMissingWindow(finalError) { throw WindowManagementError.unsupported }
-        throw WindowManagementError.operationFailed(finalError)
-    }
-
-    func writeAttribute(
-        _ attribute: CFString,
-        value: CFTypeRef,
-        to element: AXUIElement,
-        deadline: TimeInterval,
-        checkCancellation: () throws -> Void
-    ) throws {
-        var finalError = AXError.failure
-        for attempt in 1...Self.maximumAccessibilityAttempts {
-            try checkReady(deadline: deadline, checkCancellation: checkCancellation)
-            finalError = attributeWriter(element, attribute, value)
-            try checkReady(deadline: deadline, checkCancellation: checkCancellation)
-            if finalError == .success { return }
-            guard attempt < Self.maximumAccessibilityAttempts,
-                  Self.isRetryable(finalError) else { break }
-            retryWaiter(attempt)
-        }
         throw WindowManagementError.operationFailed(finalError)
     }
 
@@ -1138,28 +1150,25 @@ final class WindowAccessibilityWorker: @unchecked Sendable {
         )
     }
 
+    @discardableResult
     func perform(
         _ request: WindowRequest,
         targetPID: pid_t?,
+        windowFrame: CGRect? = nil,
         screens: [CGRect],
         options: WindowLayoutOptions,
         pointerScreenIndex: Int?
-    ) async throws {
+    ) async throws -> WindowActionOutcome? {
         try await run(superseding: !request.isIncremental) { [operation] checkCancellation in
             try operation.perform(
                 request,
                 targetPID: targetPID,
+                windowFrame: windowFrame,
                 screens: screens,
                 options: options,
                 pointerScreenIndex: pointerScreenIndex,
                 checkCancellation: checkCancellation
             )
-        }
-    }
-
-    func focusedFrame(targetPID: pid_t?) async -> CGRect? {
-        try? await run(superseding: false) { [operation] checkCancellation in
-            try operation.focusedFrame(targetPID: targetPID, checkCancellation: checkCancellation)
         }
     }
 
@@ -1234,7 +1243,8 @@ final class WindowManager {
     }
 
     func request(for target: WindowShortcutTarget) -> WindowRequest? {
-        switch target {
+        guard target.isAvailable else { return nil }
+        return switch target {
         case .action(let action): .action(action)
         case .layout(let id): customLayoutProvider(id).map { .frame($0.frameSpec) }
         case .workspace(let id): workspaceProvider(id).map(WindowRequest.workspace)
@@ -1245,7 +1255,9 @@ final class WindowManager {
         try await perform(.action(action), targetPID: targetPID)
     }
 
-    func perform(_ request: WindowRequest, targetPID: pid_t? = nil) async throws {
+    /// `windowFrame` names the window by where it is on screen, such as one the user just
+    /// dragged. Without it, the request acts on the target application's focused window.
+    func perform(_ request: WindowRequest, targetPID: pid_t? = nil, windowFrame: CGRect? = nil) async throws {
         guard AccessibilityPermissionChecker.isTrusted else {
             throw WindowManagementError.accessibilityRequired
         }
@@ -1254,32 +1266,42 @@ final class WindowManager {
         }
         let screens = screenFrames()
         let options = layoutOptionsProvider()
-        let target = targetPID ?? -1
         let startedAt = ProcessInfo.processInfo.systemUptime
+        func elapsed() -> Double { (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000 }
         do {
-            try await worker.perform(
+            let outcome = try await worker.perform(
                 request,
                 targetPID: targetPID,
+                windowFrame: windowFrame,
                 screens: screens,
                 options: options,
                 pointerScreenIndex: pointerScreenIndex()
             )
-            let milliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
-            Self.logger.debug(
-                "Window action \(request.logName, privacy: .public) target \(target, privacy: .public) completed in \(milliseconds, privacy: .public) ms"
-            )
+            let application = Self.applicationName(outcome?.processIdentifier ?? targetPID)
+            if let outcome {
+                Self.logger.info(
+                    "Window action \(request.logName, privacy: .public) for \(application, privacy: .public) took \(elapsed(), format: .fixed(precision: 1), privacy: .public) ms: requested \(String(describing: outcome.requested), privacy: .public), got \(String(describing: outcome.result), privacy: .public)"
+                )
+            } else {
+                Self.logger.info(
+                    "Window action \(request.logName, privacy: .public) took \(elapsed(), format: .fixed(precision: 1), privacy: .public) ms"
+                )
+            }
+        } catch let error as CancellationError {
+            Self.logger.debug("Window action \(request.logName, privacy: .public) was replaced by a newer one")
+            throw error
         } catch {
-            let description = Self.diagnosticDescription(for: error)
             Self.logger.error(
-                "Window action \(request.logName, privacy: .public) target \(target, privacy: .public) failed: \(description, privacy: .public)"
+                "Window action \(request.logName, privacy: .public) for \(Self.applicationName(targetPID), privacy: .public) failed after \(elapsed(), format: .fixed(precision: 1), privacy: .public) ms: \(Self.diagnosticDescription(for: error), privacy: .public)"
             )
             throw error
         }
     }
 
-    func focusedWindowFrame(targetPID: pid_t?) async -> CGRect? {
-        guard AccessibilityPermissionChecker.isTrusted else { return nil }
-        return await worker.focusedFrame(targetPID: targetPID)
+    private static func applicationName(_ processIdentifier: pid_t?) -> String {
+        guard let processIdentifier else { return "the focused application" }
+        return NSRunningApplication(processIdentifier: processIdentifier)?.bundleIdentifier
+            ?? "process \(processIdentifier)"
     }
 
     func captureWorkspace() async throws -> [WindowWorkspace.Entry] {

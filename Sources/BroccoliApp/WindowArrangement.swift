@@ -9,6 +9,7 @@ struct OnScreenWindow: Equatable, Sendable {
     let processIdentifier: pid_t
     /// Accessibility coordinates, front-most window first.
     let bounds: CGRect
+    var windowID: CGWindowID = 0
 
     static func current() -> [OnScreenWindow] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -24,8 +25,24 @@ struct OnScreenWindow: Equatable, Sendable {
                   let bounds = info[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
                   rect.width >= 40, rect.height >= 40 else { return nil }
-            return OnScreenWindow(processIdentifier: processIdentifier, bounds: rect)
+            return OnScreenWindow(
+                processIdentifier: processIdentifier,
+                bounds: rect,
+                windowID: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+            )
         }
+    }
+
+    /// The front-most normal window under `point`, in Accessibility coordinates.
+    static func frontmost(at point: CGPoint) -> OnScreenWindow? {
+        current().first { $0.bounds.contains(point) }
+    }
+
+    /// Where the window server has the window now. Reads one window, not the whole list.
+    static func bounds(of windowID: CGWindowID) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]])?.first,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
+        return CGRect(dictionaryRepresentation: bounds as CFDictionary)
     }
 }
 
@@ -202,8 +219,9 @@ extension WindowAccessibilityOperation {
                 try setFrame(
                     placement.frame,
                     of: placement.window.element,
+                    from: placement.window.frame,
                     screen: placement.screen,
-                    acceptsPartialAxis: true,
+                    incremental: true,
                     deadline: uptimeProvider() + actionTimeout,
                     checkCancellation: checkCancellation
                 )
@@ -243,12 +261,6 @@ extension WindowAccessibilityOperation {
             return Self.screenIndex(containing: frame, in: screens)
         }
         return min(pointerScreenIndex ?? 0, screens.count - 1)
-    }
-
-    func focusedFrame(targetPID: pid_t?, checkCancellation: () throws -> Void) throws -> CGRect {
-        let deadline = uptimeProvider() + actionTimeout
-        let window = try focusedWindow(targetPID: targetPID, deadline: deadline, checkCancellation: checkCancellation)
-        return try frame(of: window, deadline: deadline, checkCancellation: checkCancellation)
     }
 
     // MARK: - Tile and cascade

@@ -314,6 +314,7 @@ final class LauncherCoordinator {
     var onRefreshCatalog: (() -> Void)?
     var onOpenPreferences: ((PreferencesSection) -> Void)?
     var onResolveWindowTarget: ((NSRunningApplication?) -> pid_t?)?
+    var onPlaceOwnWindow: ((WindowAction) -> Bool)?
 
     init(
         panel: LauncherPanelController,
@@ -775,6 +776,15 @@ final class LauncherCoordinator {
             return
         }
 
+        // Opened over Broccoli's own window, the action is for that window and never for the
+        // application that was in front before it.
+        if previousApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            panel.dismiss(notify: false)
+            let placed = if case .action(let action) = request { onPlaceOwnWindow?(action) ?? false } else { false }
+            if !placed { NSSound.beep() }
+            restorePreviousApplication(activateAllWindows: false)
+            return
+        }
         let targetPID = onResolveWindowTarget?(previousApplication)
         panel.dismiss(notify: false)
         if !request.isIncremental {
@@ -1232,7 +1242,7 @@ private struct SearchConfiguration: Equatable {
             settingsEnabled: preferences.settingsEnabled,
             actionsEnabled: preferences.actionsEnabled,
             enabledActionIDs: preferences.enabledActionIDs,
-            windowEntries: preferences.actionsEnabled
+            windowEntries: preferences.actionsEnabled && WindowManagementFeatures.customizationsAvailable
                 ? WindowSearchEntries.customizations(preferences.windowManagement)
                 : []
         )

@@ -26,7 +26,7 @@ enum NativeIconCatalog {
         "power.shutdown": ["poweroff", "power", "power.circle"],
         "power.logout": ["rectangle.portrait.and.arrow.forward", "rectangle.portrait.and.arrow.right", "arrow.right.square"],
     ].merging(
-        WindowAction.allCases.map { ($0.actionID, $0.symbolCandidates) },
+        WindowAction.available.map { ($0.actionID, $0.symbolCandidates) },
         uniquingKeysWith: { current, _ in current }
     )
 

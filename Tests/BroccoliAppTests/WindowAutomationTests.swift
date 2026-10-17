@@ -18,9 +18,12 @@ final class WindowAutomationTests: XCTestCase {
         XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 0, y: 10), in: display), .topLeftQuarter)
         XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 1_190, y: 0), in: display), .topRightQuarter)
         XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 0, y: 950), in: display), .bottomLeftQuarter)
-        XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 200, y: 959), in: display), .firstThird)
-        XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 600, y: 959), in: display), .bottomHalf)
-        XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 1_000, y: 959), in: display), .lastThird)
+        XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 20, y: 959), in: display), .bottomLeftQuarter)
+        XCTAssertEqual(WindowSnapZone.action(at: CGPoint(x: 1_180, y: 959), in: display), .bottomRightQuarter)
+        XCTAssertNil(
+            WindowSnapZone.action(at: CGPoint(x: 600, y: 959), in: display),
+            "The middle of the bottom edge reveals a hidden Dock"
+        )
         XCTAssertNil(WindowSnapZone.action(at: CGPoint(x: 600, y: 400), in: display))
         XCTAssertNil(WindowSnapZone.action(at: CGPoint(x: 1_500, y: 400), in: display))
     }

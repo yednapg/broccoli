@@ -318,6 +318,7 @@ final class BroccoliSettingsContext {
     let initialWindowShortcutError: String?
     let onWindowShortcutChanged: (WindowShortcutTarget, HotKeyConfiguration?) -> WindowShortcutChangeResult
     let onWindowShortcutsEnabledChanged: (Bool) -> String?
+    let onUseRecommendedWindowShortcuts: () -> String?
     let onCaptureWorkspace: (String) async -> String?
     let onClearUsage: () -> Void
     let onClearClipboard: () -> Void
@@ -332,6 +333,7 @@ final class BroccoliSettingsContext {
         initialWindowShortcutError: String?,
         onWindowShortcutChanged: @escaping (WindowShortcutTarget, HotKeyConfiguration?) -> WindowShortcutChangeResult,
         onWindowShortcutsEnabledChanged: @escaping (Bool) -> String?,
+        onUseRecommendedWindowShortcuts: @escaping () -> String?,
         onCaptureWorkspace: @escaping (String) async -> String?,
         onClearUsage: @escaping () -> Void,
         onClearClipboard: @escaping () -> Void,
@@ -353,6 +355,7 @@ final class BroccoliSettingsContext {
         self.initialWindowShortcutError = initialWindowShortcutError
         self.onWindowShortcutChanged = onWindowShortcutChanged
         self.onWindowShortcutsEnabledChanged = onWindowShortcutsEnabledChanged
+        self.onUseRecommendedWindowShortcuts = onUseRecommendedWindowShortcuts
         self.onCaptureWorkspace = onCaptureWorkspace
         self.onClearUsage = onClearUsage
         self.onClearClipboard = onClearClipboard
