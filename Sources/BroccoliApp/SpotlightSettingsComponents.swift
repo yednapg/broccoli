@@ -503,8 +503,29 @@ final class SpotlightSettingsNativeWindowChromeView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window !== attachedWindow else { return }
+        if let attachedWindow {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didBecomeKeyNotification,
+                object: attachedWindow
+            )
+        }
         attachedWindow = window
         configureWindowChrome()
+        // Reopening Settings reuses this window and view without moving the view again, so
+        // report the window each time it becomes key as well.
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window
+            )
+        }
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        reportAttachedWindow()
     }
 
     private func configureWindowChrome() {
