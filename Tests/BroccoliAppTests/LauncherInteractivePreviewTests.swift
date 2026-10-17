@@ -300,7 +300,7 @@ final class LauncherInteractivePreviewTests: XCTestCase {
             )
             XCTAssertEqual(
                 field.searchButtonBounds.midY,
-                field.bounds.midY,
+                field.bounds.midY + field.searchMetrics.symbolVerticalOffset,
                 accuracy: 0.51,
                 design.title
             )

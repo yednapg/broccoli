@@ -7,16 +7,30 @@ import SwiftUI
 /// and vertical rhythm cannot shrink accidentally with the window.
 enum LauncherMinimalMetrics {
     static let width: CGFloat = 550
-    static let cornerRadius: CGFloat = 2
+    static let cornerRadius: CGFloat = 3
     /// The collapsed bar stays at this height. Result rows are shorter.
     static let searchHeight: CGFloat = 55
     static let rowHeight: CGFloat = 50
-    static let searchFontSize: CGFloat = 34
+    static let searchFontSize: CGFloat = 32
     static let searchFontWeight = NSFont.Weight.light
-    /// The caret and the query sit this far from the left edge. Shortcuts and the clear
-    /// button end the same distance from the right edge.
+    /// Shortcuts, the clear button, and the header rule end this far from the right edge.
     static let contentHorizontalInset: CGFloat = 12
     static var searchHorizontalInset: CGFloat { contentHorizontalInset }
+    /// The caret runs from the query font's ascender to its descender.
+    static var searchCaretHeight: CGFloat {
+        let font = NSFont.systemFont(ofSize: searchFontSize, weight: searchFontWeight)
+        return font.ascender - font.descender
+    }
+    /// The bar leaves this much space above and below the caret, rounded to a Retina pixel.
+    /// The caret keeps the same distance from the left edge, so all three sides match.
+    static var searchCaretMargin: CGFloat {
+        ((searchHeight - searchCaretHeight) / 2 * 2).rounded() / 2
+    }
+    /// The caret's ink is this wide and centered on its insertion line.
+    static let insertionPointWidth: CGFloat = 2
+    /// The query's insertion line, measured from the panel's left edge. The caret is centered
+    /// on it and a text selection starts on it.
+    static var searchLeadingInset: CGFloat { searchCaretMargin + insertionPointWidth / 2 }
     /// The field's alignment rect is what the leading constraint positions, but AppKit draws
     /// the query two points to the left of it and the caret another half point before that.
     static let queryOriginCorrection: CGFloat = 2.5
@@ -51,10 +65,15 @@ enum LauncherMinimalMetrics {
     // The Minimal selection is an edge-to-edge rectangular band. Content retains its own
     // leading inset instead of using an outer table inset that narrows the blue fill.
     static let resultHorizontalInset: CGFloat = 0
-    /// Visible edge of every result icon, measured from the panel's left edge.
-    static let resultIconLeadingInset: CGFloat = 6
+    /// Visible edge of every result icon, measured from the panel's left edge. Icons start on
+    /// the query's insertion line, so the query and the results share one leading edge.
+    static var resultIconLeadingInset: CGFloat { searchLeadingInset }
+    /// Space between a result icon's visible edge and its title.
+    static let resultIconTitleGap: CGFloat = 8
     /// Where result titles and subtitles begin, measured from the panel's left edge.
-    static let resultTextLeadingInset: CGFloat = 48
+    static var resultTextLeadingInset: CGFloat {
+        resultIconLeadingInset + resultIconBody + resultIconTitleGap
+    }
     static let resultTopInset: CGFloat = 0
     static let resultBottomInset: CGFloat = 0
     static let rowSpacing: CGFloat = 0
@@ -79,8 +98,15 @@ enum LauncherMinimalMetrics {
     static let resultSettingsBadgeSize: CGFloat = 15
     static let resultTitleFontSize: CGFloat = 18
     static let resultSubtitleFontSize: CGFloat = 12
-    static let resultShortcutFontSize: CGFloat = 14
+    static let resultShortcutFontSize: CGFloat = 16
     static let resultShortcutFontWeight = NSFont.Weight.regular
+    /// Subtitles and unselected shortcuts share one ink: the label color at this opacity.
+    static let secondaryInkOpacity: CGFloat = 0.40
+    /// Resolved against the drawing appearance, as a semantic label color is.
+    static let secondaryInk = NSColor(name: "LauncherMinimalSecondaryInk") { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return (isDark ? NSColor.white : NSColor.black).withAlphaComponent(secondaryInkOpacity)
+    }
     /// Lowers a centered title stack so the rendered letters share the row's midpoint.
     /// The line boxes sit one point high once AppKit has drawn them.
     static let resultTextOpticalLift: CGFloat = -1
@@ -124,14 +150,12 @@ enum LauncherMinimalMetrics {
     /// stroke on the black fill; this sits just above that fill.
     static let darkSeparatorOpacity: CGFloat = 0.10
     static let darkSeparatorOpacityIncreasedContrast: CGFloat = 0.18
-    /// The Dark fill. Dark never shows the material.
+    /// The Dark fill when Reduce Transparency or Increase Contrast removes the blur.
     static let darkOpaqueBackground = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-    /// The system borderless shadow is a 0.3-density, 8-point blur with a hard rim at 0.85.
-    /// That rim reads as a border. Minimal keeps the native shadow and quiets every part of it.
-    static let shadowDensity: CGFloat = 0.15
-    static let shadowRadius: CGFloat = 12
-    static let shadowVerticalOffset: CGFloat = 2
-    static let shadowRimDensity: CGFloat = 0.15
+    /// The Dark fill over the window-server blur. About 15% of the blurred desktop shows through.
+    static let darkBlurredBackground = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 216.0 / 255)
+    /// Radius of the window-server blur behind the Dark fill.
+    static let darkBackdropBlurRadius = 15
 
     static func rimColor(isDark: Bool, increasedContrast: Bool) -> NSColor {
         if isDark {
@@ -183,9 +207,22 @@ enum LauncherLiquidGlassMetrics {
     // post-render enlargement is needed and the magnifier handle remains safely inside it.
     static let searchSymbolDrawingScale: CGFloat = 1
     static let searchSymbolDrawingVerticalScale: CGFloat = 1
+    /// Positive in the flipped search field. SF Symbols align with text through their
+    /// alignment rect, which spans the cap height above the baseline; Apple centers that box
+    /// on the text's cap height. The square canvas and AppKit's top-aligned button image
+    /// leave the magnifier's box slightly high, so this moves it down to the query's cap
+    /// height. Measured on the rendered field, not derived, because the button inset is
+    /// AppKit's.
+    static let searchSymbolVerticalOffset: CGFloat = 0.5
     static let resultIconSize: CGFloat = 50
     static let resultActionIconOpticalSize: CGFloat = 30
     static let resultClipboardIconOpticalSize: CGFloat = 48
+    /// The Settings plate created for Minimal, at this column's size. The glyph keeps
+    /// the same share of the plate.
+    static let resultSymbolGlyphSize: CGFloat =
+        LauncherMinimalMetrics.resultSymbolGlyphSize
+            * resultIconSize
+            / LauncherMinimalMetrics.resultIconBody
     // The System Settings icon that marks a Settings pane result, at its bottom-right corner.
     static let resultSettingsBadgeSize: CGFloat = 20
     static let statusIconSize: CGFloat = 22
@@ -263,6 +300,8 @@ struct LauncherThemeDescriptor {
     enum Surface: Equatable {
         case opaque
         case ultraThick
+        /// A translucent fill over the window-server blur of the desktop behind the panel.
+        case blurredFill
         case glass
     }
 
@@ -300,6 +339,46 @@ struct LauncherThemeDescriptor {
 
     var drawingAppearance: NSAppearance { iconContext.drawingAppearance }
 
+    /// The color a Minimal surface draws in place of its material. `nil` shows the material.
+    var surfaceFill: NSColor? {
+        switch surface {
+        case .opaque, .blurredFill: backgroundColor
+        case .ultraThick, .glass: nil
+        }
+    }
+
+    /// Radius of the window-server blur behind the panel. Zero turns the blur off.
+    var windowBackdropBlurRadius: Int {
+        surface == .blurredFill ? LauncherMinimalMetrics.darkBackdropBlurRadius : 0
+    }
+
+    /// Radius of the window's own rounded shape. `nil` keeps AppKit's shape.
+    var windowCornerMaskRadius: CGFloat? {
+        switch design {
+        case .minimal: cornerRadius
+        case .liquidGlass: nil
+        }
+    }
+
+    var resultSubtitleColor: NSColor {
+        switch design {
+        case .minimal: minimalSecondaryInk
+        case .liquidGlass: .secondaryLabelColor
+        }
+    }
+
+    var resultShortcutColor: NSColor {
+        switch design {
+        case .minimal: minimalSecondaryInk
+        case .liquidGlass: .tertiaryLabelColor
+        }
+    }
+
+    /// Increase Contrast keeps the system's stronger secondary label.
+    private var minimalSecondaryInk: NSColor {
+        environment.increasesContrast ? .secondaryLabelColor : LauncherMinimalMetrics.secondaryInk
+    }
+
     var searchPlaceholderColor: NSColor {
         switch design {
         case .liquidGlass:
@@ -308,6 +387,15 @@ struct LauncherThemeDescriptor {
             return searchIconColor
         case .minimal:
             return .placeholderTextColor
+        }
+    }
+
+    /// Distance from the panel's left edge to the search field. `searchHorizontalInset`
+    /// remains the right-hand inset.
+    var searchLeadingInset: CGFloat {
+        switch design {
+        case .minimal: LauncherMinimalMetrics.searchLeadingInset
+        case .liquidGlass: searchHorizontalInset
         }
     }
 
@@ -494,10 +582,15 @@ final class LauncherThemeController {
 
         switch preferences.design {
         case .minimal:
-            // Dark is pure black, so only Light needs the material.
-            let surface: LauncherThemeDescriptor.Surface = dark || reducedTransparency || contrast
-                ? .opaque
-                : .ultraThick
+            // Light uses the material and Dark a black fill over the window-server blur.
+            // Reduce Transparency and Increase Contrast make either one opaque.
+            let surface: LauncherThemeDescriptor.Surface = if reducedTransparency || contrast {
+                .opaque
+            } else if dark {
+                LauncherWindowBackdropBlur.isAvailable ? .blurredFill : .opaque
+            } else {
+                .ultraThick
+            }
             return LauncherThemeDescriptor(
                 environment: environment,
                 design: .minimal,
@@ -516,12 +609,13 @@ final class LauncherThemeController {
                 surface: surface,
                 appearance: appearance,
                 backgroundColor: dark
-                    ? LauncherMinimalMetrics.darkOpaqueBackground
+                    ? (surface == .blurredFill
+                        ? LauncherMinimalMetrics.darkBlurredBackground
+                        : LauncherMinimalMetrics.darkOpaqueBackground)
                     : NSColor(calibratedWhite: 0.93, alpha: 1),
                 selectionColor: .controlAccentColor,
                 selectedTextColor: .alternateSelectedControlTextColor,
                 selectedShortcutTextColor: .alternateSelectedControlTextColor,
-                // The native window shadow stays, with the quieter parameters below.
                 hasShadow: true,
                 showsSubtitles: preferences.showsSubtitles,
                 showsShortcuts: preferences.showsShortcuts,

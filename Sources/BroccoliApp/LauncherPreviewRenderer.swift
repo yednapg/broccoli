@@ -600,7 +600,7 @@ final class LauncherPreviewContentView: NSView,
             (surface as? LauncherMinimalMaterialSurfaceView)?.updateAppearance(
                 isDark: next.isDark,
                 increasedContrast: next.environment.increasesContrast,
-                opaqueBackground: next.surface == .opaque ? next.backgroundColor : nil)
+                fill: next.surfaceFill)
         }
         headerSeparator.color = next.headerSeparatorColor
         applyAdditiveInk()
@@ -734,12 +734,12 @@ final class LauncherPreviewContentView: NSView,
             liquidGlassSurface.layoutSubtreeIfNeeded()
             liquidGlassSurface.setContentView(content)
             surface = liquidGlassSurface
-        case .ultraThick, .opaque:
+        case .ultraThick, .opaque, .blurredFill:
             let material = LauncherMinimalMaterialSurfaceView(
                 frame: bounds,
                 isDark: descriptor.isDark,
                 increasedContrast: descriptor.environment.increasesContrast,
-                opaqueBackground: descriptor.surface == .opaque ? descriptor.backgroundColor : nil
+                fill: descriptor.surfaceFill
             )
             material.setContentView(content)
             surface = material
@@ -804,7 +804,7 @@ final class LauncherPreviewContentView: NSView,
 
         constraints.append(searchChrome.leadingAnchor.constraint(
             equalTo: content.leadingAnchor,
-            constant: descriptor.searchHorizontalInset
+            constant: descriptor.searchLeadingInset
         ))
 
         let column = NSTableColumn(identifier: .init("preview-result"))

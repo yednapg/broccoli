@@ -1,7 +1,8 @@
 @preconcurrency import AppKit
 
-/// The Minimal launcher is one continuous surface: macOS Ultra Thick material in Light, an
-/// opaque fill in Dark or when accessibility settings replace the material. The surface
+/// The Minimal launcher is one continuous surface: macOS Ultra Thick material in Light, a
+/// translucent black fill over the window-server blur in Dark, and an opaque fill when
+/// accessibility settings replace either one. The surface
 /// persists while the panel grows, so the search header and results never become separate cards.
 /// The material is clipped to the circular corner. The hairline is a sibling of that clip,
 /// so the stroke is not eaten along the arcs.
@@ -22,7 +23,7 @@ final class LauncherMinimalMaterialSurfaceView: NSView {
         frame frameRect: NSRect = .zero,
         isDark: Bool,
         increasedContrast: Bool = false,
-        opaqueBackground: NSColor? = nil
+        fill: NSColor? = nil
     ) {
         super.init(frame: frameRect)
 
@@ -69,7 +70,7 @@ final class LauncherMinimalMaterialSurfaceView: NSView {
         updateAppearance(
             isDark: isDark,
             increasedContrast: increasedContrast,
-            opaqueBackground: opaqueBackground
+            fill: fill
         )
     }
 
@@ -96,15 +97,15 @@ final class LauncherMinimalMaterialSurfaceView: NSView {
         window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
     }
 
-    func updateAppearance(isDark: Bool, increasedContrast: Bool = false, opaqueBackground: NSColor? = nil) {
-        materialView.isHidden = opaqueBackground != nil
+    func updateAppearance(isDark: Bool, increasedContrast: Bool = false, fill: NSColor? = nil) {
+        materialView.isHidden = fill != nil
         layer?.backgroundColor = nil
         rim.update(isDark: isDark, increasedContrast: increasedContrast)
         rim.isHidden = true
         rim.layer?.borderWidth = 0
-        if let opaqueBackground {
+        if let fill {
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                tintView.layer?.backgroundColor = opaqueBackground.cgColor
+                tintView.layer?.backgroundColor = fill.cgColor
             }
             return
         }

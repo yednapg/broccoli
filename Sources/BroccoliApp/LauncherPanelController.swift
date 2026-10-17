@@ -260,7 +260,8 @@ struct LauncherSearchMetrics: Equatable {
         symbolTextGap: LauncherLiquidGlassMetrics.searchSymbolTextGap,
         textLeadingCompensation: LauncherLiquidGlassMetrics.searchTextHorizontalOffset,
         symbolDrawingScale: LauncherLiquidGlassMetrics.searchSymbolDrawingScale,
-        symbolDrawingVerticalScale: LauncherLiquidGlassMetrics.searchSymbolDrawingVerticalScale
+        symbolDrawingVerticalScale: LauncherLiquidGlassMetrics.searchSymbolDrawingVerticalScale,
+        symbolVerticalOffset: LauncherLiquidGlassMetrics.searchSymbolVerticalOffset
     )
     static let figmaMinimal = LauncherSearchMetrics(
         fontSize: LauncherMinimalMetrics.searchFontSize,
@@ -272,7 +273,8 @@ struct LauncherSearchMetrics: Equatable {
         queryLeadingInset: LauncherMinimalMetrics.queryLeadingInset,
         cancelTrailingInset: 0,
         symbolDrawingScale: LauncherMinimalMetrics.searchSymbolDrawingScale,
-        symbolDrawingVerticalScale: LauncherMinimalMetrics.searchSymbolDrawingVerticalScale
+        symbolDrawingVerticalScale: LauncherMinimalMetrics.searchSymbolDrawingVerticalScale,
+        centersCaret: true
     )
 
     let fontSize: CGFloat
@@ -287,6 +289,12 @@ struct LauncherSearchMetrics: Equatable {
     let emptyInsertionPointLeadingGap: CGFloat
     let symbolDrawingScale: CGFloat
     let symbolDrawingVerticalScale: CGFloat
+    /// Positive in the flipped field: moves the magnifier down from the line-box center.
+    let symbolVerticalOffset: CGFloat
+    /// Centers the caret, which runs from the font's ascender to its descender, instead of
+    /// the rounded-up line box. The caret is drawn from the top of that box, so centering
+    /// the box leaves the caret high.
+    let centersCaret: Bool
 
     init(
         fontSize: CGFloat,
@@ -298,7 +306,9 @@ struct LauncherSearchMetrics: Equatable {
         queryLeadingInset: CGFloat = 0,
         cancelTrailingInset: CGFloat = 2,
         symbolDrawingScale: CGFloat = 1,
-        symbolDrawingVerticalScale: CGFloat = 1
+        symbolDrawingVerticalScale: CGFloat = 1,
+        symbolVerticalOffset: CGFloat = 0,
+        centersCaret: Bool = false
     ) {
         self.fontSize = fontSize
         self.fontWeight = fontWeight
@@ -311,6 +321,8 @@ struct LauncherSearchMetrics: Equatable {
         self.emptyInsertionPointLeadingGap = Self.sharedEmptyInsertionPointLeadingGap
         self.symbolDrawingScale = symbolDrawingScale
         self.symbolDrawingVerticalScale = symbolDrawingVerticalScale
+        self.symbolVerticalOffset = symbolVerticalOffset
+        self.centersCaret = centersCaret
     }
 
     var cancelSize: CGFloat { min(20, max(16, fontSize * 0.7)) }
@@ -403,7 +415,7 @@ struct LauncherSearchGeometry {
     var searchButtonRect: NSRect {
         NSRect(
             x: bounds.minX,
-            y: bounds.midY - metrics.symbolSize / 2,
+            y: bounds.midY - metrics.symbolSize / 2 + metrics.symbolVerticalOffset,
             width: metrics.symbolSize,
             height: metrics.symbolSize
         )
@@ -427,11 +439,17 @@ struct LauncherSearchGeometry {
             : metrics.queryLeadingInset
         let leading = leadingAnchor + gap
         let trailing = cancelButtonRect.minX - 10
-        let lineHeight = ceil(metrics.font.ascender - metrics.font.descender + metrics.font.leading)
+        let font = metrics.font
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
         let textRectHeight = min(bounds.height, lineHeight)
+        // Rounded to a Retina pixel, as the field's own editor rect is, so the caret's top
+        // edge stays sharp and does not move between layouts.
+        let top = metrics.centersCaret
+            ? ((bounds.midY - min(textRectHeight, font.ascender - font.descender) / 2) * 2).rounded() / 2
+            : bounds.midY - textRectHeight / 2
         return NSRect(
             x: leading,
-            y: bounds.midY - textRectHeight / 2,
+            y: top,
             width: max(0, trailing - leading),
             height: textRectHeight
         )
@@ -1206,11 +1224,21 @@ final class LauncherGlassRimView: NSView {
 private final class LauncherPanel: NSPanel {
     var onCommand: ((SearchFieldCommand) -> Void)?
     var numericShortcutLimit = LauncherNumericShortcut.maximum
-    /// Minimal uses the native shadow with a lower density and a soft rim. Liquid Glass
-    /// keeps the system shadow.
-    var usesReducedShadow = false
     /// Return `true` to consume the mouse-down and hand the move to Window Server.
     var onPotentialMove: ((NSEvent) -> Bool)?
+    /// Radius of the window's own rounded shape, or `nil` for AppKit's. WindowServer clips
+    /// the backdrop blur, the shadow, and the shadow's rim to that shape, not to rounded
+    /// content inside a rectangular window.
+    var cornerMaskRadius: CGFloat? {
+        didSet {
+            guard cornerMaskRadius != oldValue else { return }
+            cornerMask = cornerMaskRadius.map(Self.roundedCornerMask(radius:))
+            let changed = NSSelectorFromString("_cornerMaskChanged")
+            if responds(to: changed) { _ = perform(changed) }
+            invalidateShadow()
+        }
+    }
+    private var cornerMask: NSImage?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -1229,37 +1257,31 @@ private final class LauncherPanel: NSPanel {
         super.sendEvent(event)
     }
 
-    /// AppKit reads this private method whenever it rebuilds the window shadow. Returning
-    /// the system dictionary with a few keys replaced keeps one native shadow and makes
-    /// Minimal's lighter than the borderless default.
-    @objc(shadowParameters)
-    func launcherShadowParameters() -> NSDictionary {
-        let base = Self.systemShadowParameters(for: self)
-        guard usesReducedShadow else { return base }
-        let adjusted = base.mutableCopy() as? NSMutableDictionary ?? NSMutableDictionary()
-        let density = LauncherMinimalMetrics.shadowDensity as NSNumber
-        let radius = LauncherMinimalMetrics.shadowRadius as NSNumber
-        let offset = LauncherMinimalMetrics.shadowVerticalOffset as NSNumber
-        let rim = LauncherMinimalMetrics.shadowRimDensity as NSNumber
-        adjusted["com.apple.WindowShadowDensityActive"] = density
-        adjusted["com.apple.WindowShadowDensityInactive"] = density
-        adjusted["com.apple.WindowShadowRadiusActive"] = radius
-        adjusted["com.apple.WindowShadowRadiusInactive"] = radius
-        adjusted["com.apple.WindowShadowVerticalOffsetActive"] = offset
-        adjusted["com.apple.WindowShadowVerticalOffsetInactive"] = offset
-        adjusted["com.apple.WindowShadowRimDensityActive"] = rim
-        adjusted["com.apple.WindowShadowRimDensityInactive"] = rim
-        adjusted["com.apple.WindowShadowRimStyleHardActive"] = 0
-        adjusted["com.apple.WindowShadowRimStyleHardInactive"] = 0
-        return adjusted
+    /// AppKit reads this private method for the window's shape.
+    @objc(_cornerMask)
+    func launcherCornerMask() -> NSImage? {
+        cornerMask ?? Self.systemCornerMask(for: self)
     }
 
-    private static func systemShadowParameters(for window: NSWindow) -> NSDictionary {
-        let selector = NSSelectorFromString("shadowParameters")
-        guard let method = class_getInstanceMethod(NSWindow.self, selector) else { return [:] }
-        typealias Function = @convention(c) (AnyObject, Selector) -> NSDictionary
+    private static func systemCornerMask(for window: NSWindow) -> NSImage? {
+        let selector = NSSelectorFromString("_cornerMask")
+        guard let method = class_getInstanceMethod(NSWindow.self, selector) else { return nil }
+        typealias Function = @convention(c) (AnyObject, Selector) -> NSImage?
         let implementation = unsafeBitCast(method_getImplementation(method), to: Function.self)
         return implementation(window, selector)
+    }
+
+    /// A stretchable mask: the corners keep their arc and the edges stretch.
+    private static func roundedCornerMask(radius: CGFloat) -> NSImage {
+        let side = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -1347,6 +1369,8 @@ final class ResultRowView: NSTableCellView {
     private var selectionColor = NSColor.controlAccentColor
     private var selectedTextColor = NSColor.alternateSelectedControlTextColor
     private var selectedShortcutTextColor = NSColor.alternateSelectedControlTextColor
+    private var subtitleTextColor = NSColor.secondaryLabelColor
+    private var shortcutTextColor = NSColor.tertiaryLabelColor
     private var usesFullWidthSelectionBackground = false
 
     override var backgroundStyle: NSView.BackgroundStyle {
@@ -1488,13 +1512,11 @@ final class ResultRowView: NSTableCellView {
         }
     }
 
-    /// Every Liquid row reserves one 50-point icon column. Action glyphs draw in their
-    /// requested 30-point canvas centred inside it, keeping narrow symbols away from either
-    /// column edge without changing the title alignment.
+    /// Every Liquid row reserves one 50-point icon column. Symbol plates fill that column,
+    /// the same way Minimal's plate fills its icon body.
     static func liquidDrawingCanvasSize(for kind: SearchKind) -> CGFloat {
-        kind == .action
-            ? LauncherLiquidGlassMetrics.resultActionIconOpticalSize
-            : LauncherLiquidGlassMetrics.resultIconSize
+        _ = kind
+        return LauncherLiquidGlassMetrics.resultIconSize
     }
 
     static func minimalOpticalIconSize(for kind: SearchKind) -> CGFloat {
@@ -1591,16 +1613,19 @@ final class ResultRowView: NSTableCellView {
         return normalized
     }
 
-    /// Minimal SF Symbols use the same rounded plate as a Settings icon, with the glyph centered on it.
-    private static func minimalTiledSymbol(
+    /// Both launcher designs draw SF Symbol results on the rounded Settings plate, with the
+    /// glyph centered. The plate is the theme's own icon size; the corner and colors are shared.
+    private static func tiledSymbol(
         _ source: NSImage,
         canvasSize: CGFloat,
+        tileSize: CGFloat,
+        glyphSize: CGFloat,
         isDark: Bool
     ) -> NSImage {
         let glyph = normalizedIcon(
             source,
             canvasSize: canvasSize,
-            opticalSize: LauncherMinimalMetrics.resultSymbolGlyphSize
+            opticalSize: glyphSize
         )
         let tinted = NSImage(size: NSSize(width: canvasSize, height: canvasSize), flipped: false) { rect in
             let drawn = glyph.copy() as? NSImage ?? glyph
@@ -1610,7 +1635,7 @@ final class ResultRowView: NSTableCellView {
             rect.fill(using: .sourceAtop)
             return true
         }
-        let tile = LauncherMinimalMetrics.resultIconBody
+        let tile = tileSize
         let radius = tile * LauncherMinimalMetrics.resultSymbolTileCornerRatio
         let tileColor = isDark
             ? LauncherMinimalMetrics.resultSymbolTileDark
@@ -1674,37 +1699,6 @@ final class ResultRowView: NSTableCellView {
         return image
     }
 
-    /// Clipboard's small handle and antialiased outer pixels are part of the symbol. Unlike
-    /// action glyphs, fit its complete AppKit image bounds rather than trimming the alpha bounds.
-    private static func fittedIconPreservingSourceBounds(
-        _ source: NSImage,
-        canvasSize: CGFloat,
-        opticalSize: CGFloat
-    ) -> NSImage {
-        guard source.size.width > 0, source.size.height > 0 else { return source }
-        let fit = min(opticalSize / source.size.width, opticalSize / source.size.height)
-        let drawnSize = NSSize(width: source.size.width * fit, height: source.size.height * fit)
-        let destination = NSRect(
-            x: (canvasSize - drawnSize.width) / 2,
-            y: (canvasSize - drawnSize.height) / 2,
-            width: drawnSize.width,
-            height: drawnSize.height
-        )
-        let fitted = NSImage(size: NSSize(width: canvasSize, height: canvasSize), flipped: false) { _ in
-            source.draw(
-                in: destination,
-                from: NSRect(origin: .zero, size: source.size),
-                operation: .sourceOver,
-                fraction: 1,
-                respectFlipped: true,
-                hints: [.interpolation: NSImageInterpolation.high]
-            )
-            return true
-        }
-        fitted.isTemplate = source.isTemplate
-        return fitted
-    }
-
     func configure(
         result: RankedResult,
         icon: NSImage,
@@ -1729,30 +1723,23 @@ final class ResultRowView: NSTableCellView {
         } else {
             27
         }
-        let templateWeight: NSFont.Weight = if usesLiquidGlassLayout && result.entry.kind == .clipboard {
-            .medium
-        } else if usesMinimalLayout, result.entry.kind == .clipboard || result.entry.kind == .action {
+        let templateWeight: NSFont.Weight = if result.entry.kind == .clipboard || result.entry.kind == .action {
             .medium
         } else {
             .regular
         }
-        let sourceIcon = if usesLiquidGlassLayout, result.entry.kind == .clipboard {
-            NSImage(
-                systemSymbolName: "list.clipboard",
-                accessibilityDescription: "Clipboard History"
-            ) ?? icon
-        } else {
-            icon
-        }
         let usesNativeArtwork = result.entry.kind == .application
             || result.entry.kind == .systemSetting
             || result.entry.kind == .file
-        let configuredIcon = sourceIcon.isTemplate && !usesNativeArtwork
-            ? (sourceIcon.withSymbolConfiguration(.init(
+        let configuredIcon = icon.isTemplate && !usesNativeArtwork
+            ? (icon.withSymbolConfiguration(.init(
                 pointSize: templatePointSize,
                 weight: templateWeight
-            )) ?? sourceIcon)
-            : sourceIcon
+            )) ?? icon)
+            : icon
+        let usesSharedSymbolPlate = configuredIcon.isTemplate
+            && !usesCompactStatusIcon
+            && (usesMinimalLayout || usesLiquidGlassLayout)
         resultIcon.symbolConfiguration = nil
         resultIcon.contentTintColor = nil
         resultIcon.image = if usesCompactStatusIcon {
@@ -1761,10 +1748,18 @@ final class ResultRowView: NSTableCellView {
                 canvasSize: Self.statusIconSize,
                 opticalSize: Self.statusIconSize
             )
-        } else if usesMinimalLayout, configuredIcon.isTemplate, !usesCompactStatusIcon {
-            Self.minimalTiledSymbol(
+        } else if usesSharedSymbolPlate {
+            Self.tiledSymbol(
                 configuredIcon,
-                canvasSize: Self.minimalIconCanvasSize(for: result.entry.kind),
+                canvasSize: usesLiquidGlassLayout
+                    ? Self.liquidIconSize(for: result.entry.kind)
+                    : Self.minimalIconCanvasSize(for: result.entry.kind),
+                tileSize: usesLiquidGlassLayout
+                    ? LauncherLiquidGlassMetrics.resultIconSize
+                    : LauncherMinimalMetrics.resultIconBody,
+                glyphSize: usesLiquidGlassLayout
+                    ? LauncherLiquidGlassMetrics.resultSymbolGlyphSize
+                    : LauncherMinimalMetrics.resultSymbolGlyphSize,
                 isDark: theme.isDark
             )
         } else if usesMinimalLayout {
@@ -1772,18 +1767,6 @@ final class ResultRowView: NSTableCellView {
                 configuredIcon,
                 canvasSize: Self.minimalIconCanvasSize(for: result.entry.kind),
                 opticalSize: Self.minimalOpticalIconSize(for: result.entry.kind)
-            )
-        } else if usesLiquidGlassLayout, result.entry.kind == .clipboard {
-            Self.fittedIconPreservingSourceBounds(
-                configuredIcon,
-                canvasSize: Self.liquidIconSize(for: result.entry.kind),
-                opticalSize: Self.liquidOpticalIconSize(for: result.entry.kind)
-            )
-        } else if usesLiquidGlassLayout, configuredIcon.isTemplate {
-            Self.normalizedIcon(
-                configuredIcon,
-                canvasSize: Self.liquidDrawingCanvasSize(for: result.entry.kind),
-                opticalSize: Self.liquidOpticalIconSize(for: result.entry.kind)
             )
         } else {
             configuredIcon
@@ -1826,6 +1809,8 @@ final class ResultRowView: NSTableCellView {
         selectionColor = theme.selectionColor
         selectedTextColor = theme.selectedTextColor
         selectedShortcutTextColor = theme.selectedShortcutTextColor
+        subtitleTextColor = theme.resultSubtitleColor
+        shortcutTextColor = theme.resultShortcutColor
         usesFullWidthSelectionBackground = theme.design == .minimal
         let minimalIconSize = LauncherMinimalMetrics.resultIconBox
         let minimalSlotSize = LauncherMinimalMetrics.resultIconBox
@@ -1925,10 +1910,10 @@ final class ResultRowView: NSTableCellView {
         titleLabel.textColor = highlighted ? selectedTextColor : .labelColor
         subtitleLabel.textColor = highlighted
             ? selectedTextColor.withAlphaComponent(0.82)
-            : .secondaryLabelColor
+            : subtitleTextColor
         shortcutLabel.textColor = highlighted
             ? selectedShortcutTextColor
-            : .tertiaryLabelColor
+            : shortcutTextColor
         // SF Symbol action icons are template images. Let AppKit apply semantic label colors
         // in Light, Dark, and selected states. Native full-color app/Settings bitmaps must not
         // inherit the table's emphasized backgroundStyle, which otherwise flattens pane art
@@ -2034,6 +2019,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
     private var isWarmingResultTable = false
     private(set) var hasWarmedExpansionDisplay = false
     private var lastNativeIconRefreshContext: IconRenderContext?
+    private(set) var windowBackdropBlurRadius = 0
     private var theme: LauncherThemeDescriptor {
         didSet {
             panel.numericShortcutLimit = LauncherNumericShortcut.limit(
@@ -2207,8 +2193,9 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             (surface as? LauncherMinimalMaterialSurfaceView)?.updateAppearance(
                 isDark: theme.isDark,
                 increasedContrast: theme.environment.increasesContrast,
-                opaqueBackground: theme.surface == .opaque ? theme.backgroundColor : nil)
+                fill: theme.surfaceFill)
         }
+        applyWindowBackdropBlur()
         headerSeparator.color = theme.headerSeparatorColor
         LauncherNativeSearchFieldStyle.apply(
             to: nativeSearchField,
@@ -2228,6 +2215,14 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             _ = tableView(tableView, viewFor: tableView.tableColumns.first, row: row)
         }
         panel.contentView?.needsDisplay = true
+    }
+
+    private func applyWindowBackdropBlur() {
+        let radius = theme.windowBackdropBlurRadius
+        guard radius != windowBackdropBlurRadius else { return }
+        if LauncherWindowBackdropBlur.apply(radius: radius, to: panel) {
+            windowBackdropBlurRadius = radius
+        }
     }
 
     private var iconContext: IconRenderContext {
@@ -2277,9 +2272,10 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         theme = descriptor ?? themeController.descriptor(for: preferences, environment: environmentProvider())
         cachedExpansionAnimationDuration = effectiveExpansionAnimationDuration
         panel.appearance = theme.appearance
-        panel.usesReducedShadow = theme.design == .minimal
         panel.hasShadow = theme.hasShadow
+        panel.cornerMaskRadius = theme.windowCornerMaskRadius
         if panel.hasShadow { panel.invalidateShadow() }
+        applyWindowBackdropBlur()
         tableView.rowHeight = theme.rowHeight
         // Resize both axes before installing the constrained content tree. A controller is
         // born at Minimal's width; installing Liquid Glass inside that stale frame makes
@@ -2749,7 +2745,6 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
         panel.title = "Broccoli Launcher"
         panel.setAccessibilityLabel("Broccoli Launcher")
         panel.appearance = theme.appearance
-        panel.usesReducedShadow = theme.design == .minimal
         panel.hasShadow = theme.hasShadow
         panel.animationBehavior = .none
         // Like Spotlight, the launcher accepts keyboard focus without activating Broccoli.
@@ -2808,12 +2803,12 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             liquidGlassSurface.layoutSubtreeIfNeeded()
             liquidGlassSurface.setContentView(content)
             surface = liquidGlassSurface
-        case .ultraThick, .opaque:
+        case .ultraThick, .opaque, .blurredFill:
             let material = LauncherMinimalMaterialSurfaceView(
                 frame: host.bounds,
                 isDark: theme.isDark,
                 increasedContrast: theme.environment.increasesContrast,
-                opaqueBackground: theme.surface == .opaque ? theme.backgroundColor : nil
+                fill: theme.surfaceFill
             )
             material.setContentView(content)
             surface = material
@@ -2923,7 +2918,7 @@ final class LauncherPanelController: NSObject, NSTableViewDataSource, NSTableVie
             resultsBottomConstraint,
             searchChrome.leadingAnchor.constraint(
                 equalTo: content.leadingAnchor,
-                constant: theme.searchHorizontalInset
+                constant: theme.searchLeadingInset
             ),
         ]
         constraints.append(resultsChrome.trailingAnchor.constraint(

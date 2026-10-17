@@ -59,10 +59,59 @@ final class LauncherSelectionAppearanceTests: XCTestCase {
         let fields = row.subviews.compactMap { $0 as? NSTextField }
         let title = try XCTUnwrap(fields.first { $0.font?.pointSize == 18 })
         let subtitle = try XCTUnwrap(fields.first { $0.font?.pointSize == 12 })
-        let shortcut = try XCTUnwrap(fields.first { $0.font?.pointSize == 14 })
+        let shortcut = try XCTUnwrap(fields.first { $0.font?.pointSize == 16 })
         XCTAssertEqual(title.font?.fontName, NSFont.systemFont(ofSize: 18, weight: .regular).fontName)
         XCTAssertEqual(subtitle.font?.fontName, NSFont.systemFont(ofSize: 12, weight: .regular).fontName)
-        XCTAssertEqual(shortcut.font?.fontName, NSFont.systemFont(ofSize: 14, weight: .regular).fontName)
+        XCTAssertEqual(shortcut.font?.fontName, NSFont.systemFont(ofSize: 16, weight: .regular).fontName)
+    }
+
+    /// Minimal's subtitle and unselected shortcut share 40% of the label color of whichever
+    /// appearance draws them. Increase Contrast keeps the system's stronger secondary label.
+    func testMinimalSubtitleAndShortcutShareTheSecondaryInk() throws {
+        _ = NSApplication.shared
+        let controller = LauncherThemeController()
+        let result = try XCTUnwrap(LauncherPreviewFixture.standard.results.first)
+
+        func inks(increasedContrast: Bool) throws -> (subtitle: NSColor?, shortcut: NSColor?) {
+            let preferences = LauncherAppearancePreferences.defaults(design: .minimal)
+            let theme = controller.descriptor(
+                for: preferences,
+                reducedTransparency: false,
+                increasedContrast: increasedContrast
+            )
+            let row = ResultRowView()
+            row.configure(
+                result: result,
+                icon: LauncherPreviewIconProvider().image(for: result.entry),
+                confirmation: false,
+                row: 1,
+                selected: false,
+                theme: theme
+            )
+            let fields = row.subviews.compactMap { $0 as? NSTextField }
+            let subtitle = try XCTUnwrap(fields.first { $0.font?.pointSize == 12 })
+            let shortcut = try XCTUnwrap(fields.first { $0.font?.pointSize == 16 })
+            return (subtitle.textColor, shortcut.textColor)
+        }
+
+        let standard = try inks(increasedContrast: false)
+        for (name, white) in [(NSAppearance.Name.darkAqua, CGFloat(1)), (.aqua, 0)] {
+            let appearance = try XCTUnwrap(NSAppearance(named: name))
+            for color in [standard.subtitle, standard.shortcut] {
+                var resolved: NSColor?
+                appearance.performAsCurrentDrawingAppearance {
+                    resolved = color?.usingColorSpace(.sRGB)
+                }
+                let srgb = try XCTUnwrap(resolved, "\(name)")
+                XCTAssertEqual(srgb.redComponent, white, accuracy: 0.001, "\(name)")
+                XCTAssertEqual(srgb.greenComponent, white, accuracy: 0.001, "\(name)")
+                XCTAssertEqual(srgb.blueComponent, white, accuracy: 0.001, "\(name)")
+                XCTAssertEqual(srgb.alphaComponent, LauncherMinimalMetrics.secondaryInkOpacity, accuracy: 0.001, "\(name)")
+            }
+        }
+        let contrasted = try inks(increasedContrast: true)
+        XCTAssertTrue(contrasted.subtitle?.isEqual(NSColor.secondaryLabelColor) == true)
+        XCTAssertTrue(contrasted.shortcut?.isEqual(NSColor.secondaryLabelColor) == true)
     }
 
     func testDarkLiquidGlassUsesTheSameAccentSelectionContract() {

@@ -42,7 +42,9 @@ final class NativeAppearanceRegressionTests: XCTestCase {
                         XCTAssertTrue(surface.glassClip.layer?.masksToBounds == true)
                         let minimal = LauncherThemeController().descriptor(
                             for: .defaults(design: .minimal), environment: environment)
-                        XCTAssertEqual(minimal.surface, dark || transparency || contrast ? .opaque : .ultraThick)
+                        let expectedMinimalSurface: LauncherThemeDescriptor.Surface =
+                            transparency || contrast ? .opaque : (dark ? .blurredFill : .ultraThick)
+                        XCTAssertEqual(minimal.surface, expectedMinimalSurface)
                     }
                 }
             }
@@ -167,6 +169,74 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         XCTAssertEqual(Set(keys).count, 3)
     }
 
+    func testOnlyDarkMinimalBlursTheDesktopBehindThePanel() {
+        _ = NSApplication.shared
+        XCTAssertTrue(LauncherWindowBackdropBlur.isAvailable)
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
+        var preferences = LauncherAppearancePreferences.defaults(design: .minimal)
+        preferences.mode = .dark
+        panel.applyAppearance(preferences)
+        XCTAssertEqual(panel.windowBackdropBlurRadius, LauncherMinimalMetrics.darkBackdropBlurRadius)
+
+        preferences.mode = .light
+        panel.applyAppearance(preferences)
+        XCTAssertEqual(panel.windowBackdropBlurRadius, 0, "Light uses its material, not the window blur")
+
+        preferences.mode = .dark
+        panel.applyAppearance(preferences)
+        preferences.design = .liquidGlass
+        panel.applyAppearance(preferences)
+        XCTAssertEqual(panel.windowBackdropBlurRadius, 0, "Liquid Glass supplies its own backdrop")
+    }
+
+    /// WindowServer clips the backdrop blur and the shadow's rim to the window's shape. A
+    /// rounded fill inside a rectangular window left a square edge with blurred desktop
+    /// showing inside each corner.
+    func testMinimalWindowShapeFollowsTheRoundedSurface() throws {
+        _ = NSApplication.shared
+        let panel = LauncherPanelController(expansionAnimationDuration: { 0 })
+        let window = panel.visibilityIsolationWindow
+        let radius = LauncherMinimalMetrics.cornerRadius
+        for mode in [LauncherAppearanceMode.light, .dark] {
+            var preferences = LauncherAppearancePreferences.defaults(design: .minimal)
+            preferences.mode = mode
+            panel.applyAppearance(preferences)
+            let mask = try XCTUnwrap(window.value(forKey: "_cornerMask") as? NSImage, "\(mode)")
+            XCTAssertEqual(mask.size, NSSize(width: radius * 2 + 1, height: radius * 2 + 1))
+            XCTAssertEqual(mask.capInsets.top, radius)
+            XCTAssertEqual(mask.capInsets.left, radius)
+            XCTAssertEqual(mask.capInsets.bottom, radius)
+            XCTAssertEqual(mask.capInsets.right, radius)
+            XCTAssertEqual(mask.resizingMode, .stretch)
+
+            let pixels = Int(mask.size.width * 2)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            bitmap.size = mask.size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            mask.draw(in: NSRect(origin: .zero, size: mask.size))
+            NSGraphicsContext.restoreGraphicsState()
+            XCTAssertLessThan(bitmap.colorAt(x: 0, y: 0)?.alphaComponent ?? 1, 0.1, "The corner is cut")
+            XCTAssertEqual(bitmap.colorAt(x: pixels / 2, y: pixels / 2)?.alphaComponent ?? 0, 1, accuracy: 0.01)
+        }
+
+        let plain = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        let systemMask = plain.value(forKey: "_cornerMask") as? NSImage
+        panel.applyAppearance(.defaults(design: .liquidGlass))
+        let glassMask = window.value(forKey: "_cornerMask") as? NSImage
+        XCTAssertEqual(glassMask == nil, systemMask == nil, "Liquid Glass keeps AppKit's window shape")
+        XCTAssertEqual(glassMask?.size, systemMask?.size)
+    }
+
     func testLiquidPanelWindowBoundaryMatchesSurfaceAcrossExpansion() throws {
         func shadowValue(_ parameters: NSDictionary, _ key: String) -> Double {
             if let number = parameters[key] as? NSNumber { return number.doubleValue }
@@ -229,10 +299,9 @@ final class NativeAppearanceRegressionTests: XCTestCase {
         panel.applyAppearance(.defaults(design: .minimal))
         XCTAssertTrue(window.hasShadow)
         let minimalShadow = try XCTUnwrap(window.value(forKey: "shadowParameters") as? NSDictionary)
-        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowDensityActive"), 0.15)
-        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRadiusActive"), 12)
-        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRimDensityActive"), 0.15)
-        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRimStyleHardActive"), 0)
+        XCTAssertEqual(minimalShadow, glassShadow, "Minimal keeps the system's borderless shadow")
+        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowDensityActive"), 0.3)
+        XCTAssertEqual(shadowValue(minimalShadow, "com.apple.WindowShadowRimStyleHardActive"), 1)
         let minimalRoot = try XCTUnwrap(window.contentView)
         minimalRoot.layoutSubtreeIfNeeded()
         let minimalSurface = try XCTUnwrap(

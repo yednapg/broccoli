@@ -784,10 +784,10 @@ final class IconCacheTests: XCTestCase {
         XCTAssertTrue(iconView.wantsLayer)
         XCTAssertFalse(iconView.allowsVibrancy)
 
-        for kind in [SearchKind.action, .calculator, .clipboard, .status] {
+        for kind in [SearchKind.action, .calculator, .clipboard] {
             let entry = symbolEntry(kind)
             let icon = cache.image(for: entry)
-            XCTAssertTrue(icon.isTemplate, "\(kind) must stay a template so it remains visible on the HUD")
+            XCTAssertTrue(icon.isTemplate, "\(kind) starts as a template symbol")
             row.configure(
                 result: RankedResult(entry: entry, score: 1),
                 icon: icon,
@@ -796,9 +796,27 @@ final class IconCacheTests: XCTestCase {
                 selected: false,
                 theme: theme
             )
-            XCTAssertTrue(iconView.allowsVibrancy, "\(kind) icons must stay on the vibrancy path")
-            XCTAssertFalse(iconView.wantsLayer)
+            XCTAssertFalse(
+                iconView.image?.isTemplate ?? true,
+                "\(kind) is drawn on the shared Settings plate"
+            )
+            XCTAssertFalse(iconView.allowsVibrancy, "\(kind) plate must keep its own color")
+            XCTAssertTrue(iconView.wantsLayer)
         }
+
+        let status = symbolEntry(.status)
+        let statusIcon = cache.image(for: status)
+        XCTAssertTrue(statusIcon.isTemplate)
+        row.configure(
+            result: RankedResult(entry: status, score: 1),
+            icon: statusIcon,
+            confirmation: false,
+            row: 0,
+            selected: false,
+            theme: theme
+        )
+        XCTAssertTrue(iconView.allowsVibrancy, "Status symbols stay on the vibrancy path")
+        XCTAssertFalse(iconView.wantsLayer)
     }
 
     private func symbolEntry(_ kind: SearchKind) -> SearchEntry {
@@ -957,7 +975,7 @@ final class IconCacheTests: XCTestCase {
         )
         XCTAssertEqual(
             ResultRowView.liquidDrawingCanvasSize(for: .action),
-            LauncherLiquidGlassMetrics.resultActionIconOpticalSize
+            LauncherLiquidGlassMetrics.resultIconSize
         )
         XCTAssertEqual(
             ResultRowView.liquidDrawingCanvasSize(for: .application),
@@ -1112,7 +1130,7 @@ final class IconCacheTests: XCTestCase {
         let clipboardBitmap = try renderedMinimalIconBitmap(try XCTUnwrap(iconView.image))
         let clipboardBounds = try XCTUnwrap(nonTransparentBounds(in: clipboardBitmap))
 
-        XCTAssertEqual(actionFrame.size, NSSize(width: 30, height: 30))
+        XCTAssertEqual(actionFrame.size, NSSize(width: 50, height: 50))
         XCTAssertEqual(clipboardFrame.size, NSSize(width: 50, height: 50))
         XCTAssertEqual(
             actionFrame.midX,
@@ -1122,13 +1140,14 @@ final class IconCacheTests: XCTestCase {
         )
         XCTAssertEqual(
             max(actionBounds.width, actionBounds.height),
-            LauncherLiquidGlassMetrics.resultActionIconOpticalSize * 2,
+            LauncherLiquidGlassMetrics.resultIconSize * 2,
             accuracy: 2
         )
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             max(clipboardBounds.width, clipboardBounds.height),
             max(actionBounds.width, actionBounds.height),
-            "Non-action result icons keep their existing visual size"
+            accuracy: 2,
+            "Action and clipboard symbols share one Settings plate"
         )
         XCTAssertEqual(titleLabel.frame.minX, actionTitleX, accuracy: 0.001)
     }
@@ -1189,6 +1208,44 @@ final class IconCacheTests: XCTestCase {
         let bitmap = try renderedMinimalIconBitmap(image)
         let scale = CGFloat(bitmap.pixelsWide) / image.size.width
         let tile = LauncherMinimalMetrics.resultIconBody
+        let plateX = Int((((image.size.width - tile) / 2) + 2) * scale)
+        let plateY = Int(image.size.height / 2 * scale)
+        let plate = try XCTUnwrap(bitmap.colorAt(x: plateX, y: plateY)?.usingColorSpace(.sRGB))
+        XCTAssertLessThan(plate.redComponent, 0.2)
+        XCTAssertLessThan(plate.greenComponent, 0.2)
+        XCTAssertLessThan(plate.blueComponent, 0.2)
+        XCTAssertGreaterThan(plate.alphaComponent, 0.9)
+        let bounds = try XCTUnwrap(nonTransparentBounds(in: bitmap))
+        XCTAssertEqual(bounds.height, tile * scale, accuracy: 2)
+        XCTAssertEqual(bounds.width, tile * scale, accuracy: 2)
+    }
+
+    func testLiquidActionSymbolUsesTheSameSettingsPlate() throws {
+        _ = NSApplication.shared
+        let theme = LauncherThemeController().descriptor(
+            for: .defaults(design: .liquidGlass),
+            reducedTransparency: false,
+            increasedContrast: false,
+            resolvedSystemDark: true
+        )
+        let row = ResultRowView()
+        row.frame = NSRect(x: 0, y: 0, width: 640, height: theme.rowHeight)
+        let iconView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        let entry = try XCTUnwrap(ActionRegistry.definition(id: "window.leftHalf")?.searchEntry)
+        row.configure(
+            result: RankedResult(entry: entry, score: 1),
+            icon: IconCache(startsNativeIconResolution: false).image(for: entry),
+            confirmation: false,
+            row: 0,
+            selected: true,
+            theme: theme
+        )
+        let image = try XCTUnwrap(iconView.image)
+        XCTAssertFalse(image.isTemplate, "The plate must keep its color on the blue selection")
+        XCTAssertEqual(image.size, NSSize(width: 50, height: 50))
+        let bitmap = try renderedMinimalIconBitmap(image)
+        let scale = CGFloat(bitmap.pixelsWide) / image.size.width
+        let tile = LauncherLiquidGlassMetrics.resultIconSize
         let plateX = Int((((image.size.width - tile) / 2) + 2) * scale)
         let plateY = Int(image.size.height / 2 * scale)
         let plate = try XCTUnwrap(bitmap.colorAt(x: plateX, y: plateY)?.usingColorSpace(.sRGB))

@@ -162,20 +162,24 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(minimal.width, 550)
         XCTAssertEqual(minimal.rowHeight, 50)
         XCTAssertEqual(minimal.searchHeight, 55)
-        XCTAssertEqual(minimal.cornerRadius, 2)
-        XCTAssertEqual(minimal.searchFontSize, 34)
+        XCTAssertEqual(minimal.cornerRadius, 3)
+        XCTAssertEqual(minimal.windowCornerMaskRadius, 3)
+        XCTAssertNil(glass.windowCornerMaskRadius)
+        XCTAssertEqual(minimal.searchFontSize, 32)
         XCTAssertEqual(minimal.searchMetrics.fontWeight, .light)
         XCTAssertEqual(minimal.searchHorizontalInset, 12)
         XCTAssertEqual(minimal.searchHorizontalInset, LauncherMinimalMetrics.contentHorizontalInset)
-        XCTAssertEqual(LauncherMinimalMetrics.searchLineHeight, 41)
-        XCTAssertEqual(minimal.searchVerticalInset, 7)
-        XCTAssertEqual(minimal.searchHeight - minimal.searchVerticalInset * 2, 41)
-        XCTAssertEqual(minimal.surface, minimal.isDark ? .opaque : .ultraThick)
+        XCTAssertEqual(LauncherMinimalMetrics.searchCaretHeight, 37.6875, accuracy: 0.001)
+        XCTAssertEqual(LauncherMinimalMetrics.searchCaretMargin, 8.5)
+        XCTAssertEqual(minimal.searchLeadingInset, 9.5)
+        XCTAssertTrue(minimal.searchMetrics.centersCaret)
+        XCTAssertFalse(glass.searchMetrics.centersCaret)
+        XCTAssertEqual(glass.searchLeadingInset, glass.searchHorizontalInset)
+        XCTAssertEqual(LauncherMinimalMetrics.searchLineHeight, 38)
+        XCTAssertEqual(minimal.searchVerticalInset, 8.5)
+        XCTAssertEqual(minimal.searchHeight - minimal.searchVerticalInset * 2, 38)
+        XCTAssertEqual(minimal.surface, minimal.isDark ? .blurredFill : .ultraThick)
         XCTAssertTrue(minimal.hasShadow)
-        XCTAssertEqual(LauncherMinimalMetrics.shadowDensity, 0.15)
-        XCTAssertEqual(LauncherMinimalMetrics.shadowRadius, 12)
-        XCTAssertEqual(LauncherMinimalMetrics.shadowVerticalOffset, 2)
-        XCTAssertEqual(LauncherMinimalMetrics.shadowRimDensity, 0.15)
         XCTAssertTrue(minimal.showsHeaderSeparator)
         XCTAssertEqual(minimal.resultSelectionCornerRadius, 0)
         XCTAssertEqual(minimal.resultHorizontalInset, 0)
@@ -238,14 +242,16 @@ final class LauncherAppearanceTests: XCTestCase {
         }
     }
 
-    /// The caret and the query share one leading line, result icons and titles keep their own
-    /// leading lines, and the shortcuts and clear button end the same distance from the right
-    /// edge. Measured from rendered ink.
-    func testMinimalContentSharesOneInsetFromBothEdges() throws {
+    /// The caret and the query share one leading line, result icons and titles keep their
+    /// own, and the shortcuts and clear button end the same distance from the right edge.
+    /// Measured from rendered ink.
+    func testMinimalQueryRowsAndTrailingControlsKeepTheirLines() throws {
         _ = NSApplication.shared
         var preferences = LauncherAppearancePreferences.defaults(design: .minimal)
         preferences.mode = .dark
         let theme = LauncherThemeController().descriptor(for: preferences)
+        let queryLine = LauncherMinimalMetrics.searchLeadingInset
+        let iconEdge = LauncherMinimalMetrics.resultIconLeadingInset
         let inset = LauncherMinimalMetrics.contentHorizontalInset
         let controller = LauncherPanelController(expansionAnimationDuration: { 0 })
         controller.applyAppearance(preferences, force: true)
@@ -263,15 +269,17 @@ final class LauncherAppearanceTests: XCTestCase {
         }
         let field = try XCTUnwrap(searchField(in: content))
 
-        func caretX() throws -> CGFloat {
+        /// The insertion line's rectangle in window coordinates. The caret is drawn from its top.
+        func caretRect() throws -> NSRect {
             let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
             var actualRange = NSRange()
             let rect = editor.firstRect(
                 forCharacterRange: NSRange(location: 0, length: 0),
                 actualRange: &actualRange
             )
-            return window.convertFromScreen(rect).minX
+            return window.convertFromScreen(rect)
         }
+        func caretX() throws -> CGFloat { try caretRect().minX }
 
         /// Leading ink and trailing gap, in points, for a horizontal band of the panel.
         func inkEdges(top: CGFloat, height: CGFloat) throws -> (leading: CGFloat, trailingGap: CGFloat) {
@@ -296,25 +304,44 @@ final class LauncherAppearanceTests: XCTestCase {
 
         controller.setMode(.main, initialQuery: "")
         controller.apply(LauncherPreviewFixture.standard.results)
-        XCTAssertEqual(try caretX(), inset, accuracy: 0.5, "Empty caret")
+        XCTAssertEqual(try caretX(), queryLine, accuracy: 0.5, "Empty caret")
+
+        // One margin on the left, above, and below the caret. The field rounds its editor to
+        // device pixels, so top and bottom may differ by less than one pixel.
+        let caret = try caretRect()
+        let barTop = content.bounds.maxY
+        let margin = LauncherMinimalMetrics.searchCaretMargin
+        let leftGap = caret.minX - LauncherMinimalMetrics.insertionPointWidth / 2
+        let topGap = barTop - caret.maxY
+        let bottomGap = caret.maxY - LauncherMinimalMetrics.searchCaretHeight - (barTop - theme.searchHeight)
+        XCTAssertEqual(leftGap, margin, accuracy: 0.01, "Left of the caret")
+        XCTAssertEqual(topGap, margin, accuracy: 0.01, "Above the caret")
+        XCTAssertLessThan(abs(bottomGap - topGap), 1 / window.backingScaleFactor, "Below the caret")
 
         controller.setMode(.main, initialQuery: "Screen")
         controller.apply(LauncherPreviewFixture.standard.results)
-        XCTAssertEqual(try caretX(), inset, accuracy: 0.5, "Typing must not move the caret")
+        XCTAssertEqual(try caretX(), queryLine, accuracy: 0.5, "Typing must not move the caret")
         let search = try inkEdges(top: 2, height: theme.searchHeight - 4)
-        XCTAssertEqual(search.leading, inset, accuracy: 0.75, "Typed query")
+        XCTAssertEqual(search.leading, queryLine, accuracy: 0.75, "Typed query")
         XCTAssertEqual(search.trailingGap, inset, accuracy: 0.5, "Clear button")
 
         // The third fixture row is an action, drawn on the shared symbol plate.
         let actionRowTop = theme.searchHeight + theme.rowHeight * 2
         let row = try inkEdges(top: actionRowTop + 2, height: theme.rowHeight - 4)
-        XCTAssertEqual(
-            row.leading,
-            LauncherMinimalMetrics.resultIconLeadingInset,
-            accuracy: 0.5,
-            "Result icon plate"
-        )
+        XCTAssertEqual(row.leading, iconEdge, accuracy: 0.5, "Result icon plate")
         XCTAssertEqual(row.trailingGap, inset, accuracy: 0.75, "Shortcut")
+
+        // Selecting the typed text highlights from the icons' edge.
+        controller.setMode(.main, initialQuery: "finder")
+        controller.apply(LauncherPreviewFixture.standard.results)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        var selectedRange = NSRange()
+        let selection = window.convertFromScreen(editor.firstRect(
+            forCharacterRange: NSRange(location: 0, length: 6),
+            actualRange: &selectedRange
+        ))
+        XCTAssertEqual(selection.minX, iconEdge, accuracy: 0.01, "Text selection and icon edge")
+        XCTAssertEqual(selection.minX, row.leading, accuracy: 0.5, "Text selection and rendered icon plate")
 
         func resultRows(in view: NSView) -> [ResultRowView] {
             if let row = view as? ResultRowView { return [row] }
@@ -438,12 +465,27 @@ final class LauncherAppearanceTests: XCTestCase {
                 content.bitmapImageRepForCachingDisplay(in: content.bounds)
             )
             content.cacheDisplay(in: content.bounds, to: bitmap)
-            let textProbe = content.convert(field.searchTextBounds, from: field)
+            // Scan the full height. The bitmap's pixel origin is the top, while these
+            // converted frames use the content view's bottom origin, so a control that
+            // is not centered in the window would otherwise be measured in the wrong band.
+            let textFrame = content.convert(field.searchTextBounds, from: field)
+            let textProbe = NSRect(
+                x: textFrame.minX,
+                y: 0,
+                width: textFrame.width,
+                height: content.bounds.height
+            )
             let textInk = try XCTUnwrap(
                 brightInkBounds(in: bitmap, constrainedTo: textProbe)
             )
             if descriptor.searchMetrics.symbolSize > 0 {
-                let iconProbe = content.convert(field.searchButtonBounds, from: field)
+                let iconFrame = content.convert(field.searchButtonBounds, from: field)
+                let iconProbe = NSRect(
+                    x: iconFrame.minX,
+                    y: 0,
+                    width: iconFrame.width,
+                    height: content.bounds.height
+                )
                 let iconInk = try XCTUnwrap(
                     brightInkBounds(in: bitmap, constrainedTo: iconProbe)
                 )
@@ -565,7 +607,14 @@ final class LauncherAppearanceTests: XCTestCase {
             light.searchHorizontalInset + light.searchMetrics.textLeadingCompensation,
             accuracy: 0.001
         )
-        XCTAssertEqual(geometry.searchButtonRect.midY, geometry.bounds.midY, accuracy: 0.001)
+        XCTAssertEqual(
+            geometry.searchButtonRect.midY,
+            geometry.bounds.midY + LauncherLiquidGlassMetrics.searchSymbolVerticalOffset,
+            accuracy: 0.001,
+            "The magnifier drops from the line-box center to the lowercase optical center"
+        )
+        XCTAssertGreaterThanOrEqual(geometry.searchButtonRect.minY, 0)
+        XCTAssertLessThanOrEqual(geometry.searchButtonRect.maxY, fieldHeight)
         XCTAssertEqual(geometry.searchTextRect.midY, geometry.bounds.midY, accuracy: 0.001)
         XCTAssertLessThan(geometry.searchTextRect.minY, geometry.searchTextRect.maxY)
         XCTAssertGreaterThanOrEqual(geometry.searchTextRect.minY, 0)
@@ -632,22 +681,22 @@ final class LauncherAppearanceTests: XCTestCase {
 
         for descriptor in [light, dark, reducedLight, reducedDark] {
             XCTAssertEqual(descriptor.width, 550)
-            XCTAssertEqual(descriptor.cornerRadius, 2)
+            XCTAssertEqual(descriptor.cornerRadius, 3)
             XCTAssertEqual(descriptor.searchHeight, 55)
             XCTAssertEqual(descriptor.rowHeight, 50)
-            XCTAssertEqual(descriptor.searchFontSize, 34)
+            XCTAssertEqual(descriptor.searchFontSize, 32)
             XCTAssertEqual(descriptor.searchHorizontalInset, 12)
-            XCTAssertEqual(descriptor.searchVerticalInset, 7)
-            XCTAssertEqual(descriptor.searchHeight - descriptor.searchVerticalInset * 2, 41)
+            XCTAssertEqual(descriptor.searchVerticalInset, 8.5)
+            XCTAssertEqual(descriptor.searchHeight - descriptor.searchVerticalInset * 2, 38)
             XCTAssertEqual(
                 descriptor.searchHeight - descriptor.searchControlVerticalInset * 2,
-                49
+                46
             )
             XCTAssertTrue(descriptor.hasShadow)
             XCTAssertTrue(descriptor.showsHeaderSeparator)
-            XCTAssertEqual(descriptor.searchMetrics.fontSize, 34)
+            XCTAssertEqual(descriptor.searchMetrics.fontSize, 32)
             XCTAssertEqual(descriptor.searchMetrics.fontWeight, .light)
-            XCTAssertEqual(descriptor.searchMetrics.font, NSFont.systemFont(ofSize: 34, weight: .light))
+            XCTAssertEqual(descriptor.searchMetrics.font, NSFont.systemFont(ofSize: 32, weight: .light))
             XCTAssertEqual(descriptor.searchMetrics.symbolSize, 0)
             XCTAssertEqual(descriptor.searchMetrics.symbolPointSize, 0)
             XCTAssertEqual(descriptor.searchMetrics.symbolTextGap, 20)
@@ -675,10 +724,24 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertFalse(light.isDark)
         XCTAssertTrue(dark.isDark)
         XCTAssertEqual(light.surface, .ultraThick)
-        XCTAssertEqual(dark.surface, .opaque)
-        XCTAssertEqual(dark.backgroundColor, LauncherMinimalMetrics.darkOpaqueBackground)
+        XCTAssertNil(light.surfaceFill)
+        XCTAssertEqual(light.windowBackdropBlurRadius, 0)
+        XCTAssertEqual(dark.surface, .blurredFill)
+        XCTAssertEqual(dark.backgroundColor, LauncherMinimalMetrics.darkBlurredBackground)
+        XCTAssertEqual(dark.surfaceFill, LauncherMinimalMetrics.darkBlurredBackground)
+        XCTAssertEqual(dark.windowBackdropBlurRadius, 15)
+        assertColor(dark.backgroundColor, red: 0, green: 0, blue: 0, alpha: 216.0 / 255)
         XCTAssertEqual(reducedLight.surface, .opaque)
         XCTAssertEqual(reducedDark.surface, .opaque)
+        XCTAssertEqual(reducedDark.windowBackdropBlurRadius, 0)
+        let contrastedDarkSurface = controller.descriptor(
+            for: darkPreferences,
+            reducedTransparency: false,
+            increasedContrast: true
+        )
+        XCTAssertEqual(contrastedDarkSurface.surface, .opaque)
+        XCTAssertEqual(contrastedDarkSurface.backgroundColor, LauncherMinimalMetrics.darkOpaqueBackground)
+        XCTAssertEqual(contrastedDarkSurface.windowBackdropBlurRadius, 0)
         assertSameGeometry(light, reducedLight, design: .minimal)
         assertSameGeometry(dark, reducedDark, design: .minimal)
 
@@ -705,9 +768,10 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(LauncherMinimalMetrics.resultTitleFontSize, 18)
         XCTAssertEqual(LauncherMinimalMetrics.resultSubtitleFontSize, 12)
         XCTAssertEqual(LauncherMinimalMetrics.resultIconBody, 34)
-        XCTAssertEqual(LauncherMinimalMetrics.resultIconLeadingInset, 6)
-        XCTAssertEqual(LauncherMinimalMetrics.resultTextLeadingInset, 48)
-        XCTAssertEqual(LauncherMinimalMetrics.resultShortcutFontSize, 14)
+        XCTAssertEqual(LauncherMinimalMetrics.resultIconLeadingInset, 9.5)
+        XCTAssertEqual(LauncherMinimalMetrics.resultIconLeadingInset, LauncherMinimalMetrics.searchLeadingInset)
+        XCTAssertEqual(LauncherMinimalMetrics.resultTextLeadingInset, 51.5)
+        XCTAssertEqual(LauncherMinimalMetrics.resultShortcutFontSize, 16)
         XCTAssertEqual(LauncherMinimalMetrics.resultShortcutFontWeight, .regular)
         XCTAssertEqual(LauncherMinimalMetrics.resultTableHorizontalInset, 6)
         XCTAssertEqual(
@@ -726,24 +790,30 @@ final class LauncherAppearanceTests: XCTestCase {
             ),
             metrics: light.searchMetrics
         )
-        XCTAssertEqual(light.searchControlVerticalInset, 3)
+        XCTAssertEqual(light.searchControlVerticalInset, 4.5)
         let expectedButtonRect = NSRect(
             x: 0,
-            y: 24.5,
+            y: 23,
             width: 0,
             height: 0
         )
+        let caretHeight = LauncherMinimalMetrics.searchCaretHeight
         XCTAssertEqual(searchGeometry.searchButtonRect.minX, expectedButtonRect.minX, accuracy: 0.001)
         XCTAssertEqual(searchGeometry.searchButtonRect.minY, expectedButtonRect.minY, accuracy: 0.001)
         XCTAssertEqual(searchGeometry.searchButtonRect.width, expectedButtonRect.width, accuracy: 0.001)
         XCTAssertEqual(searchGeometry.searchButtonRect.height, expectedButtonRect.height, accuracy: 0.001)
         XCTAssertEqual(searchGeometry.searchTextRect.minX, LauncherMinimalMetrics.queryLeadingInset)
         XCTAssertEqual(searchGeometry.searchButtonRect.midY, searchGeometry.bounds.midY)
-        XCTAssertEqual(searchGeometry.searchTextRect.midY, searchGeometry.bounds.midY)
         XCTAssertEqual(
-            light.searchHorizontalInset + searchGeometry.searchButtonRect.minX,
-            LauncherMinimalMetrics.contentHorizontalInset,
-            "The query field begins on the shared content edge"
+            searchGeometry.searchTextRect.minY + caretHeight / 2,
+            searchGeometry.bounds.midY,
+            accuracy: 0.25,
+            "The caret, drawn from the top of the line box, is centered to the nearest pixel"
+        )
+        XCTAssertEqual(
+            light.searchLeadingInset + searchGeometry.searchButtonRect.minX,
+            LauncherMinimalMetrics.searchLeadingInset,
+            "The query field begins on the caret's line"
         )
         XCTAssertEqual(
             light.searchControlVerticalInset + searchGeometry.searchButtonRect.minY,
@@ -754,29 +824,28 @@ final class LauncherAppearanceTests: XCTestCase {
             "The compact magnifier is automatically centered inside the header"
         )
         XCTAssertEqual(
-            light.searchHorizontalInset + searchGeometry.searchTextRect.minX,
-            LauncherMinimalMetrics.contentHorizontalInset + LauncherMinimalMetrics.queryLeadingInset,
+            light.searchLeadingInset + searchGeometry.searchTextRect.minX,
+            LauncherMinimalMetrics.searchLeadingInset + LauncherMinimalMetrics.queryLeadingInset,
             accuracy: 0.001,
             "The compact query includes only the field-frame correction"
         )
         XCTAssertEqual(
             light.searchVerticalInset,
-            7,
+            8.5,
             "The compact search control keeps an even vertical shell inset"
         )
         XCTAssertEqual(
-            light.searchHorizontalInset + searchGeometry.searchTextRect.minX,
-            14.5,
+            light.searchLeadingInset + searchGeometry.searchTextRect.minX,
+            12,
             "The native cell and compact optical grid share one query origin"
         )
-        XCTAssertEqual(
-            light.searchControlVerticalInset + searchGeometry.searchTextRect.minY,
-            light.searchHeight
-                - light.searchControlVerticalInset
-                - searchGeometry.searchTextRect.maxY,
-            accuracy: 0.001,
-            "The placeholder line box is automatically centered inside the header"
-        )
+        let caretTopGap = light.searchControlVerticalInset + searchGeometry.searchTextRect.minY
+        let caretBottomGap = light.searchHeight
+            - light.searchControlVerticalInset
+            - searchGeometry.searchTextRect.minY
+            - caretHeight
+        XCTAssertEqual(caretTopGap, LauncherMinimalMetrics.searchCaretMargin, "Above the caret")
+        XCTAssertLessThan(abs(caretBottomGap - caretTopGap), 0.5, "Below the caret, within one pixel")
 
         assertColor(light.searchTextColor, red: 0, green: 0, blue: 0, alpha: 1)
         assertColor(light.searchIconColor, red: 0, green: 0, blue: 0, alpha: 0.85)
@@ -855,7 +924,7 @@ final class LauncherAppearanceTests: XCTestCase {
             frame: lightSurface.frame,
             isDark: false,
             increasedContrast: true,
-            opaqueBackground: NSColor(calibratedWhite: 0.93, alpha: 1)
+            fill: NSColor(calibratedWhite: 0.93, alpha: 1)
         )
         XCTAssertNil(opaqueSurface.layer?.backgroundColor)
         XCTAssertEqual(
@@ -1028,20 +1097,29 @@ final class LauncherAppearanceTests: XCTestCase {
             to: bitmap
         )
 
+        // Full-height columns: the bitmap's origin is the top, so a vertical probe built
+        // from field coordinates would be mirrored around the field's center.
         let iconInk = try XCTUnwrap(
             brightInkBounds(
                 in: bitmap,
-                constrainedTo: field.searchButtonBounds.insetBy(dx: -1, dy: -1)
+                constrainedTo: NSRect(
+                    x: field.searchButtonBounds.minX - 1,
+                    y: field.bounds.minY,
+                    width: field.searchButtonBounds.width + 2,
+                    height: field.bounds.height
+                )
             )
         )
-        let textProbe = NSRect(
-            x: field.searchTextBounds.minX,
-            y: field.bounds.minY,
-            width: 230,
-            height: field.bounds.height
-        )
         let textInk = try XCTUnwrap(
-            brightInkBounds(in: bitmap, constrainedTo: textProbe)
+            brightInkBounds(
+                in: bitmap,
+                constrainedTo: NSRect(
+                    x: field.searchTextBounds.minX,
+                    y: field.bounds.minY,
+                    width: 20,
+                    height: field.bounds.height
+                )
+            )
         )
         let opticalGap = textInk.minX - iconInk.maxX
         let canvasGap = field.searchTextBounds.minX - field.searchButtonBounds.maxX
@@ -1051,11 +1129,14 @@ final class LauncherAppearanceTests: XCTestCase {
             canvasGap + 4,
             "The uncropped magnifier and placeholder must read as one compact Spotlight control"
         )
+        // The probe covers "Se", whose ink spans the cap height. The magnifier's ink sits
+        // about half a point below its alignment rect's center, because the handle reaches
+        // lower than the lens rises.
         XCTAssertEqual(
-            textInk.midY - iconInk.midY,
-            0,
-            accuracy: 3,
-            "The rendered magnifier must align with the placeholder's optical center"
+            iconInk.midY - textInk.midY,
+            0.5,
+            accuracy: 0.6,
+            "The magnifier must center on the query's cap height, as SF Symbols align with text"
         )
     }
 
