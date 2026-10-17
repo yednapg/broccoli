@@ -326,8 +326,13 @@ private struct SettingsSidebarList: View {
                 Label {
                     Text(section.title)
                 } icon: {
-                    Image(systemName: section.symbol)
-                        .symbolVariant(.none)
+                    // A template symbol is redrawn when the sidebar cell receives its tint,
+                    // so the icon flashes once as the row appears. Draw the finished glyph
+                    // instead and keep the cell from tinting it again.
+                    SettingsSidebarSymbol(
+                        symbol: section.symbol,
+                        isSelected: shell.sidebarSelection == section
+                    )
                         .frame(
                             width: SettingsShellLayout.sidebarIconCanvasSize,
                             height: SettingsShellLayout.sidebarIconCanvasSize
@@ -353,6 +358,121 @@ private struct SettingsSidebarList: View {
                 onSelectionChanged()
             }
         )
+    }
+}
+
+enum SettingsSidebarSymbolImage {
+    static func image(symbol: String, isSelected: Bool, windowIsKey: Bool) -> NSImage {
+        let canvas = SettingsShellLayout.sidebarIconCanvasSize
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: SettingsShellLayout.sidebarLabelFontSize,
+            weight: .medium
+        )
+        guard let symbolImage = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) else {
+            return NSImage(size: NSSize(width: canvas, height: canvas))
+        }
+        let color: NSColor = if isSelected {
+            windowIsKey ? .white : .labelColor
+        } else {
+            .controlAccentColor
+        }
+        let image = NSImage(size: NSSize(width: canvas, height: canvas), flipped: false) { rect in
+            let fitted = symbolImage.size
+            let destination = NSRect(
+                x: (rect.width - fitted.width) / 2,
+                y: (rect.height - fitted.height) / 2,
+                width: fitted.width,
+                height: fitted.height
+            )
+            let drawn = symbolImage.copy() as? NSImage ?? symbolImage
+            drawn.isTemplate = true
+            drawn.draw(in: destination, from: .zero, operation: .sourceOver, fraction: 1)
+            color.setFill()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+}
+
+private struct SettingsSidebarSymbol: NSViewRepresentable {
+    let symbol: String
+    let isSelected: Bool
+
+    func makeNSView(context: Context) -> SettingsSidebarSymbolView {
+        let view = SettingsSidebarSymbolView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: SettingsSidebarSymbolView, context: Context) {
+        view.symbol = symbol
+        view.isSelected = isSelected
+    }
+}
+
+private final class SettingsSidebarSymbolView: NSImageView {
+    var symbol = "" {
+        didSet {
+            guard symbol != oldValue else { return }
+            renderedKey = nil
+            needsDisplay = true
+        }
+    }
+    var isSelected = false {
+        didSet {
+            guard isSelected != oldValue else { return }
+            renderedKey = nil
+            needsDisplay = true
+        }
+    }
+    private var renderedKey: String?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        imageScaling = .scaleNone
+        imageAlignment = .alignCenter
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var allowsVibrancy: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        renderedKey = nil
+        needsDisplay = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        renderedKey = nil
+        needsDisplay = true
+    }
+
+    override func viewWillDraw() {
+        redrawIfNeeded()
+        super.viewWillDraw()
+    }
+
+    private func redrawIfNeeded() {
+        let windowIsKey = window?.isKeyWindow ?? false
+        let key = "\(symbol)|\(isSelected)|\(windowIsKey)|\(effectiveAppearance.name.rawValue)"
+        image?.isTemplate = false
+        cell?.backgroundStyle = .normal
+        contentTintColor = nil
+        guard key != renderedKey else { return }
+        renderedKey = key
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            image = SettingsSidebarSymbolImage.image(
+                symbol: symbol,
+                isSelected: isSelected,
+                windowIsKey: windowIsKey
+            )
+        }
+        image?.isTemplate = false
     }
 }
 

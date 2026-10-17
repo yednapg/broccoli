@@ -2478,6 +2478,25 @@ final class LauncherAppearanceTests: XCTestCase {
         )
         for symbol in expectedSymbols.values {
             XCTAssertNotNil(NSImage(systemSymbolName: symbol, accessibilityDescription: nil))
+            let icon = SettingsSidebarSymbolImage.image(
+                symbol: symbol,
+                isSelected: false,
+                windowIsKey: true
+            )
+            XCTAssertFalse(icon.isTemplate, "\(symbol) must not be retinted by the sidebar cell")
+            XCTAssertEqual(
+                icon.size,
+                NSSize(
+                    width: SettingsShellLayout.sidebarIconCanvasSize,
+                    height: SettingsShellLayout.sidebarIconCanvasSize
+                )
+            )
+            let selected = SettingsSidebarSymbolImage.image(
+                symbol: symbol,
+                isSelected: true,
+                windowIsKey: true
+            )
+            XCTAssertNotEqual(icon.tiffRepresentation, selected.tiffRepresentation)
         }
     }
 
