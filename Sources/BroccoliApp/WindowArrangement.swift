@@ -118,12 +118,6 @@ final class TilingState {
         if floating.remove(key) == nil { floating.insert(key) }
     }
 
-    func swap(_ first: WindowKey, _ second: WindowKey) {
-        guard let firstIndex = order.firstIndex(of: first),
-              let secondIndex = order.firstIndex(of: second) else { return }
-        order.swapAt(firstIndex, secondIndex)
-    }
-
     func removeApplication(_ processIdentifier: pid_t) {
         order.removeAll { $0.processIdentifier == processIdentifier }
         floating = floating.filter { $0.processIdentifier != processIdentifier }

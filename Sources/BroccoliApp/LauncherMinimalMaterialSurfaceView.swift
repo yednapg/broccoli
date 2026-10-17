@@ -8,7 +8,6 @@
 /// so the stroke is not eaten along the arcs.
 @MainActor
 final class LauncherMinimalMaterialSurfaceView: NSView {
-    static let figmaBackgroundBlur = LauncherMinimalMetrics.figmaBackgroundBlur
     static let lightTintOpacity = LauncherMinimalMetrics.lightTintOpacity
 
     let materialClip = NSView()

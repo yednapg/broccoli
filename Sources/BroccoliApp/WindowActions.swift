@@ -358,11 +358,6 @@ struct WindowManagementPreferences: Codable, Equatable, Sendable {
         }
     }
 
-    /// The window action other than `action` that already uses `configuration`, if any.
-    func action(using configuration: HotKeyConfiguration, excluding action: WindowAction) -> WindowAction? {
-        WindowAction.allCases.first { $0 != action && shortcuts[$0] == configuration }
-    }
-
     func shortcut(for target: WindowShortcutTarget) -> HotKeyConfiguration? {
         switch target {
         case .action(let action): shortcut(for: action)

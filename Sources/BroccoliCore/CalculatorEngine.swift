@@ -93,10 +93,6 @@ public enum CalculatorEvaluation: Equatable, Sendable {
 public struct CalculatorEngine: Sendable {
     public init() {}
 
-    public func looksLikeIncompleteExpression(_ rawQuery: String) -> Bool {
-        classify(rawQuery) == .incomplete
-    }
-
     public func evaluate(
         _ rawQuery: String,
         locale: Locale = .current,

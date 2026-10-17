@@ -257,20 +257,6 @@ struct SettingsStatusAccessory: View {
     }
 }
 
-struct SettingsValueRow: View {
-    let symbol: String
-    let title: String
-    let value: String
-
-    var body: some View {
-        SpotlightSettingsRow(symbol: symbol, title: title) {
-            Text(value)
-                .foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
 struct AutomationStatusRow: View {
     let state: AutomationPermissionState
 

@@ -266,7 +266,7 @@ final class LauncherScopeAndBadgeTests: XCTestCase {
     func testGoogleTileMatchesSystemAppIconGeometryWithAProportionateMark() throws {
         _ = NSApplication.shared
         let logo = IconCache(startsNativeIconResolution: false)
-            .image(for: try XCTUnwrap(WebSearch.googleEntry(for: "broccoli")))
+            .image(for: try XCTUnwrap(WebSearch.entry(for: "broccoli", engine: .google)))
         let systemIcon = NSWorkspace.shared.icon(forFile: IconCache.systemSettingsBadgeIconKey)
         let pixels = 512
 
@@ -312,7 +312,7 @@ final class LauncherScopeAndBadgeTests: XCTestCase {
     func testGoogleResultIsAnAppearanceAdaptiveIconTile() throws {
         _ = NSApplication.shared
         let cache = IconCache(startsNativeIconResolution: false)
-        let entry = try XCTUnwrap(WebSearch.googleEntry(for: "broccoli"))
+        let entry = try XCTUnwrap(WebSearch.entry(for: "broccoli", engine: .google))
         let logo = cache.image(for: entry)
 
         XCTAssertTrue(logo.isValid)

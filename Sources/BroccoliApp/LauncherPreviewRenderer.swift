@@ -55,21 +55,7 @@ struct LauncherPreviewRenderIdentity: Equatable, Hashable, Sendable {
     let environmentRevision: UInt64
 }
 
-enum LauncherPreviewEnvironmentChange {
-    case systemAppearance
-    case accessibility
-    case display
-}
-
-/// Layout measurements captured from the actual preview view hierarchy after AppKit has
-/// completed layout. Keeping this tiny diagnostic alongside the renderer makes it possible to
-/// prove that screenshot previews use the same exact-height viewport contract as the launcher.
-struct LauncherPreviewRenderMetrics: Equatable {
-    let resultsViewportHeight: CGFloat
-    let resultsDocumentHeight: CGFloat
-}
-
-/// A stable search scene used for every Appearance screenshot.
+/// A stable search scene used for every Appearance preview.
 ///
 /// These are real `SearchEntry`/`RankedResult` values and use the same application, setting,
 /// and action icon paths as the live launcher. They are never passed to a coordinator, action
@@ -131,13 +117,6 @@ enum LauncherPreviewInteraction {
                 || entry.keywords.contains(where: { $0.contains(normalized) })
         }
     }
-
-    static func nextRow(current: Int, movingUp: Bool, resultCount: Int) -> Int? {
-        guard resultCount > 0 else { return nil }
-        if current < 0 { return movingUp ? resultCount - 1 : 0 }
-        let candidate = current + (movingUp ? -1 : 1)
-        return (0..<resultCount).contains(candidate) ? candidate : nil
-    }
 }
 
 @MainActor
@@ -148,31 +127,18 @@ struct LauncherInteractivePreviewConfiguration {
     let fixture: LauncherPreviewFixture
 }
 
-/// Produces screenshot-style Appearance previews from production launcher descriptors.
+/// Configures the interactive Appearance previews from production launcher descriptors.
 ///
 /// The renderer is deliberately active only for the lifetime of an open Settings window.
 /// Call `beginSettingsSession()` when Settings opens and `endSettingsSession()` when it closes.
-/// `image(for:)` yields before an uncached render so a SwiftUI `.task` can display its placeholder
-/// without blocking construction of the settings page.
 @MainActor
 final class LauncherPreviewRenderer: ObservableObject {
     typealias EnvironmentProvider = @MainActor () -> LauncherPreviewEnvironment
-
-    private struct CachedImage {
-        let image: NSImage
-        let cost: Int
-        var access: UInt64
-    }
 
     private let fixture: LauncherPreviewFixture
     private let themeController: LauncherThemeController
     private let iconProvider: LauncherPreviewIconProvider
     private let environmentProvider: EnvironmentProvider
-    private let cacheCostLimit: Int
-    private var cache: [LauncherPreviewCacheKey: CachedImage] = [:]
-    private var cacheCost = 0
-    private var accessCounter: UInt64 = 0
-    private var sessionGeneration: UInt64 = 0
     private var sampledEnvironment: LauncherPreviewEnvironment?
     private var workspaceObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
@@ -181,29 +147,24 @@ final class LauncherPreviewRenderer: ObservableObject {
     private var activationObserver: NSObjectProtocol?
     private(set) var isSettingsSessionActive = false
     @Published private(set) var environmentRevision: UInt64 = 0
-    private(set) var lastRenderMetrics: LauncherPreviewRenderMetrics?
-    private(set) var lastRenderedSurface: LauncherThemeDescriptor.Surface?
 
     init(
         iconProvider: LauncherPreviewIconProvider = LauncherPreviewIconProvider(),
         fixture: LauncherPreviewFixture = .standard,
         themeController: LauncherThemeController = LauncherThemeController(),
-        cacheCostLimit: Int = 16 * 1_024 * 1_024,
         environmentProvider: @escaping EnvironmentProvider = { .current }
     ) {
         self.fixture = fixture
         self.themeController = themeController
-        self.cacheCostLimit = max(1, cacheCostLimit)
         self.environmentProvider = environmentProvider
         self.iconProvider = iconProvider
-        iconProvider.onNativeIconLoaded = { [weak self] iconKey, context in
-            self?.nativePaneIconDidLoad(iconKey, context: context)
+        iconProvider.onNativeIconLoaded = { [weak self] iconKey, _ in
+            self?.nativePaneIconDidLoad(iconKey)
         }
     }
 
     func beginSettingsSession() {
         guard !isSettingsSessionActive else { return }
-        sessionGeneration &+= 1
         sampledEnvironment = environmentProvider()
         isSettingsSessionActive = true
         startEnvironmentObservation()
@@ -211,106 +172,10 @@ final class LauncherPreviewRenderer: ObservableObject {
     }
 
     func endSettingsSession() {
-        guard isSettingsSessionActive || !cache.isEmpty else { return }
-        sessionGeneration &+= 1
+        guard isSettingsSessionActive else { return }
         isSettingsSessionActive = false
         stopEnvironmentObservation()
         sampledEnvironment = nil
-        cache.removeAll(keepingCapacity: false)
-        cacheCost = 0
-        lastRenderMetrics = nil
-        lastRenderedSurface = nil
-    }
-
-    /// Returns an existing image without initiating capture. Useful for SwiftUI's synchronous
-    /// update pass before it starts an asynchronous render task.
-    func cachedImage(for preferences: LauncherAppearancePreferences) -> NSImage? {
-        guard isSettingsSessionActive else { return nil }
-        let key = cacheKey(for: preferences)
-        return cachedImage(for: key)
-    }
-
-    private func cachedImage(for key: LauncherPreviewCacheKey) -> NSImage? {
-        guard var cached = cache[key] else { return nil }
-        cached.access = nextAccess()
-        cache[key] = cached
-        return cached.image
-    }
-
-    func image(for preferences: LauncherAppearancePreferences) async -> NSImage? {
-        guard isSettingsSessionActive, !Task.isCancelled else { return nil }
-        let initialKey = cacheKey(for: preferences)
-        if let image = cachedImage(for: initialKey) { return image }
-
-        let generation = sessionGeneration
-        await Task.yield()
-        guard isSettingsSessionActive,
-              generation == sessionGeneration,
-              !Task.isCancelled else { return nil }
-
-        // Read the accessibility environment exactly once for both the cache key and theme
-        // descriptor. If Reduce Transparency changes between those two operations, a glass
-        // image must never be filed under an opaque-image key (or vice versa).
-        let renderRevision = environmentRevision
-        let environment = environmentProvider()
-        let key = LauncherPreviewCacheKey(
-            design: preferences.design,
-            appearance: preferences.mode,
-            environment: environment
-        )
-        if let image = cachedImage(for: key) { return image }
-
-        let canonicalPreferences = Self.canonicalPreferences(from: preferences)
-        let descriptor = themeController.descriptor(
-            for: canonicalPreferences,
-            environment: environment
-        )
-        let content = LauncherPreviewContentView(
-            descriptor: descriptor,
-            fixture: fixture,
-            iconProvider: iconProvider
-        )
-        let image = Self.capture(content, descriptor: descriptor)
-        guard isSettingsSessionActive,
-              generation == sessionGeneration,
-              renderRevision == environmentRevision,
-              !Task.isCancelled else { return nil }
-        lastRenderMetrics = content.renderMetrics
-        lastRenderedSurface = descriptor.surface
-
-        let cost = Self.imageCost(image)
-        insert(image, for: key, cost: cost)
-        return image
-    }
-
-    func invalidate(_ key: LauncherPreviewCacheKey) {
-        guard let removed = cache.removeValue(forKey: key) else { return }
-        cacheCost -= removed.cost
-    }
-
-    func invalidate(design: LauncherDesign, appearance: LauncherAppearanceMode? = nil) {
-        let keys = cache.keys.filter { key in
-            key.design.rawValue == design.rawValue
-                && appearance.map { $0.rawValue == key.appearance.rawValue } != false
-        }
-        for key in keys { invalidate(key) }
-    }
-
-    func cacheKey(for preferences: LauncherAppearancePreferences) -> LauncherPreviewCacheKey {
-        LauncherPreviewCacheKey(
-            design: preferences.design,
-            appearance: preferences.mode,
-            environment: environmentProvider()
-        )
-    }
-
-    func renderIdentity(
-        for preferences: LauncherAppearancePreferences
-    ) -> LauncherPreviewRenderIdentity {
-        LauncherPreviewRenderIdentity(
-            cacheKey: cacheKey(for: preferences),
-            environmentRevision: environmentRevision
-        )
     }
 
     func interactiveConfiguration(
@@ -339,37 +204,23 @@ final class LauncherPreviewRenderer: ObservableObject {
         )
     }
 
-    /// Re-samples the system state and invalidates only screenshots which could have changed.
+    /// Re-samples the system state and publishes a new revision when it changed.
     /// This is internal so deterministic tests can drive the same path with an injected
     /// environment provider; production calls come only from Settings-session observers.
-    func refreshEnvironment(_ reason: LauncherPreviewEnvironmentChange) {
+    func refreshEnvironment() {
         guard isSettingsSessionActive else { return }
         let next = environmentProvider()
         guard sampledEnvironment != next else { return }
         sampledEnvironment = next
-
-        let keysToInvalidate: [LauncherPreviewCacheKey] = switch reason {
-        case .systemAppearance:
-            cache.keys.filter { $0.appearance == .system }
-        case .accessibility, .display:
-            Array(cache.keys)
-        }
-        for key in keysToInvalidate { invalidate(key) }
         environmentRevision &+= 1
     }
 
-    var cachedImageCount: Int { cache.count }
-    var cachedImageCost: Int { cacheCost }
-
-    func nativePaneIconDidLoad(_ iconKey: String, context: IconRenderContext? = nil) {
+    func nativePaneIconDidLoad(_ iconKey: String) {
         let isSettingsBadge = iconKey == IconCache.systemSettingsBadgeIconKey
         guard isSettingsSessionActive,
               fixture.results.contains(where: {
                   $0.entry.iconKey == iconKey || (isSettingsBadge && $0.entry.kind == .systemSetting)
               }) else { return }
-        for key in Array(cache.keys) where context == nil || key.iconContext == context { invalidate(key) }
-        // Published revision restarts ThemeCard tasks, while the revision guard above prevents
-        // a capture already in flight from committing a fallback-icon screenshot afterward.
         environmentRevision &+= 1
     }
 
@@ -381,13 +232,13 @@ final class LauncherPreviewRenderer: ObservableObject {
             MainActor.assumeIsolated { self?.iconProvider.refreshPreparedIcons() }
         }
         effectiveAppearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
-            Task { @MainActor [weak self] in self?.refreshEnvironment(.systemAppearance) }
+            Task { @MainActor [weak self] in self?.refreshEnvironment() }
         }
         for name in [NSApplication.didChangeScreenParametersNotification, NSWindow.didChangeBackingPropertiesNotification] {
             displayObservers.append(NotificationCenter.default.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshEnvironment(.display) }
+                MainActor.assumeIsolated { self?.refreshEnvironment() }
             })
         }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -395,7 +246,7 @@ final class LauncherPreviewRenderer: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshEnvironment(.accessibility) }
+            MainActor.assumeIsolated { self?.refreshEnvironment() }
         }
         appearanceObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
@@ -406,7 +257,7 @@ final class LauncherPreviewRenderer: ObservableObject {
             // one turn. Sample after yielding so the new resolved System mode reaches task IDs.
             Task { @MainActor [weak self] in
                 await Task.yield()
-                self?.refreshEnvironment(.systemAppearance)
+                self?.refreshEnvironment()
             }
         }
     }
@@ -425,77 +276,6 @@ final class LauncherPreviewRenderer: ObservableObject {
             DistributedNotificationCenter.default().removeObserver(appearanceObserver)
             self.appearanceObserver = nil
         }
-    }
-
-    private static func canonicalPreferences(
-        from preferences: LauncherAppearancePreferences
-    ) -> LauncherAppearancePreferences {
-        var canonical = LauncherAppearancePreferences.defaults(design: preferences.design)
-        canonical.mode = preferences.mode
-        canonical.visibleResultCount = 3
-        canonical.showsSubtitles = true
-        canonical.showsShortcuts = true
-        return canonical
-    }
-
-    private func insert(_ image: NSImage, for key: LauncherPreviewCacheKey, cost: Int) {
-        if let old = cache.removeValue(forKey: key) { cacheCost -= old.cost }
-        cache[key] = CachedImage(image: image, cost: cost, access: nextAccess())
-        cacheCost += cost
-
-        while cacheCost > cacheCostLimit, cache.count > 1,
-              let oldest = cache.min(by: { $0.value.access < $1.value.access }) {
-            invalidate(oldest.key)
-        }
-    }
-
-    private func nextAccess() -> UInt64 {
-        accessCounter &+= 1
-        return accessCounter
-    }
-
-    private static func capture(
-        _ view: LauncherPreviewContentView,
-        descriptor: LauncherThemeDescriptor
-    ) -> NSImage {
-        let size = view.frame.size
-        // Do not attach the snapshot tree to a temporary NSWindow. NSVisualEffectView keeps
-        // display-cycle state tied to its window; destroying an offscreen window immediately
-        // after `cacheDisplay` can leave AppKit with a dangling appearance coordinator. An
-        // active effect view can render safely in this detached, layer-backed tree, which
-        // also guarantees the capture never flashes onscreen.
-        view.appearance = descriptor.drawingAppearance
-        view.prepareForCapture()
-        view.displayIfNeeded()
-
-        let scale = descriptor.environment.backingScale
-        let pixelsWide = max(1, Int(ceil(size.width * scale)))
-        let pixelsHigh = max(1, Int(ceil(size.height * scale)))
-        let bitmap = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: pixelsWide,
-            pixelsHigh: pixelsHigh,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bitmapFormat: [],
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        )!
-        bitmap.size = size
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-
-        let image = NSImage(size: size)
-        image.addRepresentation(bitmap)
-        return image
-    }
-
-    private static func imageCost(_ image: NSImage) -> Int {
-        guard let bitmap = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first
-        else { return Int(image.size.width * image.size.height * 4) }
-        return bitmap.pixelsWide * bitmap.pixelsHigh * 4
     }
 }
 
@@ -538,7 +318,7 @@ final class LauncherPreviewIconProvider {
     }
 }
 
-/// Descriptor-backed launcher content shared by screenshot and interactive Settings previews.
+/// Descriptor-backed launcher content for the interactive Settings preview.
 /// It reuses the production `ResultRowView`, while intentionally not embedding the permanent
 /// `LauncherPanelController`: sharing that panel would couple Settings focus and fixture input
 /// to the latency-sensitive global hotkey window and its execution callbacks.
@@ -644,19 +424,6 @@ final class LauncherPreviewContentView: NSView,
         layoutTableDocument()
     }
 
-    var renderMetrics: LauncherPreviewRenderMetrics {
-        let documentHeight: CGFloat
-        if displayedResults.isEmpty {
-            documentHeight = 0
-        } else {
-            documentHeight = tableView.rect(ofRow: displayedResults.count - 1).maxY
-        }
-        return LauncherPreviewRenderMetrics(
-            resultsViewportHeight: scrollView.frame.height,
-            resultsDocumentHeight: documentHeight
-        )
-    }
-
     var interactiveQuery: String { searchField.stringValue }
     var selectedResultID: String? {
         displayedResults.indices.contains(selectedRow) ? displayedResults[selectedRow].entry.id : nil
@@ -720,7 +487,7 @@ final class LauncherPreviewContentView: NSView,
     private func buildSurface() {
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
-        // Screenshot and Settings previews are intentionally detached from a window. Preserve
+        // Settings previews are intentionally detached from a window. Preserve
         // the production surface size explicitly so AppKit cannot collapse the preview to the
         // native search field's fitting height before the surface gets its first layout pass.
         // These preview-only axes do not participate in the live panel's surface hierarchy.

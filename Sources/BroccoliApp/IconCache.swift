@@ -350,28 +350,6 @@ final class IconCache {
         return icons
     }()
 
-    /// Resolves symbols in semantic order so OS-version availability never produces a blank
-    /// badge. Kept internal to make the availability behavior directly testable.
-    static func resolvedSystemSymbol(
-        preferred: String,
-        semanticFallbacks: [String]
-    ) -> NSImage? {
-        let baseConfiguration = NSImage.SymbolConfiguration(pointSize: 25, weight: .medium)
-        let paletteConfiguration = NSImage.SymbolConfiguration(paletteColors: [.white])
-        var visited = Set<String>()
-        for name in [preferred] + semanticFallbacks where visited.insert(name).inserted {
-            guard let configured = NSImage(
-                systemSymbolName: name,
-                accessibilityDescription: nil
-            )?.withSymbolConfiguration(baseConfiguration.applying(paletteConfiguration)) else {
-                continue
-            }
-            configured.isTemplate = false
-            return configured
-        }
-        return nil
-    }
-
     /// Produces the same kind of monochrome template image used by native AppKit controls.
     /// The transparent 40-point canvas keeps every action aligned with application and Settings
     /// icons without drawing a Broccoli-owned tile, border, palette, or background.

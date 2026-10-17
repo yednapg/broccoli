@@ -27,15 +27,6 @@ struct ApplicationLifecycleState: Equatable, Sendable {
 }
 
 @MainActor
-enum ApplicationIconResource {
-    static func name(for appearance: NSAppearance) -> String {
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? "Broccoli-AppIcon-Dark-1024"
-            : "Broccoli-AppIcon-Light-1024"
-    }
-}
-
-@MainActor
 final class ApplicationIconController {
     typealias ImageSetter = (NSImage?) -> Void
     private let imageSetter: ImageSetter

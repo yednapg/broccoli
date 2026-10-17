@@ -326,31 +326,6 @@ enum WindowActionTargetResolver {
             return processIdentifier
         }.first
     }
-
-    // Retained for deterministic compatibility tests and callers that only have PID metadata.
-    static func processIdentifier(
-        frontmostBundleIdentifier: String?,
-        frontmostProcessIdentifier: pid_t?,
-        broccoliBundleIdentifier: String?,
-        lastExternalProcessIdentifier: pid_t?
-    ) -> pid_t? {
-        processIdentifier(
-            candidates: [
-                WindowActionTargetCandidate(
-                    processIdentifier: frontmostProcessIdentifier,
-                    bundleIdentifier: frontmostBundleIdentifier,
-                    isTerminated: false
-                ),
-                WindowActionTargetCandidate(
-                    processIdentifier: lastExternalProcessIdentifier,
-                    bundleIdentifier: nil,
-                    isTerminated: false
-                ),
-            ],
-            broccoliBundleIdentifier: broccoliBundleIdentifier,
-            broccoliProcessIdentifier: nil
-        )
-    }
 }
 
 struct AccessibilityAttributeRead {

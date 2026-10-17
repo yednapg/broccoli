@@ -30,10 +30,6 @@ enum NativeIconCatalog {
         uniquingKeysWith: { current, _ in current }
     )
 
-    static var actionSymbols: [String: String] {
-        actionSymbolCandidates.compactMapValues(\.first)
-    }
-
     static func actionSymbols(for entry: SearchEntry) -> [String] {
         guard case .action(let id) = entry.target else { return [] }
         return actionSymbols(forActionID: id)

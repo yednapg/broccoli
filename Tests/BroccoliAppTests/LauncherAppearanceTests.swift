@@ -209,7 +209,6 @@ final class LauncherAppearanceTests: XCTestCase {
             43 * LauncherLiquidGlassMetrics.scale,
             accuracy: 0.001
         )
-        XCTAssertEqual(LauncherLiquidGlassSurfaceView.collapsedHeight, 58)
         XCTAssertEqual(
             LauncherLiquidGlassSurfaceView.cornerRadius,
             LauncherLiquidGlassMetrics.cornerRadius,
@@ -527,9 +526,7 @@ final class LauncherAppearanceTests: XCTestCase {
             XCTAssertEqual(dark.surface, .glass)
         }
 
-        XCTAssertEqual(LauncherLiquidGlassMetrics.figmaWidth, 900)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSearchHeight, 75)
-        XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSearchTextLeading, 75)
         XCTAssertEqual(LauncherLiquidGlassMetrics.figmaSeparatorTopInset, 73)
 
         for descriptor in [light, dark] {
@@ -745,26 +742,18 @@ final class LauncherAppearanceTests: XCTestCase {
         assertSameGeometry(light, reducedLight, design: .minimal)
         assertSameGeometry(dark, reducedDark, design: .minimal)
 
-        XCTAssertEqual(LauncherMinimalMaterialSurfaceView.figmaBackgroundBlur, 60)
         XCTAssertEqual(LauncherMinimalMaterialSurfaceView.lightTintOpacity, 0.60)
         XCTAssertEqual(LauncherMinimalMetrics.separatorTopInset, 54)
         XCTAssertEqual(LauncherMinimalMetrics.contentHorizontalInset, 12)
         XCTAssertEqual(LauncherMinimalMetrics.separatorLeadingInset, 12)
         XCTAssertEqual(LauncherMinimalMetrics.separatorTrailingInset, 12)
         XCTAssertEqual(LauncherMinimalMetrics.separatorThickness, 1)
-        XCTAssertEqual(LauncherMinimalMetrics.resultIconSize, 30)
-        XCTAssertEqual(LauncherMinimalMetrics.resultIconOpticalSize, 26)
         XCTAssertEqual(LauncherMinimalMetrics.resultNativeIconSize, 35)
         XCTAssertEqual(LauncherMinimalMetrics.resultNativeIconOpticalSize, 35)
-        XCTAssertEqual(
-            LauncherMinimalMetrics.resultActionIconOpticalSize,
-            LauncherMinimalMetrics.resultNativeIconOpticalSize
-        )
         XCTAssertEqual(
             LauncherMinimalMetrics.resultTemplatePointSize,
             LauncherMinimalMetrics.resultNativeIconOpticalSize
         )
-        XCTAssertEqual(LauncherMinimalMetrics.resultSymbolEdgeMargin, 2)
         XCTAssertEqual(LauncherMinimalMetrics.resultTitleFontSize, 18)
         XCTAssertEqual(LauncherMinimalMetrics.resultSubtitleFontSize, 12)
         XCTAssertEqual(LauncherMinimalMetrics.resultIconBody, 34)
@@ -972,7 +961,7 @@ final class LauncherAppearanceTests: XCTestCase {
         )
         XCTAssertEqual(
             field.searchTextBounds.minX - field.searchButtonBounds.maxX,
-            LauncherSearchGeometry.symbolTextGap
+            LauncherSearchMetrics.spotlight.symbolTextGap
         )
         XCTAssertEqual(field.font?.pointSize, 26)
         XCTAssertTrue(field.cell is LauncherNativeSearchFieldCell)
@@ -2414,58 +2403,33 @@ final class LauncherAppearanceTests: XCTestCase {
 
     func testSettingsSearchMatchesNavigationTerms() {
         XCTAssertEqual(PreferencesSection.privacy.title, "Permissions")
-        XCTAssertTrue(PreferencesSection.appearance.matches(settingsQuery: "liquid"))
-        XCTAssertTrue(PreferencesSection.general.matches(settingsQuery: "hotkey"))
         XCTAssertFalse(SettingsSearchItem.all.contains { $0.id == "menu-bar" })
-        XCTAssertTrue(PreferencesSection.privacy.matches(settingsQuery: "automation"))
-        XCTAssertFalse(PreferencesSection.about.matches(settingsQuery: "clipboard"))
-    }
-
-    func testSettingsToolbarTitleTracksSearchState() {
-        XCTAssertEqual(
-            SettingsToolbarPresentation.title(destinationTitle: "Appearance", searchQuery: ""),
-            "Appearance"
-        )
-        XCTAssertEqual(
-            SettingsToolbarPresentation.title(destinationTitle: "Appearance", searchQuery: "   \n"),
-            "Appearance"
-        )
-        XCTAssertEqual(
-            SettingsToolbarPresentation.title(destinationTitle: "Appearance", searchQuery: "preview"),
-            "Search"
-        )
+        for (query, section) in [
+            ("liquid", PreferencesSection.appearance),
+            ("hotkey", .general),
+            ("automation", .privacy),
+        ] {
+            XCTAssertTrue(
+                SettingsSearchItem.all.contains { $0.destination.section == section && $0.matches(query) },
+                query
+            )
+        }
     }
 
     func testSettingsShellUsesCherrySceneGeometry() {
         XCTAssertEqual(SettingsShellLayout.sidebarWidth, 209)
         XCTAssertEqual(SettingsShellLayout.contentWidth, 980)
-        XCTAssertEqual(SettingsShellLayout.splitDividerWidth, 0)
-        XCTAssertEqual(SettingsShellLayout.detailMinimumWidth, 771)
-        XCTAssertEqual(SettingsShellLayout.searchFieldHeight, 36)
         XCTAssertEqual(SettingsShellLayout.searchFieldControlSize, .extraLarge)
         XCTAssertEqual(SettingsShellLayout.sidebarLabelFontSize, 14)
         XCTAssertEqual(
             SettingsShellLayout.searchFieldFontSize,
             SettingsShellLayout.sidebarLabelFontSize
         )
-        XCTAssertEqual(SettingsShellLayout.searchHorizontalInset, 16)
-        XCTAssertEqual(SettingsShellLayout.searchTopInset, 8)
         XCTAssertEqual(SettingsShellLayout.sidebarRowContentHeight, 28)
         XCTAssertEqual(SettingsShellLayout.sidebarIconCanvasSize, 18)
         XCTAssertEqual(SettingsShellLayout.sidebarIconTrailingPadding, 3)
-        XCTAssertEqual(
-            SettingsShellLayout.sidebarWidth
-                + SettingsShellLayout.splitDividerWidth
-                + SettingsShellLayout.detailMinimumWidth,
-            SettingsShellLayout.contentWidth
-        )
         XCTAssertEqual(SettingsWindowGeometry.initialContentSize.width, SettingsShellLayout.contentWidth)
         XCTAssertEqual(SettingsWindowGeometry.initialContentSize.height, 680)
-
-        let detailItem = NSSplitViewItem(viewController: NSViewController())
-        SettingsShellLayout.lockDetailWidth(detailItem)
-        XCTAssertEqual(detailItem.minimumThickness, SettingsShellLayout.detailMinimumWidth)
-        XCTAssertEqual(detailItem.maximumThickness, SettingsShellLayout.detailMinimumWidth)
     }
 
     func testLauncherDesignChooserShowsDesktopScreenshots() {
@@ -2534,52 +2498,15 @@ final class LauncherAppearanceTests: XCTestCase {
             LauncherDesignChooserLayout.selectedLineWidth,
             LauncherDesignChooserLayout.unselectedLineWidth
         )
-
-        let liquid = LauncherDesignChooserLayout.selectionWellFrame(for: .liquidGlass)
-        let minimal = LauncherDesignChooserLayout.selectionWellFrame(for: .minimal)
-        XCTAssertEqual(liquid.size, LauncherDesignChooserLayout.selectionWellSize)
-        XCTAssertEqual(minimal.size, LauncherDesignChooserLayout.selectionWellSize)
-        XCTAssertEqual(liquid.width, LauncherDesignChooserLayout.thumbnailWidth)
-        XCTAssertEqual(liquid.height, LauncherDesignChooserLayout.thumbnailHeight)
-        XCTAssertFalse(
-            liquid.intersects(minimal),
-            "Selecting Liquid Glass must not cover the Minimal well"
-        )
         XCTAssertLessThan(
-            liquid.width,
+            LauncherDesignChooserLayout.thumbnailWidth,
             LauncherDesignChooserLayout.pickerWidth,
             "Selection chrome is one card, not the whole chooser"
         )
         XCTAssertLessThan(
             LauncherDesignChooserLayout.pickerWidth,
-            SettingsShellLayout.detailMinimumWidth,
+            SettingsShellLayout.contentWidth - SettingsShellLayout.sidebarWidth,
             "Chooser cards must not span the full Appearance row"
-        )
-
-        XCTAssertEqual(
-            LauncherDesignChooserLayout.design(at: CGPoint(x: liquid.midX, y: liquid.midY)),
-            .liquidGlass
-        )
-        XCTAssertEqual(
-            LauncherDesignChooserLayout.design(at: CGPoint(x: minimal.midX, y: minimal.midY)),
-            .minimal
-        )
-        let gap = CGPoint(
-            x: liquid.maxX + LauncherDesignChooserLayout.thumbnailSpacing / 2,
-            y: liquid.midY
-        )
-        XCTAssertNil(
-            LauncherDesignChooserLayout.design(at: gap),
-            "The space between cards is not a selection target"
-        )
-        XCTAssertNil(
-            LauncherDesignChooserLayout.design(at: CGPoint(x: -40, y: liquid.midY)),
-            "The Launcher Design title sits outside the card hit targets"
-        )
-        XCTAssertNil(
-            LauncherDesignChooserLayout.design(
-                at: CGPoint(x: LauncherDesignChooserLayout.pickerWidth + 12, y: liquid.midY)
-            )
         )
     }
 
@@ -2639,26 +2566,13 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertLessThanOrEqual(widestTitle, availableTitleWidth)
     }
 
-    func testSettingsSearchFieldCentersNativeControlInsideGlassSurface() {
-        let surfaceBounds = NSRect(x: 0, y: 0, width: 184, height: 36)
-        let frame = SettingsSearchFieldGeometry.nativeControlFrame(
-            in: surfaceBounds,
-            intrinsicHeight: 20
-        )
-
-        XCTAssertEqual(frame.width, surfaceBounds.width)
-        XCTAssertEqual(frame.height, 20)
-        XCTAssertEqual(frame.midY, surfaceBounds.midY, accuracy: 0.001)
-        XCTAssertEqual(frame.minY, 8, accuracy: 0.001)
-    }
-
     func testSettingsNativeSearchFieldUsesSelectorHeightAndProportionalText() {
         let field = NSSearchField()
 
         SettingsNativeSearchFieldAppearance.apply(to: field)
 
         XCTAssertEqual(field.controlSize, .extraLarge)
-        XCTAssertEqual(field.intrinsicContentSize.height, SettingsShellLayout.searchFieldHeight)
+        XCTAssertEqual(field.intrinsicContentSize.height, 36)
         XCTAssertEqual(field.font?.pointSize, SettingsShellLayout.searchFieldFontSize)
     }
 
@@ -2748,33 +2662,6 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertTrue(backgroundBroccoliWindow.isVisible)
     }
 
-    func testSettingsFindShortcutAllowsCapsLockButRejectsOtherModifiers() {
-        XCTAssertTrue(SettingsKeyboardShortcut.isFind(
-            modifierFlags: .command,
-            charactersIgnoringModifiers: "f"
-        ))
-        XCTAssertTrue(SettingsKeyboardShortcut.isFind(
-            modifierFlags: [.command, .capsLock],
-            charactersIgnoringModifiers: "F"
-        ))
-
-        for flags: NSEvent.ModifierFlags in [
-            [.command, .shift],
-            [.command, .option],
-            [.command, .control],
-            [.command, .function],
-        ] {
-            XCTAssertFalse(SettingsKeyboardShortcut.isFind(
-                modifierFlags: flags,
-                charactersIgnoringModifiers: "f"
-            ))
-        }
-        XCTAssertFalse(SettingsKeyboardShortcut.isFind(
-            modifierFlags: .command,
-            charactersIgnoringModifiers: "g"
-        ))
-    }
-
     func testIgnoredApplicationSelectionCopyPluralizesImmediateResult() {
         XCTAssertNil(IgnoredApplicationsCopy.invalidSelectionMessage(count: 0))
         XCTAssertEqual(
@@ -2792,14 +2679,14 @@ final class LauncherAppearanceTests: XCTestCase {
 
         XCTAssertEqual(shell.selection, .general)
         XCTAssertEqual(shell.destination, .section(.general))
-        XCTAssertEqual(shell.toolbarTitle, "General")
+        XCTAssertEqual(shell.destination.title, "General")
         XCTAssertFalse(shell.canGoBack)
         XCTAssertFalse(shell.canGoForward)
 
         shell.navigate(to: .launcherPreview)
         XCTAssertEqual(shell.selection, .appearance)
         XCTAssertEqual(shell.destination, .launcherPreview)
-        XCTAssertEqual(shell.toolbarTitle, "Launcher Preview")
+        XCTAssertEqual(shell.destination.title, "Launcher Preview")
         XCTAssertTrue(shell.canGoBack)
         XCTAssertFalse(shell.canGoForward)
 
@@ -2814,43 +2701,11 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertFalse(shell.canGoForward)
     }
 
-    func testSettingsSearchFieldKeepsTheCompleteFieldEditorTransparent() throws {
-        let field = SpotlightSettingsNativeTextField(
-            frame: NSRect(x: 0, y: 0, width: 180, height: 22)
-        )
-        field.isBezeled = false
-        field.drawsBackground = false
-
-        let window = BroccoliAppTestWindows.window(
-            size: NSSize(width: 220, height: 80),
-            styleMask: [.titled]
-        )
-        window.contentView?.addSubview(field)
-
-        XCTAssertTrue(window.makeFirstResponder(field))
-        field.makeCurrentEditorTransparent()
-
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
-        XCTAssertFalse(field.drawsBackground)
-        XCTAssertFalse(editor.drawsBackground)
-
-        if let clipView = editor.superview as? NSClipView {
-            XCTAssertFalse(clipView.drawsBackground)
-            if let scrollView = clipView.superview as? NSScrollView {
-                XCTAssertFalse(scrollView.drawsBackground)
-            }
-        }
-    }
-
-    func testSettingsShellSearchOwnsToolbarTitleAndSectionReset() {
+    func testSettingsShellSectionChangeResetsSearch() {
         let shell = SettingsShellModel()
 
         shell.searchQuery = "preview"
-        XCTAssertEqual(shell.toolbarTitle, "Search")
-
-        XCTAssertFalse(shell.isSearchPresented)
-        shell.focusSearch()
-        XCTAssertTrue(shell.isSearchPresented)
+        shell.isSearchPresented = true
 
         shell.navigate(to: .launcherPreview)
         shell.selectSection(.files)
@@ -2858,7 +2713,6 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertFalse(shell.isSearchPresented)
         XCTAssertEqual(shell.selection, .files)
         XCTAssertEqual(shell.destination, .section(.files))
-        XCTAssertEqual(shell.toolbarTitle, "Files")
         XCTAssertFalse(shell.canGoBack)
         XCTAssertFalse(shell.canGoForward)
     }
@@ -2894,7 +2748,7 @@ final class LauncherAppearanceTests: XCTestCase {
 
         XCTAssertEqual(shell.selection, .appearance)
         XCTAssertEqual(shell.destination, .section(.appearance))
-        XCTAssertEqual(shell.toolbarTitle, "Appearance")
+        XCTAssertEqual(shell.destination.title, "Appearance")
 
         shell.selectSection(.windows)
         shell.navigate(to: .automation)
@@ -2903,21 +2757,16 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(persisted, [.windows, .privacy, .windows])
     }
 
-    func testSettingsShellNativeSearchClearsSidebarSelectionAndCancelsInTwoStages() {
+    func testSettingsShellNativeSearchClearsSidebarSelection() {
         let shell = SettingsShellModel()
 
         XCTAssertEqual(shell.sidebarSelection, .general)
-        XCTAssertFalse(shell.cancelSearch())
 
         shell.searchQuery = "preview"
         XCTAssertNil(shell.sidebarSelection)
-        XCTAssertEqual(shell.toolbarTitle, "Search")
-        XCTAssertTrue(shell.cancelSearch())
 
-        XCTAssertEqual(shell.searchQuery, "")
+        shell.searchQuery = ""
         XCTAssertEqual(shell.sidebarSelection, .general)
-        XCTAssertEqual(shell.toolbarTitle, "General")
-        XCTAssertFalse(shell.cancelSearch())
     }
 
     func testApplicationBundleRunsInTheBackgroundUntilSettingsOpens() throws {
@@ -2951,20 +2800,6 @@ final class LauncherAppearanceTests: XCTestCase {
 
         XCTAssertTrue(lifecycle.isTerminating)
         XCTAssertEqual(lifecycle.presentationMode, .settings)
-    }
-
-    func testApplicationIconResourceTracksTheResolvedSystemAppearance() throws {
-        let light = try XCTUnwrap(NSAppearance(named: .aqua))
-        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
-
-        XCTAssertEqual(
-            ApplicationIconResource.name(for: light),
-            "Broccoli-AppIcon-Light-1024"
-        )
-        XCTAssertEqual(
-            ApplicationIconResource.name(for: dark),
-            "Broccoli-AppIcon-Dark-1024"
-        )
     }
 
     func testApplicationIconControllerRestoresAdaptiveBundleArtwork() {

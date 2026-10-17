@@ -24,23 +24,6 @@ public enum WindowDimension: Codable, Hashable, Sendable {
         }
     }
 
-    var identifier: String {
-        switch self {
-        case .points(let value): "\(Self.format(value))pt"
-        case .percent(let value): "\(Self.format(value))pct"
-        }
-    }
-
-    init?(identifier: String) {
-        if identifier.hasSuffix("pct"), let value = Double(identifier.dropLast(3)) {
-            self = .percent(value)
-        } else if identifier.hasSuffix("pt"), let value = Double(identifier.dropLast(2)) {
-            self = .points(value)
-        } else {
-            return nil
-        }
-    }
-
     static func format(_ value: Double) -> String {
         value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
     }

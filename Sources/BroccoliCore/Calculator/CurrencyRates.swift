@@ -3,7 +3,6 @@ import Foundation
 public enum CurrencyRateFreshness: Equatable, Sendable {
     case current
     case stale
-    case missing
 }
 
 public struct CurrencyRateSnapshot: Codable, Equatable, Sendable {

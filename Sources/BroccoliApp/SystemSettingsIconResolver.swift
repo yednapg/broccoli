@@ -140,23 +140,6 @@ enum SystemSettingsIconRequestMapper {
             .application(bundleIdentifier: $0)
         }
     }
-
-    static func iconKeysBySource(
-        for requests: [SystemSettingsIconRequest],
-        installedExtensionBundleIdentifiers: Set<String>,
-        powerIconContentTypeIdentifier: String
-    ) -> [SystemSettingsNativeIconSource: [String]] {
-        var result: [SystemSettingsNativeIconSource: [String]] = [:]
-        for request in requests {
-            guard let source = preferredSource(
-                for: request,
-                installedExtensionBundleIdentifiers: installedExtensionBundleIdentifiers,
-                powerIconContentTypeIdentifier: powerIconContentTypeIdentifier
-            ) else { continue }
-            result[source, default: []].append(request.iconKey)
-        }
-        return result.mapValues { Array(Set($0)).sorted() }
-    }
 }
 
 /// Process-wide index of installed System Settings extensions.
@@ -668,7 +651,6 @@ final class SystemSettingsNativeIconStore {
     private var previousKeys: [String: IconCacheKey] = [:]
     private(set) var resolutionAttemptCount = 0
     var inFlightRequestCount: Int { inFlight.count }
-    var cachedBitmapCost: Int { cache.cost }
 
     init(cacheCostLimit: Int = 16 * 1_024 * 1_024,
          resolutionOperation: ResolutionOperation? = nil) {
@@ -734,11 +716,6 @@ final class SystemSettingsNativeIconStore {
     func previousIcon(for iconKey: String) -> MaterializedSystemSettingsIcon? {
         guard let key = previousKeys[iconKey] else { return nil }
         return cache.image(for: key)
-    }
-
-    func ensureResolution(requests: [SystemSettingsIconRequest], backingScale: CGFloat) {
-        ensureResolution(requests: requests,
-            context: LauncherAppearanceEnvironment.current.iconContext(mode: .system, pointSize: 40, backingScale: backingScale))
     }
 
     func ensureResolution(requests: [SystemSettingsIconRequest], context: IconRenderContext,

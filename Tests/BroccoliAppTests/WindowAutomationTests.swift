@@ -135,10 +135,8 @@ final class WindowAutomationTests: XCTestCase {
         let third = WindowKey(AXUIElementCreateApplication(203))
         XCTAssertEqual(state.reconcile(with: [second, first]), [second, first])
         XCTAssertEqual(state.reconcile(with: [first, third, second]), [second, first, third])
-        state.swap(second, third)
-        XCTAssertEqual(state.reconcile(with: [first, second, third]), [third, first, second])
         state.removeApplication(203)
-        XCTAssertEqual(state.order, [first, second])
+        XCTAssertEqual(state.order, [second, first])
     }
 
     func testHistoryIsBoundedAndForgetsQuitApplications() {

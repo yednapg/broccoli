@@ -31,11 +31,6 @@ struct HotKeyConfiguration: Codable, Equatable, Sendable {
         modifiers: UInt32(cmdKey)
     )
 
-    static let controlSpace = HotKeyConfiguration(
-        keyCode: UInt32(kVK_Space),
-        modifiers: UInt32(controlKey)
-    )
-
     /// VoiceOver uses Control-Option for its own commands.
     var usesVoiceOverKeys: Bool {
         let voiceOverKeys = UInt32(controlKey | optionKey)
@@ -317,10 +312,6 @@ final class GlobalHotKey {
             UnregisterEventHotKey(previous.reference)
             bindingIDs = bindingIDs.filter { $0.value != bindingID || $0.key == identifier.id }
         }
-    }
-
-    func unregister() {
-        unregister("launcher")
     }
 
     func unregister(_ bindingID: String) {

@@ -309,14 +309,13 @@ final class LauncherModeTests: XCTestCase {
         let start = Date(timeIntervalSince1970: 1_000)
         var confirmation = DisruptiveActionConfirmation()
         XCTAssertTrue(confirmation.needsConfirmation(for: "power.restart", now: start))
-        XCTAssertTrue(confirmation.isPending(for: "power.restart", now: start.addingTimeInterval(4.9)))
         XCTAssertFalse(confirmation.needsConfirmation(for: "power.restart", now: start.addingTimeInterval(4.9)))
         XCTAssertNil(confirmation.id)
 
         XCTAssertTrue(confirmation.needsConfirmation(for: "power.shutdown", now: start))
         XCTAssertTrue(confirmation.needsConfirmation(for: "power.shutdown", now: start.addingTimeInterval(5)))
         confirmation.cancel()
-        XCTAssertFalse(confirmation.isPending(for: "power.shutdown", now: start))
+        XCTAssertNil(confirmation.id)
     }
 
     func testRecoveryActionsRemainSearchableWhenMasterActionsPreferenceIsOff() {
@@ -470,6 +469,7 @@ final class LauncherModeTests: XCTestCase {
     }
 
     func testShortcutRecorderKeepsKnownConfigurationWhenRegistrationRejectsChange() throws {
+        let controlSpace = HotKeyConfiguration(keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey))
         let recorder = ShortcutRecorderControl()
         recorder.configuration = .commandSpace
         var attempted: HotKeyConfiguration?
@@ -480,12 +480,12 @@ final class LauncherModeTests: XCTestCase {
 
         recorder.keyDown(with: try XCTUnwrap(shortcutEvent(modifiers: [.control])))
 
-        XCTAssertEqual(attempted, .controlSpace)
+        XCTAssertEqual(attempted, controlSpace)
         XCTAssertEqual(recorder.configuration, .commandSpace)
 
         recorder.onChange = { _ in true }
         recorder.keyDown(with: try XCTUnwrap(shortcutEvent(modifiers: [.control])))
-        XCTAssertEqual(recorder.configuration, .controlSpace)
+        XCTAssertEqual(recorder.configuration, controlSpace)
     }
 
     func testFileSearchPolicyExcludesPrivateAndBundleContent() {

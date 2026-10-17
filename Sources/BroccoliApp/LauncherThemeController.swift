@@ -48,8 +48,6 @@ enum LauncherMinimalMetrics {
     static var searchControlVerticalInset: CGFloat {
         (searchHeight - (searchLineHeight + searchFieldHeadroom * 2)) / 2
     }
-    static let searchSymbolSize: CGFloat = searchFontSize
-    static let searchSymbolPointSize: CGFloat = searchFontSize
     /// Gap used after a scope token. Minimal has no magnifier, so this is not the query inset.
     static let searchSymbolTextGap: CGFloat = 20
     // Deliberately large diagnostic correction used to make the query shift unmistakable.
@@ -77,8 +75,6 @@ enum LauncherMinimalMetrics {
     static let resultTopInset: CGFloat = 0
     static let resultBottomInset: CGFloat = 0
     static let rowSpacing: CGFloat = 0
-    static let resultIconSize: CGFloat = 30
-    static let resultIconOpticalSize: CGFloat = 26
     static let resultNativeIconSize: CGFloat = 35
     static let resultNativeIconOpticalSize: CGFloat = 35
     /// One column for every Minimal result icon. It is wide enough that a square
@@ -91,9 +87,6 @@ enum LauncherMinimalMetrics {
     /// Sampled from the dark Settings pane artwork, which reads as a plate rather than pure black.
     static let resultSymbolTileDark = NSColor(srgbRed: 28.0 / 255, green: 28.0 / 255, blue: 28.0 / 255, alpha: 1)
     static let resultSymbolTileLight = NSColor(srgbRed: 0.95, green: 0.95, blue: 0.96, alpha: 1)
-    static let resultActionIconOpticalSize: CGFloat = resultNativeIconOpticalSize
-    /// Room around a fitted symbol so its outer stroke is not sliced by the icon box.
-    static let resultSymbolEdgeMargin: CGFloat = 2
     static let resultTemplatePointSize: CGFloat = resultNativeIconOpticalSize
     static let resultSettingsBadgeSize: CGFloat = 15
     static let resultTitleFontSize: CGFloat = 18
@@ -126,7 +119,6 @@ enum LauncherMinimalMetrics {
     static var resultTrailingInset: CGFloat {
         contentHorizontalInset - resultTableHorizontalInset
     }
-    static let figmaBackgroundBlur: CGFloat = 60
     // AppKit's public behind-window effect is less opaque than Figma's Ultra Thick recipe.
     // The light wash brings the sampled surface toward the reference's light fill.
     static let lightTintOpacity: CGFloat = 0.60
@@ -172,14 +164,8 @@ enum LauncherMinimalMetrics {
 /// is reduced by the same vertical scale. This preserves the designed optical rhythm instead
 /// of mixing the old 58-point shell with unscaled icon, type, and inset values.
 enum LauncherLiquidGlassMetrics {
-    static let figmaWidth: CGFloat = 900
     static let figmaSearchHeight: CGFloat = 75
-    static let figmaSearchFontSize: CGFloat = 36
-    static let figmaSearchHorizontalInset: CGFloat = 25
     static let figmaSearchVerticalInset: CGFloat = 16
-    static let figmaSearchSymbolSize: CGFloat = 30
-    static let figmaSearchSymbolPointSize: CGFloat = 28
-    static let figmaSearchTextLeading: CGFloat = 75
     static let figmaSeparatorTopInset: CGFloat = 73
     static let figmaSeparatorHorizontalInset: CGFloat = 25
     static let figmaSeparatorThickness: CGFloat = 1
@@ -200,7 +186,6 @@ enum LauncherLiquidGlassMetrics {
     // (which was clamped and therefore produced no visible size change).
     static let searchSymbolSize: CGFloat = 28
     static let searchSymbolPointSize: CGFloat = 27.8
-    static let searchTextLeading = figmaSearchTextLeading * scale
     static let searchTextHorizontalOffset: CGFloat = -10
     static let searchSymbolTextGap: CGFloat = searchHorizontalInset
     // The output canvas now carries the intended optical size directly, so no ineffective

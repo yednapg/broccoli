@@ -25,10 +25,6 @@ enum LauncherDesignChooserLayout {
         return count * thumbnailWidth + max(0, count - 1) * thumbnailSpacing
     }
 
-    static var selectionWellSize: CGSize {
-        CGSize(width: thumbnailWidth, height: thumbnailHeight)
-    }
-
     static var thumbnailHeight: CGFloat {
         thumbnailWidth * artworkPixelSize.height / artworkPixelSize.width
     }
@@ -38,28 +34,6 @@ enum LauncherDesignChooserLayout {
         let next = index + offset
         guard designs.indices.contains(next) else { return nil }
         return designs[next]
-    }
-
-    /// Local well for a design, in chooser coordinates with origin at the top-leading card.
-    static func selectionWellFrame(for design: LauncherDesign) -> CGRect {
-        guard let index = designs.firstIndex(of: design) else { return .zero }
-        let x = CGFloat(index) * (thumbnailWidth + thumbnailSpacing)
-        return CGRect(origin: CGPoint(x: x, y: 0), size: selectionWellSize)
-    }
-
-    /// Clickable card, including the caption under the well. Wells stay exclusive.
-    static func cardFrame(for design: LauncherDesign) -> CGRect {
-        let well = selectionWellFrame(for: design)
-        return CGRect(
-            x: well.minX,
-            y: well.minY,
-            width: well.width,
-            height: well.height + titleSpacing + 16
-        )
-    }
-
-    static func design(at point: CGPoint) -> LauncherDesign? {
-        designs.first { cardFrame(for: $0).contains(point) }
     }
 }
 

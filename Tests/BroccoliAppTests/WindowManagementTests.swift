@@ -510,10 +510,12 @@ final class WindowManagementTests: XCTestCase {
     func testWindowActionTargetsFrontmostExternalApplication() {
         XCTAssertEqual(
             WindowActionTargetResolver.processIdentifier(
-                frontmostBundleIdentifier: "com.apple.TextEdit",
-                frontmostProcessIdentifier: 42,
+                candidates: [
+                    .init(processIdentifier: 42, bundleIdentifier: "com.apple.TextEdit", isTerminated: false),
+                    .init(processIdentifier: 21, bundleIdentifier: nil, isTerminated: false),
+                ],
                 broccoliBundleIdentifier: "dev.gauravpandey.broccoli",
-                lastExternalProcessIdentifier: 21
+                broccoliProcessIdentifier: nil
             ),
             42
         )
@@ -522,19 +524,23 @@ final class WindowManagementTests: XCTestCase {
     func testWindowActionFallsBackAfterSettingsWasFrontmost() {
         XCTAssertEqual(
             WindowActionTargetResolver.processIdentifier(
-                frontmostBundleIdentifier: "dev.gauravpandey.broccoli",
-                frontmostProcessIdentifier: 99,
+                candidates: [
+                    .init(processIdentifier: 99, bundleIdentifier: "dev.gauravpandey.broccoli", isTerminated: false),
+                    .init(processIdentifier: 42, bundleIdentifier: nil, isTerminated: false),
+                ],
                 broccoliBundleIdentifier: "dev.gauravpandey.broccoli",
-                lastExternalProcessIdentifier: 42
+                broccoliProcessIdentifier: nil
             ),
             42
         )
         XCTAssertEqual(
             WindowActionTargetResolver.processIdentifier(
-                frontmostBundleIdentifier: nil,
-                frontmostProcessIdentifier: nil,
+                candidates: [
+                    .init(processIdentifier: nil, bundleIdentifier: nil, isTerminated: false),
+                    .init(processIdentifier: 42, bundleIdentifier: nil, isTerminated: false),
+                ],
                 broccoliBundleIdentifier: "dev.gauravpandey.broccoli",
-                lastExternalProcessIdentifier: 42
+                broccoliProcessIdentifier: nil
             ),
             42
         )

@@ -144,20 +144,19 @@ final class IconCacheTests: XCTestCase {
         let requests = SystemSettingsIconRequestMapper.requests(
             for: SystemSettingsTestFixtures.entries
         )
-        let groups = SystemSettingsIconRequestMapper.iconKeysBySource(
-            for: requests,
-            installedExtensionBundleIdentifiers: Set(requests.map(\.bundleIdentifier)),
-            powerIconContentTypeIdentifier:
-                SystemSettingsPowerIconSelector.batteryContentTypeIdentifier
-        )
         let keyboardSource = SystemSettingsNativeIconSource.settingsExtension(
             bundleIdentifier: "com.apple.Keyboard-Settings.extension"
         )
+        let keyboardKeys = requests.filter { request in
+            SystemSettingsIconRequestMapper.preferredSource(
+                for: request,
+                installedExtensionBundleIdentifiers: Set(requests.map(\.bundleIdentifier)),
+                powerIconContentTypeIdentifier:
+                    SystemSettingsPowerIconSelector.batteryContentTypeIdentifier
+            ) == keyboardSource
+        }.map(\.iconKey)
 
-        XCTAssertEqual(
-            groups[keyboardSource],
-            ["setting:keyboard", "setting:keyboard-shortcuts"]
-        )
+        XCTAssertEqual(keyboardKeys.sorted(), ["setting:keyboard", "setting:keyboard-shortcuts"])
     }
 
     func testPowerIconSelectorChoosesBatteryForLaptopSnapshot() {
@@ -610,17 +609,6 @@ final class IconCacheTests: XCTestCase {
         XCTAssertEqual(store.resolutionAttemptCount, 2)
         _ = second.image(for: SystemSettingsTestFixtures.entries[0])
         XCTAssertEqual(store.resolutionAttemptCount, 2)
-    }
-
-    func testMissingPreferredBadgeSymbolUsesOrderedSemanticFallback() throws {
-        _ = NSApplication.shared
-        let glyph = try XCTUnwrap(IconCache.resolvedSystemSymbol(
-            preferred: "broccoli.symbol.that.does.not.exist",
-            semanticFallbacks: ["gearshape", "questionmark"]
-        ))
-
-        XCTAssertGreaterThan(glyph.size.width, 0)
-        XCTAssertGreaterThan(glyph.size.height, 0)
     }
 
     func testEveryActionUsesBoundedNativeTemplateIconFromCacheOnlyPath() throws {

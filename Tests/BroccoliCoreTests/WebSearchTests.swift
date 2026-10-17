@@ -4,18 +4,18 @@ import XCTest
 final class WebSearchTests: XCTestCase {
     func testQueryIsTrimmedAndEncodedSoGoogleReceivesItLiterally() throws {
         XCTAssertEqual(
-            try XCTUnwrap(WebSearch.googleURL(for: "  c++ & rust = fun  ")).absoluteString,
+            try XCTUnwrap(googleURL(for: "  c++ & rust = fun  ")).absoluteString,
             "https://www.google.com/search?q=c%2B%2B%20%26%20rust%20%3D%20fun"
         )
         XCTAssertEqual(
-            try XCTUnwrap(WebSearch.googleURL(for: "café 50%")).absoluteString,
+            try XCTUnwrap(googleURL(for: "café 50%")).absoluteString,
             "https://www.google.com/search?q=caf%C3%A9%2050%25"
         )
     }
 
     func testBlankQueryHasNoWebSearch() {
-        XCTAssertNil(WebSearch.googleURL(for: "   "))
-        XCTAssertNil(WebSearch.googleEntry(for: ""))
+        XCTAssertNil(WebSearch.entry(for: "   ", engine: .google))
+        XCTAssertNil(WebSearch.entry(for: "", engine: .google))
     }
 
     func testDuckDuckGoUsesItsOwnAddressAndAFixedIdentity() throws {
@@ -38,12 +38,19 @@ final class WebSearchTests: XCTestCase {
     }
 
     func testEntryIdentityNeverContainsTheQuery() throws {
-        let entry = try XCTUnwrap(WebSearch.googleEntry(for: "private words"))
+        let entry = try XCTUnwrap(WebSearch.entry(for: "private words", engine: .google))
         XCTAssertEqual(entry.id, WebSearch.googleEntryID)
         XCTAssertEqual(entry.iconKey, WebSearch.googleIconKey)
         XCTAssertEqual(entry.kind, .webSearch)
         XCTAssertEqual(entry.title, "Search Google for “private words”")
         XCTAssertFalse(entry.id.contains("private"))
         XCTAssertFalse(entry.iconKey.contains("private"))
+    }
+
+    private func googleURL(for query: String) -> URL? {
+        guard case .webSearch(let url) = WebSearch.entry(for: query, engine: .google)?.target else {
+            return nil
+        }
+        return url
     }
 }

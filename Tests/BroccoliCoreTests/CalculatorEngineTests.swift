@@ -55,11 +55,10 @@ final class CalculatorEngineTests: XCTestCase {
     }
 
     func testIncompleteExpressionClassification() {
-        XCTAssertTrue(calculator.looksLikeIncompleteExpression("2 +"))
-        XCTAssertTrue(calculator.looksLikeIncompleteExpression("= sqrt("))
-        XCTAssertFalse(calculator.looksLikeIncompleteExpression("visual studio code"))
-        XCTAssertFalse(calculator.looksLikeIncompleteExpression("version 2"))
         XCTAssertEqual(calculator.classify("2 +", locale: locale), .incomplete)
+        XCTAssertEqual(calculator.classify("= sqrt(", locale: locale), .incomplete)
+        XCTAssertNotEqual(calculator.classify("visual studio code", locale: locale), .incomplete)
+        XCTAssertNotEqual(calculator.classify("version 2", locale: locale), .incomplete)
         XCTAssertEqual(calculator.classify("2 + )", locale: locale), .invalid)
     }
 

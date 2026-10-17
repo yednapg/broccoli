@@ -29,10 +29,6 @@ struct DisruptiveActionConfirmation: Equatable, Sendable {
         return true
     }
 
-    func isPending(for actionID: String, now: Date = Date()) -> Bool {
-        id == actionID && (expiresAt ?? .distantPast) > now
-    }
-
     mutating func cancel() {
         id = nil
         expiresAt = nil

@@ -52,14 +52,6 @@ public enum WebSearch {
         )
     }
 
-    public static func googleEntry(for query: String) -> SearchEntry? {
-        entry(for: query, engine: .google)
-    }
-
-    public static func googleURL(for query: String) -> URL? {
-        url(for: query, service: .google)
-    }
-
     private struct Service {
         let name: String
         let host: String

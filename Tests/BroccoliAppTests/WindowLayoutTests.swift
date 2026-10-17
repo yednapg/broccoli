@@ -234,13 +234,6 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertEqual(preferences.almostMaximizeFraction, 0.8)
     }
 
-    func testDuplicateShortcutLookupIgnoresTheActionBeingChanged() throws {
-        let preferences = WindowManagementPreferences()
-        let leftHalf = try XCTUnwrap(WindowAction.leftHalf.defaultShortcut)
-        XCTAssertEqual(preferences.action(using: leftHalf, excluding: .makeLarger), .leftHalf)
-        XCTAssertNil(preferences.action(using: leftHalf, excluding: .leftHalf))
-    }
-
     func testRegistrationSummaryNamesFailedShortcuts() {
         XCTAssertNil(WindowShortcutRegistrationSummary.message(failedTitles: []))
         XCTAssertEqual(

@@ -36,40 +36,6 @@ enum PreferencesSection: String, CaseIterable, Identifiable, Hashable {
         case .about: "info.circle.fill"
         }
     }
-    var subtitle: String {
-        switch self {
-        case .general: "Choose how Broccoli starts and opens."
-        case .appearance: "Make the launcher feel at home on your Mac."
-        case .search: "Control which local results appear and how they are ranked."
-        case .files: "Search filenames explicitly without slowing down normal queries."
-        case .calculator: "Calculate, convert, and check dates and time zones on this Mac."
-        case .clipboard: "Keep an optional, encrypted history of copied items."
-        case .windows: "Move and resize the focused window from search or a shortcut."
-        case .actions: "Choose the built-in commands available in search."
-        case .privacy: "Review local data, permissions, and private diagnostics."
-        case .about: "Version and privacy promise."
-        }
-    }
-    var searchTerms: String {
-        let terms: String = switch self {
-        case .general: "shortcut hotkey command space launch login startup conflict"
-        case .appearance: "theme design minimal liquid glass light dark results display position subtitles shortcuts preview"
-        case .search: "applications system settings actions recents ranking learning sources"
-        case .files: "file folder find spotlight metadata scope hidden library volume"
-        case .calculator: "math expression arithmetic scientific units conversion temperature distance currency time zone date percent"
-        case .clipboard: "clipboard history copy paste retention images urls files ignored apps encrypted"
-        case .windows: "window management rectangle snap tile left right top bottom maximize center monitor display shortcut accessibility resize larger smaller wider narrower taller shorter quarter third fourth sixth nudge edge"
-        case .actions: "dark mode volume mute screen saver sleep restart shutdown logout"
-        case .privacy: "privacy permissions automation diagnostics local data clear export"
-        case .about: "about version license privacy"
-        }
-        return "\(title) \(rawValue) \(symbol) \(terms)"
-    }
-
-    func matches(settingsQuery query: String) -> Bool {
-        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty || searchTerms.localizedCaseInsensitiveContains(value)
-    }
 }
 
 enum SettingsDestination: Hashable {
@@ -101,17 +67,6 @@ enum SettingsDestination: Hashable {
         case .automation: "Automation"
         }
     }
-
-    var subtitle: String {
-        switch self {
-        case .section(let section): section.subtitle
-        case .shortcutTroubleshooting: "Resolve conflicts and restore the global launcher shortcut."
-        case .launcherPreview: "Try the launcher safely with your current appearance settings."
-        case .excludedLocations: "Understand which locations file search always leaves out."
-        case .ignoredApplications: "Keep private clipboard content out of local history."
-        case .automation: "Review access used by protected system actions."
-        }
-    }
 }
 
 enum LaunchAtLoginMessageStyle: Equatable {
@@ -134,36 +89,17 @@ enum LaunchAtLoginMessageStyle: Equatable {
     }
 }
 
-enum SettingsToolbarPresentation {
-    static func title(destinationTitle: String, searchQuery: String) -> String {
-        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? destinationTitle
-            : "Search"
-    }
-}
-
 enum SettingsShellLayout {
     // Cherry's reference Settings window uses a 209-point sidebar inside a 980-point scene.
     // The compatibility split view and the native scene's initial split position share it.
     static let sidebarWidth: CGFloat = 209
     static let contentWidth: CGFloat = 980
-    static let splitDividerWidth: CGFloat = 0
-    static let searchFieldHeight: CGFloat = 36
     static let searchFieldControlSize: NSControl.ControlSize = .extraLarge
     static let sidebarLabelFontSize: CGFloat = 14
     static let searchFieldFontSize = sidebarLabelFontSize
-    static let searchHorizontalInset: CGFloat = 16
-    static let searchTopInset: CGFloat = 8
     static let sidebarRowContentHeight: CGFloat = 28
     static let sidebarIconCanvasSize: CGFloat = 18
     static let sidebarIconTrailingPadding: CGFloat = 3
-    static let detailMinimumWidth = contentWidth - sidebarWidth - splitDividerWidth
-
-    @MainActor
-    static func lockDetailWidth(_ item: NSSplitViewItem) {
-        item.minimumThickness = detailMinimumWidth
-        item.maximumThickness = detailMinimumWidth
-    }
 }
 
 enum SettingsWindowGeometry {
@@ -183,18 +119,6 @@ enum SettingsPaneRestoration {
 
     static func save(_ section: PreferencesSection, to defaults: UserDefaults) {
         defaults.set(section.rawValue, forKey: defaultsKey)
-    }
-}
-
-enum SettingsKeyboardShortcut {
-    static func isFind(
-        modifierFlags: NSEvent.ModifierFlags,
-        charactersIgnoringModifiers: String?
-    ) -> Bool {
-        let flags = modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting(.capsLock)
-        return flags == .command && charactersIgnoringModifiers?.lowercased() == "f"
     }
 }
 
@@ -244,23 +168,6 @@ final class SettingsShellModel {
         searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? selection
             : nil
-    }
-    var toolbarTitle: String {
-        SettingsToolbarPresentation.title(
-            destinationTitle: destination.title,
-            searchQuery: searchQuery
-        )
-    }
-
-    func focusSearch() { isSearchPresented = true }
-
-    /// Returns whether Escape consumed a nonempty settings search. A second Escape can then
-    /// leave the native search field without discarding the current section selection.
-    @discardableResult
-    func cancelSearch() -> Bool {
-        guard !searchQuery.isEmpty else { return false }
-        searchQuery = ""
-        return true
     }
 
     /// Sidebar changes represent a new top-level context and intentionally reset detail

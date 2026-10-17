@@ -211,40 +211,6 @@ enum LauncherPanelGeometry {
     }
 }
 
-private final class LauncherSearchField: NSTextField {
-    var onCommand: ((SearchFieldCommand) -> Void)?
-    var numericShortcutLimit = LauncherNumericShortcut.maximum
-    private var arrowRepeatGate = LauncherArrowRepeatGate()
-
-    override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "," {
-            onCommand?(.preferences)
-            return
-        }
-        if event.modifierFlags.contains(.command), [36, 76].contains(event.keyCode) {
-            onCommand?(.reveal)
-            return
-        }
-        if event.modifierFlags.contains(.command),
-           let characters = event.charactersIgnoringModifiers,
-           let row = LauncherNumericShortcut.row(
-               for: characters,
-               visibleResultCount: numericShortcutLimit
-           ) {
-            onCommand?(.executeIndex(row))
-            return
-        }
-        switch event.keyCode {
-        case 125, 126:
-            guard arrowRepeatGate.allow(isRepeat: event.isARepeat) else { return }
-            onCommand?(event.keyCode == 125 ? .down : .up)
-        case 36, 76: onCommand?(.execute)
-        case 53: onCommand?(.dismiss)
-        default: super.keyDown(with: event)
-        }
-    }
-}
-
 /// Every launcher design uses one native AppKit search field so its magnifier, query,
 /// placeholder, clear button, and accessibility semantics cannot drift between themes.
 /// The metrics scale as one optical unit: changing a theme's query size also changes the
@@ -252,6 +218,11 @@ private final class LauncherSearchField: NSTextField {
 @MainActor
 struct LauncherSearchMetrics: Equatable {
     static let sharedEmptyInsertionPointLeadingGap: CGFloat = 1.5
+    /// Spotlight gives the search glyph nearly the same optical height as its query text.
+    /// SF Symbols include transparent side bearings. A 34-point drawing box produces a
+    /// roughly 29-point visible magnifier, matching Spotlight's optical scale beside 26-point
+    /// type. A 10-point box gap resolves to approximately 15 visible points, eliminating
+    /// the detached icon-to-query spacing visible in the previous build.
     static let spotlight = LauncherSearchMetrics(fontSize: 26)
     static let figmaLiquidGlass = LauncherSearchMetrics(
         fontSize: LauncherLiquidGlassMetrics.searchFontSize,
@@ -381,18 +352,6 @@ final class LauncherHeaderSeparatorView: NSView {
 
 @MainActor
 struct LauncherSearchGeometry {
-    /// Spotlight gives the search glyph nearly the same optical height as its query text.
-    /// SF Symbols include transparent side bearings. A 34-point drawing box produces a
-    /// roughly 29-point visible magnifier, matching Spotlight's optical scale beside 26-point
-    /// type. A 10-point box gap resolves to approximately 15 visible points, eliminating
-    /// the detached icon-to-query spacing visible in the previous build.
-    static let symbolSize = LauncherSearchMetrics.spotlight.symbolSize
-    static let symbolPointSize = LauncherSearchMetrics.spotlight.symbolPointSize
-    static let symbolTextGap = LauncherSearchMetrics.spotlight.symbolTextGap
-    static let cancelSize = LauncherSearchMetrics.spotlight.cancelSize
-    static let cancelTrailingInset = LauncherSearchMetrics.spotlight.cancelTrailingInset
-    static let font = LauncherSearchMetrics.spotlight.font
-
     /// Space between the fixed magnifier and the scope token that follows it.
     static let leadingAccessoryTextGap: CGFloat = 10
 
@@ -1081,7 +1040,6 @@ private final class LauncherDarkGlassBackdropView: NSHostingView<LauncherDarkGla
 final class LauncherLiquidGlassSurfaceView: NSView {
     static let cornerRadius = LauncherLiquidGlassMetrics.cornerRadius
     static let cornerCurve = LauncherLiquidGlassMetrics.cornerCurve
-    static let collapsedHeight = LauncherLiquidGlassMetrics.searchHeight
 
     let glassClip = NSView()
     let rim = LauncherGlassRimView()
@@ -1660,42 +1618,6 @@ final class ResultRowView: NSTableCellView {
         }
         image.isTemplate = false
         image.alignmentRect = NSRect(origin: .zero, size: image.size)
-        return image
-    }
-
-    /// The clipboard symbol is taller than the shared icon box. Alpha cropping squares
-    /// off its rounded bottom, so the whole symbol is scaled in, untouched.
-    private static func minimalClipboardIcon() -> NSImage {
-        let canvas = LauncherMinimalMetrics.resultNativeIconSize
-        let available = LauncherMinimalMetrics.resultNativeIconOpticalSize
-        guard let symbol = NSImage(
-            systemSymbolName: "clipboard",
-            accessibilityDescription: "Clipboard History"
-        )?.withSymbolConfiguration(.init(pointSize: 120, weight: .medium)),
-              symbol.size.width > 0, symbol.size.height > 0 else {
-            return NSImage(size: NSSize(width: canvas, height: canvas))
-        }
-        let aspect = symbol.size.width / symbol.size.height
-        let height = available
-        let width = available * aspect
-        let destination = NSRect(
-            x: (canvas - width) / 2,
-            y: (canvas - height) / 2,
-            width: width,
-            height: height
-        )
-        let image = NSImage(size: NSSize(width: canvas, height: canvas))
-        image.lockFocus()
-        symbol.draw(
-            in: destination,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1,
-            respectFlipped: true,
-            hints: [.interpolation: NSImageInterpolation.high]
-        )
-        image.unlockFocus()
-        image.isTemplate = true
         return image
     }
 
