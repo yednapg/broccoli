@@ -2227,6 +2227,50 @@ final class LauncherAppearanceTests: XCTestCase {
         XCTAssertEqual(origin.y, 0.4, accuracy: 0.001)
     }
 
+    /// A launcher dragged to within a few points of the middle used to stay there, so it
+    /// opened visibly off-center on every display.
+    func testPanelsNearTheHorizontalCenterOpenAndSettleCentered() {
+        let laptop = NSRect(x: 0, y: 0, width: 1_440, height: 870)
+        let external = NSRect(x: 1_440, y: -150, width: 1_680, height: 1_020)
+        let width: CGFloat = 550
+        let height: CGFloat = 55
+        let snap = LauncherPanelGeometry.horizontalCenterSnapDistance
+        XCTAssertEqual(snap, 20)
+
+        // An origin saved 16 points right of center on the external display.
+        let savedOriginX = 581.0 / 1_130.0
+        for visible in [laptop, external] {
+            let opened = LauncherPanelGeometry.positionedFrame(
+                in: visible,
+                preferredWidth: width,
+                height: height,
+                originX: savedOriginX,
+                originY: 0.18
+            )
+            XCTAssertEqual(opened.midX, visible.midX, accuracy: 0.001)
+        }
+
+        let farOrigin = 0.5 + (snap + 1) / (laptop.width - width)
+        let off = LauncherPanelGeometry.positionedFrame(
+            in: laptop,
+            preferredWidth: width,
+            height: height,
+            originX: farOrigin,
+            originY: 0.18
+        )
+        XCTAssertEqual(off.midX - laptop.midX, snap + 1, accuracy: 0.001)
+
+        let dropped = NSRect(x: laptop.midX - width / 2 - 12, y: 600, width: width, height: height)
+        let settled = LauncherPanelGeometry.committedPlacement(frame: dropped, visibleFrame: laptop)
+        XCTAssertEqual(settled.frame.midX, laptop.midX, accuracy: 0.001)
+        XCTAssertEqual(settled.originX, 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(settled.frame.minY, dropped.minY)
+
+        let placedAside = NSRect(x: 200, y: 600, width: width, height: height)
+        let kept = LauncherPanelGeometry.committedPlacement(frame: placedAside, visibleFrame: laptop)
+        XCTAssertEqual(kept.frame, placedAside)
+    }
+
     func testDraggableChromeExcludesSearchFieldAndResults() {
         // Chrome mouse-downs are handed to Window Server via performDrag(with:). The search
         // field and result rows must keep their own tracking, or typing and selection break.

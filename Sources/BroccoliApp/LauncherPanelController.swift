@@ -112,6 +112,10 @@ enum LauncherSelection {
 /// only the bottom edge; the top edge is invariant until the user reopens or repositions the
 /// launcher.
 enum LauncherPanelGeometry {
+    /// A panel whose center is this close to the visible frame's center opens and settles
+    /// centered, so a drag that ends near the middle does not leave it a few points off.
+    static let horizontalCenterSnapDistance: CGFloat = 20
+
     static func resizing(_ frame: NSRect, toHeight height: CGFloat) -> NSRect {
         let height = max(0, height)
         return NSRect(
@@ -140,7 +144,14 @@ enum LauncherPanelGeometry {
             width: width,
             height: height
         )
-        return clamped(frame, to: visibleFrame)
+        return clamped(snappedToHorizontalCenter(frame, in: visibleFrame), to: visibleFrame)
+    }
+
+    static func snappedToHorizontalCenter(_ frame: NSRect, in visibleFrame: NSRect) -> NSRect {
+        guard abs(frame.midX - visibleFrame.midX) <= horizontalCenterSnapDistance else { return frame }
+        var frame = frame
+        frame.origin.x = visibleFrame.midX - frame.width / 2
+        return frame
     }
 
     /// Keeps the panel inside `visibleFrame` without changing its size. A panel taller than
@@ -181,7 +192,7 @@ enum LauncherPanelGeometry {
         frame: NSRect,
         visibleFrame: NSRect
     ) -> (frame: NSRect, originX: CGFloat, originY: CGFloat) {
-        let frame = clamped(frame, to: visibleFrame)
+        let frame = clamped(snappedToHorizontalCenter(frame, in: visibleFrame), to: visibleFrame)
         let origin = normalizedOrigin(for: frame, in: visibleFrame)
         return (frame, origin.x, origin.y)
     }
